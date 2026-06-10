@@ -1,5 +1,5 @@
 """
-plan4_ax_unified.py
+ax_doe_bo.py
 ===================
 Ax + BoTorch 統一框架 — DOE 初始化策略研究
 
@@ -27,10 +27,10 @@ Ax + BoTorch 統一框架 — DOE 初始化策略研究
 
 輸出
 ----
-  outputs/plan4_ax_comparison.png      — Part B 收斂曲線
-  outputs/plan4_saasbo_comparison.png  — Part C SAASBO vs 標準 GP
-  outputs/plan4_batch_demo.png         — Part D 批次 BO 示範
-  outputs/plan4_experiment_state.json  — Part E 序列化範例
+  outputs/ax_comparison.png      — Part B 收斂曲線
+  outputs/saasbo_comparison.png  — Part C SAASBO vs 標準 GP
+  outputs/batch_demo.png         — Part D 批次 BO 示範
+  outputs/experiment_state.json  — Part E 序列化範例
 """
 
 import sys, pathlib, warnings, json, time
@@ -370,7 +370,7 @@ def _plot_part_b(results):
     fig.suptitle("Part B：Ax-BoTorch vs 純 BoTorch 收斂比較\n（相同 Opt LHS 初始設計）",
                  fontsize=12, fontweight="bold", color="#1F4E79", y=1.01)
     plt.tight_layout()
-    out = OUTPUT_DIR / "plan4_ax_comparison.png"
+    out = OUTPUT_DIR / "ax_comparison.png"
     plt.savefig(out, dpi=150, bbox_inches="tight", facecolor="#FAFAFA")
     plt.close()
     print(f"\n  [圖片] {out}")
@@ -470,7 +470,7 @@ def _plot_part_c(results):
     fig.suptitle("Part C：SAASBO vs 標準 GP BoTorch（4D Benchmarks, n_init=12）",
                  fontsize=12, fontweight="bold", color="#4A148C", y=1.01)
     plt.tight_layout()
-    out = OUTPUT_DIR / "plan4_saasbo_comparison.png"
+    out = OUTPUT_DIR / "saasbo_comparison.png"
     plt.savefig(out, dpi=150, bbox_inches="tight", facecolor="#FAFAFA")
     plt.close()
     print(f"\n  [圖片] {out}")
@@ -576,7 +576,7 @@ def _plot_part_d(results, n_init, q, global_opt):
     ax.set_facecolor("#F8F8F8")
 
     plt.tight_layout()
-    out = OUTPUT_DIR / "plan4_batch_demo.png"
+    out = OUTPUT_DIR / "batch_demo.png"
     plt.savefig(out, dpi=150, bbox_inches="tight", facecolor="#FAFAFA")
     plt.close()
     print(f"\n  [圖片] {out}")
@@ -598,7 +598,7 @@ def run_part_e():
     bm = dict(fn=branin_2d, dims=2, global_opt=0.397887)
     N_INIT, N_BO_PHASE1, N_BO_PHASE2 = 6, 5, 5
     SEED = 42
-    json_path = str(OUTPUT_DIR / "plan4_experiment_state.json")
+    json_path = str(OUTPUT_DIR / "experiment_state.json")
 
     param_names = ["x0", "x1"]
     design = optimize_lhs_maximin(N_INIT, 2, n_iterations=200, n_restarts=3, seed=SEED)
@@ -688,7 +688,7 @@ if __name__ == "__main__":
     print(f"\n{'='*68}")
     print(f"  全部完成！耗時 {elapsed/60:.1f} 分鐘")
     print(f"  輸出：")
-    for f in sorted(OUTPUT_DIR.glob("plan4_*.png")):
+    for f in sorted(OUTPUT_DIR.glob("*.png")):
         print(f"    {f.name}")
-    print(f"    plan4_experiment_state.json")
+    print(f"    experiment_state.json")
     print("=" * 68)

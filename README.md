@@ -84,10 +84,10 @@ This runs all five parts sequentially and saves outputs to `outputs/`:
 
 ```
 outputs/
-├── plan4_ax_comparison.png      # Part B convergence curves (Ax vs Pure BoTorch)
-├── plan4_saasbo_comparison.png  # Part C SAASBO vs standard GP
-├── plan4_batch_demo.png         # Part D batch BO (q=1 vs q=4)
-└── plan4_experiment_state.json  # Part E JSON checkpoint demo
+├── ax_comparison.png      # Part B convergence curves (Ax vs Pure BoTorch)
+├── saasbo_comparison.png  # Part C SAASBO vs standard GP
+├── batch_demo.png         # Part D batch BO (q=1 vs q=4)
+└── experiment_state.json  # Part E JSON checkpoint demo
 ```
 
 > **Runtime**: ~12 hours total on CPU (SAASBO in Part C dominates due to MCMC inference). To skip SAASBO, comment out Part C in `__main__`.
