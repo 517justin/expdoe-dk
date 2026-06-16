@@ -7,7 +7,6 @@ If you're a chemist or materials researcher running a few dozen experiments to f
 1. **Constrained, discrete-step DoE** — initial designs that respect "A must be ≥ B + 1 mL" and "this dial only steps in 0.5 mL increments". No more rounding off post-hoc.
 2. **Bayesian optimization** that drives the experiment forward after the initial DoE, using a Gaussian Process surrogate.
 3. **Domain-knowledge injection** — tell the optimizer that "temperature increases yield (Arrhenius)" or "pH peaks at 7" and it will use that hint, not fight you.
-4. **Safe defaults** baked in from two months of empirical research (see [`AGENT_KNOWLEDGE.md`](../AGENT_KNOWLEDGE.md) in the parent project for the lessons).
 
 ```python
 import expdoe_dk as ed
