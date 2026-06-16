@@ -52,32 +52,57 @@ True noiseless optimum = 0.6065 at T=600 K, conc=0.5 mol/L.
 | `random_uniform`   | 0.0048    | 0.0 %                | 8             |
 | `halton`           | 0.0055    | −14.6 %              | 8             |
 
-Takeaways:
+### 4D results on `process_objective_4d` (5 seeds, ~7 min)
 
-- **`lhs_random` (+73 %) and `lhs_maximin` (+50 %) take the top two
-  slots** — LHS stratification on the `conc` dim matters more than the
-  marginal QMC-style improvements on this 2D problem.
-- **`halton` underperforms `random_uniform`** in 2D — Halton sequences
-  develop axis correlations in low dimensions that miss the interior peak
-  at `conc = 0.5`. (Halton's reputation as a default works better at
-  higher dim or larger n_init.)
-- The trial-count-to-target column (`trials → 95 %`) is similar across
-  methods (8–11) — the differences appear in *how close to the optimum*
-  each method converges, not whether it gets within 95 %.
+True noiseless optimum ≈ 0.34956.
 
-### When to use which
+| Method             | gap_final | Δ vs random_uniform | trials → 95 % | %seeds hit 95 |
+|--------------------|----------:|---------------------:|--------------:|--------------:|
+| `sobol`            | 0.0050    | **+70.1 %**          | 33            | 80 %          |
+| `d_optimal`        | 0.0066    | **+60.5 %**          | 37            | 60 %          |
+| `lhs_random`       | 0.0100    | +40.1 %              | 25            | 100 %         |
+| `halton`           | 0.0124    | +25.7 %              | 26            | 60 %          |
+| `lhs_maximin`      | 0.0130    | +22.2 %              | 22            | 100 %         |
+| `random_uniform`   | 0.0167    | 0.0 %                | 31            | 60 %          |
 
-- **2D / very small n_init (≤ 10)**: `lhs_random` or `lhs_maximin`. LHS
-  stratification pays off when each parameter has an interior peak.
-- **Mid dim (3D–4D)** with moderate n_init: `lhs_maximin` is the safest.
-- **High dim (5D+) and ≥ 20 initial points**: try `sobol` for low
-  discrepancy, or compare empirically.
-- `d_optimal` shines when you can specify the surrogate-model form
-  (linear or quadratic regression assumption). Less ideal for GP BO.
-- `random_uniform` is the lower bound — never the recommended default
-  but useful as a sanity check.
+### 6D results on `process_objective_6d_v2` (5 seeds, ~11 min)
 
-Re-run with `--dim 4` or `--dim 6` to see how the ranking changes.
+True noiseless optimum ≈ 0.34956. The hardened oracle (bimodal `polar`,
+Gaussian peak on `rpm`) is far more punishing for DoE-only initialisation.
+
+| Method             | gap_final | Δ vs random_uniform | %seeds hit 95 |
+|--------------------|----------:|---------------------:|--------------:|
+| `random_uniform`   | 0.0111    | 0.0 %                | 80 %          |
+| `halton`           | 0.0121    | −9.0 %               | 80 %          |
+| `lhs_random`       | 0.0188    | −69.4 %              | 40 %          |
+| `sobol`            | 0.0284    | −155.9 %             | 20 %          |
+| `lhs_maximin`      | 0.0844    | −660.4 %             | 0 %           |
+| `d_optimal`        | 0.3309    | −2881 %              | 20 %          |
+
+### Cross-dim takeaways
+
+- **The DoE-method ranking changes with dimension.** No single method
+  dominates 2D / 4D / 6D simultaneously.
+  - 2D: LHS variants top, halton bottom
+  - 4D: Sobol top, lhs_maximin / lhs_random mid
+  - 6D: random_uniform is the most robust; structural QMC methods
+    collapse on the bimodal `polar` × Gaussian `rpm` landscape
+- **`lhs_maximin`'s strength is robustness, not the best gap**: it has
+  100 % seeds-hit-95 % in 2D and 4D — it never lands in catastrophe even
+  if it doesn't reach the smallest gap.
+- **`d_optimal` fails in 6D** — the greedy maximin selection over a
+  feasible candidate pool concentrates near boundaries on
+  multimodal/Gaussian-peaked dims, missing all the interior optima.
+
+### Recommendations
+
+| Setting | Suggested default |
+|---------|-------------------|
+| 2D / n_init ≤ 10 (interior peaks) | `lhs_random` / `lhs_maximin` |
+| 3–4D mid-budget | `sobol` for the cleanest gap, `lhs_maximin` for robustness |
+| 5–6D high-noise / multi-modal | `random_uniform` — surprising winner |
+| Linear / quadratic surrogate assumed | `d_optimal` (NOT for GP BO) |
+| Sanity-check baseline | `random_uniform` |
 
 ---
 
@@ -150,15 +175,56 @@ Takeaways:
 - `A:` and `②:` are identical by construction (Campaign auto-applies
   `with_random_augment(n=20)` when no knowledge is provided).
 
-### 4D / 6D (run yourself)
+### 4D results on `process_objective_4d` (5 seeds, ~9 min)
 
-For the 4D problem (Exp-9), §6b reports ① at +26~28 % and ② at +72~77 %.
-For the 6D problem (Exp-10 v2) with the harder polar/rpm structure, ① jumps
-to +91 % vs ② at +52~68 %. Re-run with `--dim 4` or `--dim 6` to confirm.
+True noiseless optimum ≈ 0.34956.
 
-The script writes per-iteration noise-free traces to
-`outputs/experiment_02_knowledge_{dim}d_traces.csv` so you can plot the
-convergence curves yourself.
+| Config                              | gap_final | Δ gap vs baseline | trials → 95 % | %seeds hit 95 |
+|-------------------------------------|----------:|------------------:|--------------:|--------------:|
+| ④ Arrhenius mean only               | 0.0020    | **+84.6 %**       | 19            | 100 %         |
+| ③ gp_prior only                     | 0.0063    | **+51.5 %**       | 25            | 100 %         |
+| ① full domain knowledge             | 0.0076    | **+41.5 %**       | 37            | 60 %          |
+| ⑤ mono+prior (rescued)              | 0.0088    | +32.3 %           | 30            | 80 %          |
+| A / ②: baseline / random_augment    | 0.0130    | 0.0 %             | 22            | 100 %         |
+| G: WRONG-direction monotone         | 0.0716    | **−450.8 %**      | 43            | 20 %          |
+
+### 6D results on `process_objective_6d_v2` (5 seeds, ~13 min)
+
+| Config                              | gap_final | Δ gap vs baseline | %seeds hit 95 |
+|-------------------------------------|----------:|------------------:|--------------:|
+| ① full domain knowledge             | 0.0345    | **+59.1 %**       | 40 %          |
+| ③ gp_prior only                     | 0.0427    | **+49.4 %**       | 20 %          |
+| ⑤ mono+prior (rescued)              | 0.0741    | +12.2 %           | 0 %           |
+| A / ②: baseline / random_augment    | 0.0844    | 0.0 %             | 0 %           |
+| G: WRONG-direction monotone         | 0.1490    | −76.5 %           | 0 %           |
+| ④ Arrhenius mean only               | 0.1924    | **−128.0 %**      | 40 %          |
+
+### The U-shape — knowledge value vs dimension
+
+`Δ gap vs baseline (%)` across all three dimensions, for the same configs:
+
+| Config                              | 2D       | 4D       | 6D       | Pattern |
+|-------------------------------------|---------:|---------:|---------:|---------|
+| ① full domain knowledge             | +45.8 %  | +41.5 %  | **+59.1 %** | mild U |
+| ④ Arrhenius mean only               | **+83.3 %** | **+84.6 %** | **−128.0 %** | dim-sensitive collapse |
+| ③ gp_prior only                     | +58.3 %  | +51.5 %  | +49.4 %  | most stable across dims |
+| ⑤ mono+prior (rescued)              | −16.7 %  | +32.3 %  | +12.2 %  | auto_rescue value rises with dim |
+| G WRONG-direction monotone          | −8.3 %   | **−450.8 %** | −76.5 %  | wrong knowledge worst in mid-dim |
+
+This reproduces the AGENT_KNOWLEDGE.md §6b finding:
+
+- **①** is a mild U (45.8 → 41.5 → 59.1): mid-compression, high-dim rise.
+- **④** is the textbook dimension-sensitive case: a single learnable mean
+  alone wins big in 2D / 4D but **catastrophically fails in 6D** (−128 %).
+  This is exactly why `frozen=True` is the default and learnable variants
+  warn — and why §6b puts mean-function-only configurations in Cat ④.
+- **③** is the steady performer across dims (+58 / +51 / +49 %) — Cat ③
+  "stable middle".
+- **⑤** with v0.3 auto_rescue goes from a low-D liability (−17 % in 2D)
+  to a high-D contributor (+12 % in 6D), showing the ε-rescue rule from
+  Exp-14 actually pays off as the GP fit gets harder.
+- **G** wrong direction is worst exactly where knowledge matters most
+  (4D, −451 %). The v0.2 Spearman validator would have warned here.
 
 ### Chemist's quick-reference (per §6b 5-category framework)
 
