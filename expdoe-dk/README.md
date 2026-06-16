@@ -71,6 +71,21 @@ The difference between the two is one sign flip the user can't see. `expdoe-dk` 
 
 ---
 
+## Epsilon auto-rescue (v0.3)
+
+`with_monotone` combined with `with_gp_prior` used to raise `EpsilonConflictError` when the virtual-point spacing was too small for the prior lengthscale (Exp-14). v0.3 makes this *transparent by default*: the conflicting ε is silently bumped to `0.3 × prior_lengthscale_mode` and an `EpsilonAutoRescueNotice` is emitted once per rescued item.
+
+```python
+campaign = ed.Campaign(space, knowledge,
+                       auto_rescue=True)   # default — soft rescue + notice
+campaign = ed.Campaign(space, knowledge,
+                       auto_rescue=False)  # strict — raise EpsilonConflictError
+```
+
+The rescue is idempotent: a second `validate()` is silent.
+
+---
+
 ## Empirical validation (v0.2)
 
 After every K observations, the Campaign quietly cross-checks your knowledge spec against the data and warns when it sees signs of trouble:
@@ -144,8 +159,8 @@ The old import path still works via `expdoe_dk.legacy.ax_doe_bo`, but emits `Dep
 | Version | Adds |
 |---------|------|
 | v0.1 | Constrained DoE + Knowledge composition + Campaign loop + 1 example |
-| v0.2 (this) | Empirical validators (Spearman monotone + frozen-mean shape) auto-running every K observations |
-| v0.3 | F_eps auto-rescue (Exp-14 rule applied transparently) |
+| v0.2 | Empirical validators (Spearman monotone + frozen-mean shape) auto-running every K observations |
+| v0.3 (this) | ε auto-rescue: combining `with_monotone` + `with_gp_prior` now transparently raises ε to the Exp-14 safe value |
 | v0.4 | HTML report (`result.to_html()`) |
 | v0.5 | Claude Code skill packaging |
 | v0.6 | MCP server (stateless tools) |
