@@ -1,5 +1,7 @@
 # DOE → Bayesian Optimisation with Ax + BoTorch
 
+> **Note (2026-06-15)**: this research framework is being rebranded as **[`expdoe-dk`](./expdoe-dk/)** — a chemistry-friendly DoE+BO library with discrete-step parameters, linear constraints, and safe domain-knowledge injection. The original code below is preserved for reproducibility; new work should use `expdoe-dk` (see `./expdoe-dk/README.md`).
+
 A unified framework for studying **Design of Experiments (DOE) initialisation strategies** combined with **Gaussian Process Bayesian Optimisation** using Meta's [Ax](https://ax.dev/) Service API and [BoTorch](https://botorch.org/).
 
 ---

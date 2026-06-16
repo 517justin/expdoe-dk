@@ -25,6 +25,7 @@ nohup.out
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+!expdoe-dk/examples/*.ipynb
 
 # OS
 .DS_Store
