@@ -71,6 +71,27 @@ The difference between the two is one sign flip the user can't see. `expdoe-dk` 
 
 ---
 
+## HTML report (v0.4)
+
+`Result.to_html(path)` produces a single self-contained HTML file you can attach to a lab notebook or share with collaborators:
+
+```python
+result = campaign.finalize()
+result.to_html("campaign_report.html", title="Reaction yield optimisation")
+```
+
+Contains:
+
+- **Best conditions** in physical units (with the parameter unit string and discrete steps formatted as integers)
+- **Convergence chart** — best-so-far yield vs trial number, with DoE and BO points coloured differently. Renders with Chart.js loaded from `cdn.jsdelivr.net`; degrades gracefully to the summary + table if JavaScript is disabled
+- **History table** with a one-click CSV download (embedded as a `data:` URL — no file dependency)
+- **Knowledge applied** — human-readable listing of every `with_*` item, plus any notes (e.g. auto-applied `random_augment` default)
+- Light / dark mode aware via `prefers-color-scheme`
+
+`result.to_html_string()` returns the HTML as a string if you want to post-process it.
+
+---
+
 ## Epsilon auto-rescue (v0.3)
 
 `with_monotone` combined with `with_gp_prior` used to raise `EpsilonConflictError` when the virtual-point spacing was too small for the prior lengthscale (Exp-14). v0.3 makes this *transparent by default*: the conflicting ε is silently bumped to `0.3 × prior_lengthscale_mode` and an `EpsilonAutoRescueNotice` is emitted once per rescued item.
@@ -160,8 +181,8 @@ The old import path still works via `expdoe_dk.legacy.ax_doe_bo`, but emits `Dep
 |---------|------|
 | v0.1 | Constrained DoE + Knowledge composition + Campaign loop + 1 example |
 | v0.2 | Empirical validators (Spearman monotone + frozen-mean shape) auto-running every K observations |
-| v0.3 (this) | ε auto-rescue: combining `with_monotone` + `with_gp_prior` now transparently raises ε to the Exp-14 safe value |
-| v0.4 | HTML report (`result.to_html()`) |
+| v0.3 | ε auto-rescue: combining `with_monotone` + `with_gp_prior` now transparently raises ε to the Exp-14 safe value |
+| v0.4 (this) | HTML report (`result.to_html(path)`) — self-contained file with best point, convergence chart, history table, CSV download, knowledge spec |
 | v0.5 | Claude Code skill packaging |
 | v0.6 | MCP server (stateless tools) |
 | v0.7 | Multi-objective (qLogEHVI, Pareto reports) |
