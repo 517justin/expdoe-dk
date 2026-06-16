@@ -57,49 +57,90 @@ The takeaway for chemists: **use `lhs_maximin` by default**, switch to
 
 ## Experiment 02 — Knowledge comparison
 
-Setup: `lhs_maximin` DoE held constant, `n_doe = 8`, `n_iter = 12`.
+This experiment uses the **canonical objectives** from the sister project's
+empirical studies (Exp-7 / Exp-9 / Exp-10 in `AGENT_KNOWLEDGE.md`):
 
-Six knowledge configurations corresponding to the five categories from
-`AGENT_KNOWLEDGE.md` §6b, plus an `A: baseline` that uses no knowledge
-(Campaign auto-applies `with_random_augment(n=20)`, so it doubles as a
-sanity check that the Cat ② default is competitive).
+- `reaction_objective_2d`   (T × conc, the Exp-7 problem)
+- `process_objective_4d`    (T × conc × pH × t, the Exp-9 problem)
+- `process_objective_6d_v2` (4D + polar (bimodal) + rpm (Gaussian peak))
 
-Best yield across 3 seeds:
+Running them lets the experiment reproduce the §6b pattern directly.
 
-| Config                                | median | best   | worst  | std  |
-|---------------------------------------|-------:|-------:|-------:|-----:|
-| `A: baseline (auto random_augment)`   | 25.90  | 25.90  | 21.53  | 2.52 |
-| `②: random_augment only`              | 25.90  | 25.90  | 21.53  | 2.52 |
-| `④: Arrhenius mean only`              | 25.90  | 25.90  | 19.69  | 3.58 |
-| `③: gp_prior only`                    | 25.90  | 25.90  | 25.90  | 0.00 |
-| `⑤: monotone + gp_prior (rescued)`    | 25.90  | 25.90  | 25.67  | 0.13 |
-| `①: full domain knowledge`            | 24.97  | 25.90  | 13.36  | 6.98 |
+### Why this needs a noise-free gap metric
+
+The objectives all carry N(0, 0.01²) noise — the same level of variability
+as the actual gap between best methods. Comparing "best observed yield"
+would conflate "BO genuinely converged" with "BO got lucky on a noisy
+draw". The script therefore re-evaluates the **noise-free oracle** at each
+trial's best-so-far X and reports the gap from the true optimum. This is
+the standard BO-benchmark practice.
+
+### How to run
+
+```bash
+python experiments/02_knowledge_comparison.py             # 2D (default), ~3 min
+python experiments/02_knowledge_comparison.py --dim 4     # ~12 min
+python experiments/02_knowledge_comparison.py --dim 6     # ~17 min
+python experiments/02_knowledge_comparison.py --seeds 3   # fewer seeds, faster
+```
+
+Setup: `lhs_maximin` DoE held constant. Budget matches Exp-7/9/10:
+
+| dim | n_doe | n_iter | total evals |
+|-----|------:|-------:|-----------:|
+| 2D  | 6     | 15     | 21         |
+| 4D  | 12    | 30     | 42         |
+| 6D  | 18    | 30     | 48         |
+
+### 2D results (5 seeds, ~3 min)
+
+True noiseless optimum = 0.6065 at T=600 K, conc=0.5 mol/L.
+**`gap_final`** is `|true_opt − noiseless_yield(best_x_final)|` — smaller is better.
+
+| Config                              | gap_final | Δ gap vs baseline | trials → 95 % |
+|-------------------------------------|----------:|------------------:|--------------:|
+| ④ Arrhenius mean only               | 0.0004    | **+83.3 %**       | 8             |
+| ③ gp_prior only                     | 0.0010    | **+58.3 %**       | 7             |
+| ① full domain knowledge             | 0.0013    | **+45.8 %**       | 9             |
+| A: baseline / ② random_augment      | 0.0024    | 0.0 %             | 8             |
+| G: WRONG-direction monotone         | 0.0026    | −8.3 %            | 8             |
+| ⑤ monotone + gp_prior (rescued)     | 0.0028    | −16.7 %           | 7             |
 
 Takeaways:
-- **`A:` and `②:` are identical** by construction: with no knowledge given,
-  Campaign auto-applies `with_random_augment(n=20)`. This is the documented
-  Cat ② safe default.
-- **`③: gp_prior only` and `⑤: monotone + gp_prior` are the most stable**
-  in 4D — std is 0 / 0.13, both consistently reach the optimum. This is
-  consistent with AGENT_KNOWLEDGE.md's finding that Cat ③ gives "stable
-  middle" performance.
-- **`①: full domain knowledge` looks worst here in 4D** — one seed (44)
-  landed at 13.36, dragging the median down. This is the *known* 4D
-  weakness of the correct-domain-knowledge category from AGENT_KNOWLEDGE.md
-  §6b: it shines in 2D and 6D but is *compressed* in 4D where pure
-  regularisation can catch up. Expect ① to dominate in higher-D problems
-  with the same setup.
-- **`⑤: monotone + gp_prior` does NOT crash here** because v0.3
-  `auto_rescue=True` (the default) silently bumps ε to the Exp-14 safe
-  value. Try `auto_rescue=False` to reproduce the original conflict.
 
-The takeaway for chemists:
-- If you have **real domain knowledge** that's known to be correct in the
-  *BO frame* (`with_monotone(effect="increases_objective")` handles the
-  translation), use ① in high-dimensional problems.
-- If you're unsure, **let the default (`Knowledge()` → auto Cat ②)** carry
-  you. It will not crash, will not silently mislead, and is competitive
-  in mid-dim problems.
-- Avoid learnable mean functions (`frozen=False`) — the library will warn,
-  but `④` here used `frozen=True` and was still wide-spread because the
-  Arrhenius shape alone is dimension-sensitive.
+- **④ Arrhenius mean alone is the strongest** at +83 % — the Arrhenius
+  shape IS the natural monotone-in-T encoding for this oracle (peak at
+  T=600 boundary), so a single frozen mean function captures most of the
+  structure with just one knowledge item.
+- **③ GP prior alone is +58 %** — informative hyperparameter priors carry
+  surprising weight in 2D.
+- **① full domain knowledge is third (+46 %)** — adding 4 mean items +
+  `random_augment` in only 21 evals overspecifies the problem; the
+  ceiling of correct knowledge shows in higher dim (per §6b: ① ranks #1
+  in 6D with +92 %).
+- **G wrong direction (−8 %) and ⑤ mono + prior (−17 %) actively hurt** —
+  matches §6b's warnings. ⑤'s drop survives v0.3 `auto_rescue`: the
+  combination is fragile in low-D with a tight budget, not the ε alone.
+- `A:` and `②:` are identical by construction (Campaign auto-applies
+  `with_random_augment(n=20)` when no knowledge is provided).
+
+### 4D / 6D (run yourself)
+
+For the 4D problem (Exp-9), §6b reports ① at +26~28 % and ② at +72~77 %.
+For the 6D problem (Exp-10 v2) with the harder polar/rpm structure, ① jumps
+to +91 % vs ② at +52~68 %. Re-run with `--dim 4` or `--dim 6` to confirm.
+
+The script writes per-iteration noise-free traces to
+`outputs/experiment_02_knowledge_{dim}d_traces.csv` so you can plot the
+convergence curves yourself.
+
+### Chemist's quick-reference (per §6b 5-category framework)
+
+| If you have                                   | Use                                  |
+|-----------------------------------------------|--------------------------------------|
+| A known shape for ONE dim (Arrhenius / peak)  | `④ with_arrhenius(frozen=True)` etc. — surprisingly powerful in low-D |
+| Several known shapes / structures             | `① with_*` chained (best in high-D)   |
+| No specific knowledge                         | `Knowledge()` default → auto Cat ② safe net |
+| A monotone direction you're confident about   | `with_monotone(effect="increases_objective")` — frame translation handled |
+| Uncertain about direction                     | Skip `with_monotone`; the v0.2 validator will warn if your guess is reversed |
+| Reach for `with_gp_prior` AND `with_monotone` | Trust v0.3 `auto_rescue=True`, but expect lower ceiling in low-D |

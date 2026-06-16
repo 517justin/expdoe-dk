@@ -1,220 +1,425 @@
 """
 Experiment 02 — How much does the *type* of domain knowledge matter?
 
-Question
---------
-Holding the DoE method and BO budget fixed, which knowledge configuration
-gives the best yield on the chemistry oracle?
+The v1 of this experiment used a toy oracle whose optimum sat at the
+corner of the search space, so every BO method reached it within budget
+and knowledge configurations were indistinguishable. v2 rebuilds the
+experiment around the canonical objectives from the sister project's
+empirical studies (Exp-7 / Exp-9 / Exp-10 in `AGENT_KNOWLEDGE.md`):
 
-We sample the five categories defined in the project's
-``AGENT_KNOWLEDGE.md`` synthesis:
+  - `reaction_objective_2d`  — T × conc, the Plan-2 Exp-7 problem (2D)
+  - `process_objective_4d`   — T × conc × pH × t, the Exp-9 problem (4D)
+  - `process_objective_6d_v2`— 4D + polar (bimodal) + rpm (Gaussian peak)
 
-  ① Domain knowledge (correct)      — Arrhenius + monotone + quadratic peak
-  ② Pure regularization             — only with_random_augment(n=20)
-  ③ Weak knowledge (GP prior)       — only with_gp_prior("medium")
-  ④ Dimension-sensitive (mean fn)   — Arrhenius alone (frozen)
-  ⑤ Mono + prior combo              — monotone + gp_prior (uses v0.3 auto-rescue)
+These are the same objectives that produced the 5-category framework, so
+running this script against them should reproduce the §6b pattern:
 
-Plus an A: baseline that uses no knowledge — Campaign auto-applies the
-random-augment Cat ② default, which doubles as a sanity check that the
-default is competitive.
-
-Setup
------
-- Same oracle and space as experiment 01 (peak at T=95, time=120, A=7, B=3).
-- DoE: lhs_maximin, n_doe = 8.
-- BO: n_iter = 12, q = 1.
-- 3 seeds per knowledge config.
-
-Output
-------
-- Per-config summary table (best yield median ± best/worst over seeds).
-- Full history CSV under ``outputs/`` for downstream analysis.
+  ① domain knowledge — strong in 2D (+80%) and 6D (+91%), compressed in 4D
+  ② regularization   — safest default across dimensions
+  ⑤ mono + prior     — depends on v0.3 auto-rescue
+  G  wrong direction — v0.2 Spearman validator warns; performance suffers
 
 Run with:
-    python experiments/02_knowledge_comparison.py
+    python experiments/02_knowledge_comparison.py             # 2D (default)
+    python experiments/02_knowledge_comparison.py --dim 4
+    python experiments/02_knowledge_comparison.py --dim 6
+    python experiments/02_knowledge_comparison.py --seeds 3   # fewer seeds, faster
 """
 from __future__ import annotations
 
+import argparse
+import math
 import time
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 import pandas as pd
+import torch
 
 import expdoe_dk as ed
 
 
 # --------------------------------------------------------------------- #
-# Same toy oracle as experiment 01
+# Canonical objectives, copied verbatim (only the sign flipped so the
+# Campaign sees positive yield with maximize=True). Each returns a numpy
+# array of yields in physical units.
 # --------------------------------------------------------------------- #
-def oracle(df: pd.DataFrame) -> np.ndarray:
+def _noiseless_2d(df: pd.DataFrame) -> np.ndarray:
     T = df["T"].to_numpy()
-    t = df["time"].to_numpy()
-    A = df["conc_A"].to_numpy()
-    B = df["conc_B"].to_numpy()
-    rate = np.exp(-1.5 / (T / 100.0))
-    sat = 1.0 - np.exp(-t / 60.0)
-    eA = 1.0 - 0.04 * (A - 7.0) ** 2
-    eB = 1.0 - 0.06 * (B - 3.0) ** 2
-    rng = np.random.default_rng(0)
-    return 95.0 * rate * sat * eA * eB + rng.normal(0.0, 0.3, size=len(df))
+    c = df["conc"].to_numpy()
+    rate = np.exp(-0.5 / np.clip(T / 600.0, 1e-3, None))
+    eff = 4.0 * c * (1.0 - c)
+    return rate * eff
 
 
-def _space() -> ed.Space:
-    return ed.Space(
+def _noiseless_4d(df: pd.DataFrame) -> np.ndarray:
+    T = df["T"].to_numpy()
+    c = df["conc"].to_numpy()
+    pH = df["pH"].to_numpy()
+    t = df["t"].to_numpy()
+    rate_T = np.exp(-1.0 / np.clip(T / 800.0, 1e-3, None))
+    eff_c = 4.0 * (c / 2.0) * (1.0 - c / 2.0)
+    act_pH = np.exp(-((pH - 7.0) / 1.5) ** 2)
+    yield_t = 1.0 - np.exp(-((t - 10.0) / 110.0) * 3.0)
+    return rate_T * eff_c * act_pH * yield_t
+
+
+def _noiseless_6d(df: pd.DataFrame) -> np.ndarray:
+    T = df["T"].to_numpy()
+    c = df["conc"].to_numpy()
+    pH = df["pH"].to_numpy()
+    t = df["t"].to_numpy()
+    polar = df["polar"].to_numpy()
+    rpm = df["rpm"].to_numpy()
+    rate_T = np.exp(-1.0 / np.clip(T / 800.0, 1e-3, None))
+    eff_c = 4.0 * (c / 2.0) * (1.0 - c / 2.0)
+    act_pH = np.exp(-((pH - 7.0) / 1.5) ** 2)
+    yield_t = 1.0 - np.exp(-((t - 10.0) / 110.0) * 3.0)
+    rpm_norm = (rpm - 100.0) / 900.0
+    eff_rpm = np.exp(-((rpm_norm - 0.667) ** 2) / (2 * 0.15 ** 2))
+    eff_polar = np.abs(np.sin(2.0 * polar * math.pi))
+    return rate_T * eff_c * act_pH * yield_t * eff_polar * eff_rpm
+
+
+def _with_noise(noiseless_fn, df: pd.DataFrame, *, noise_seed: int) -> np.ndarray:
+    """Wrap a noiseless function with 0.01-std Gaussian noise (matches Exp-7/9/10)."""
+    rng = np.random.default_rng(noise_seed)
+    return noiseless_fn(df) + 0.01 * rng.standard_normal(size=len(df))
+
+
+def reaction_objective_2d(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
+    """Plan 2 Exp-7 oracle. Peak at T=600 K (boundary), conc=0.5 (interior).
+    True optimum yield ≈ 0.6065. Returns positive yield with N(0, 0.01²) noise."""
+    return _with_noise(_noiseless_2d, df, noise_seed=noise_seed)
+
+
+def process_objective_4d(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
+    """Plan 2 Exp-9 oracle. T=[300,800], conc=[0,2], pH=[4,10], t=[10,120].
+    True optimum yield ≈ 0.34956. Positive yield with N(0, 0.01²) noise."""
+    return _with_noise(_noiseless_4d, df, noise_seed=noise_seed)
+
+
+def process_objective_6d_v2(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
+    """Plan 2 Exp-10 v2 oracle: 4D + polar (bimodal |sin(2πx)|) + rpm
+    (Gaussian peak at ~700). True optimum yield ≈ 0.34956."""
+    return _with_noise(_noiseless_6d, df, noise_seed=noise_seed)
+
+
+# --------------------------------------------------------------------- #
+# Per-dimension setup: bounds, true opt, configs
+# --------------------------------------------------------------------- #
+@dataclass
+class ProblemSpec:
+    dim: int
+    space: ed.Space
+    oracle: Callable[[pd.DataFrame], np.ndarray]
+    noiseless: Callable[[pd.DataFrame], np.ndarray]
+    true_opt: float
+    n_doe: int
+    n_iter: int
+    configs: dict[str, Callable[[], ed.Knowledge]]
+
+
+def _build_2d() -> ProblemSpec:
+    space = ed.Space(
         params=[
-            ed.Parameter("T",      bounds=(60.0, 120.0), unit="°C"),
-            ed.Parameter("time",   bounds=(10.0, 180.0), unit="min"),
-            ed.Parameter("conc_A", bounds=(1.0, 10.0), unit="mL",
-                         kind="discrete", step=1.0),
-            ed.Parameter("conc_B", bounds=(1.0, 10.0), unit="mL",
-                         kind="discrete", step=1.0),
+            ed.Parameter("T",    bounds=(300.0, 600.0), unit="K"),
+            ed.Parameter("conc", bounds=(0.0, 1.0),     unit="mol/L"),
         ],
-        constraints=[
-            ed.LinearConstraint(
-                coeffs={"conc_A": 1.0, "conc_B": -1.0}, lower=1.0,
-                name="A − B ≥ 1 mL",
-            ),
-        ],
-        objectives="yield_pct",
+        objectives="yield",
         maximize=True,
     )
-
-
-# --------------------------------------------------------------------- #
-# Five knowledge configurations (factories — one per seed)
-# --------------------------------------------------------------------- #
-def _k_baseline() -> ed.Knowledge:
-    # No items: Campaign will auto-apply with_random_augment(n=20) (Cat ②).
-    return ed.Knowledge()
-
-
-def _k_random_augment() -> ed.Knowledge:
-    return ed.Knowledge().strict().with_random_augment(n=20)
-
-
-def _k_gp_prior_only() -> ed.Knowledge:
-    return ed.Knowledge().strict().with_gp_prior(lengthscale="medium")
-
-
-def _k_full_correct() -> ed.Knowledge:
-    return (
-        ed.Knowledge()
-        .strict()
-        .with_arrhenius("T")
-        .with_monotone("time", effect="increases_objective")
-        .with_quadratic_peak("conc_A", center=7.0)
-        .with_random_augment(n=20)
+    configs = {
+        "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
+        "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
+        "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
+        # ① correct knowledge: Arrhenius-like monotone in T + peak at c=0.5
+        "①: full domain knowledge": lambda: (
+            ed.Knowledge().strict()
+            .with_arrhenius("T")
+            .with_quadratic_peak("conc", center=0.5)
+            .with_random_augment(n=20)
+        ),
+        "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
+        "⑤: mono + gp_prior (rescued)": lambda: (
+            ed.Knowledge().strict()
+            .with_monotone("T", effect="increases_objective", epsilon=0.02)
+            .with_gp_prior(lengthscale="strong")
+        ),
+        "G: WRONG-direction monotone": lambda: (
+            ed.Knowledge().strict()
+            .with_monotone("T", effect="decreases_objective")
+            .with_random_augment(n=20)
+        ),
+    }
+    return ProblemSpec(
+        dim=2, space=space, oracle=reaction_objective_2d,
+        noiseless=_noiseless_2d,
+        true_opt=0.6065, n_doe=6, n_iter=15, configs=configs,
     )
 
 
-def _k_arrhenius_only() -> ed.Knowledge:
-    return ed.Knowledge().strict().with_arrhenius("T")
-
-
-def _k_mono_plus_prior() -> ed.Knowledge:
-    # Triggers v0.3 ε auto-rescue (combining monotone + strong prior with
-    # default ε would otherwise raise EpsilonConflictError).
-    return (
-        ed.Knowledge()
-        .strict()
-        .with_monotone("time", effect="increases_objective", epsilon=0.02)
-        .with_gp_prior(lengthscale="strong")
+def _build_4d() -> ProblemSpec:
+    space = ed.Space(
+        params=[
+            ed.Parameter("T",    bounds=(300.0, 800.0), unit="K"),
+            ed.Parameter("conc", bounds=(0.0, 2.0),     unit="mol/L"),
+            ed.Parameter("pH",   bounds=(4.0, 10.0),    unit=""),
+            ed.Parameter("t",    bounds=(10.0, 120.0),  unit="min"),
+        ],
+        objectives="yield",
+        maximize=True,
+    )
+    configs = {
+        "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
+        "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
+        "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
+        "①: full domain knowledge": lambda: (
+            ed.Knowledge().strict()
+            .with_arrhenius("T")
+            .with_quadratic_peak("conc", center=1.0)   # eff_c peaks at c=1
+            .with_quadratic_peak("pH",   center=7.0)
+            .with_monotone("t", effect="increases_objective")
+            .with_random_augment(n=20)
+        ),
+        "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
+        "⑤: mono + gp_prior (rescued)": lambda: (
+            ed.Knowledge().strict()
+            .with_monotone("T", effect="increases_objective", epsilon=0.02)
+            .with_monotone("t", effect="increases_objective", epsilon=0.02)
+            .with_gp_prior(lengthscale="strong")
+        ),
+        "G: WRONG-direction monotone": lambda: (
+            ed.Knowledge().strict()
+            .with_monotone("T", effect="decreases_objective")
+            .with_monotone("t", effect="decreases_objective")
+            .with_random_augment(n=20)
+        ),
+    }
+    return ProblemSpec(
+        dim=4, space=space, oracle=process_objective_4d,
+        noiseless=_noiseless_4d,
+        true_opt=0.34956, n_doe=12, n_iter=30, configs=configs,
     )
 
 
-CONFIGS: dict[str, Callable[[], ed.Knowledge]] = {
-    "A: baseline (auto random_augment)": _k_baseline,
-    "②: random_augment only": _k_random_augment,
-    "③: gp_prior only": _k_gp_prior_only,
-    "①: full domain knowledge": _k_full_correct,
-    "④: Arrhenius mean only": _k_arrhenius_only,
-    "⑤: monotone + gp_prior (rescued)": _k_mono_plus_prior,
-}
+def _build_6d() -> ProblemSpec:
+    space = ed.Space(
+        params=[
+            ed.Parameter("T",     bounds=(300.0, 800.0), unit="K"),
+            ed.Parameter("conc",  bounds=(0.0, 2.0),     unit="mol/L"),
+            ed.Parameter("pH",    bounds=(4.0, 10.0),    unit=""),
+            ed.Parameter("t",     bounds=(10.0, 120.0),  unit="min"),
+            ed.Parameter("polar", bounds=(0.0, 1.0),     unit=""),
+            ed.Parameter("rpm",   bounds=(100.0, 1000.0), unit="rpm"),
+        ],
+        objectives="yield",
+        maximize=True,
+    )
+    configs = {
+        "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
+        "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
+        "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
+        "①: full domain knowledge": lambda: (
+            ed.Knowledge().strict()
+            .with_arrhenius("T")
+            .with_quadratic_peak("conc", center=1.0)
+            .with_quadratic_peak("pH",   center=7.0)
+            .with_monotone("t", effect="increases_objective")
+            .with_quadratic_peak("rpm",  center=700.0)   # Gaussian peak ≈ 700
+            .with_random_augment(n=20)
+        ),
+        "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
+        "⑤: mono + gp_prior (rescued)": lambda: (
+            ed.Knowledge().strict()
+            .with_monotone("T", effect="increases_objective", epsilon=0.02)
+            .with_monotone("t", effect="increases_objective", epsilon=0.02)
+            .with_gp_prior(lengthscale="strong")
+        ),
+        "G: WRONG-direction monotone": lambda: (
+            ed.Knowledge().strict()
+            .with_monotone("T", effect="decreases_objective")
+            .with_monotone("t", effect="decreases_objective")
+            .with_random_augment(n=20)
+        ),
+    }
+    return ProblemSpec(
+        dim=6, space=space, oracle=process_objective_6d_v2,
+        noiseless=_noiseless_6d,
+        true_opt=0.34956, n_doe=18, n_iter=30, configs=configs,
+    )
 
-SEEDS = [42, 43, 44]
-N_DOE = 8
-N_ITER = 12
+
+SPECS = {2: _build_2d, 4: _build_4d, 6: _build_6d}
 
 
-def run_one(name: str, knowledge_factory: Callable[[], ed.Knowledge],
+# --------------------------------------------------------------------- #
+# Single run
+# --------------------------------------------------------------------- #
+def run_one(spec: ProblemSpec, name: str,
+            knowledge_factory: Callable[[], ed.Knowledge],
             seed: int) -> dict:
-    space = _space()
-    campaign = ed.Campaign(space, knowledge_factory(), seed=seed)
-    doe = campaign.suggest_doe(n=N_DOE, method="lhs_maximin")
-    campaign.tell(doe, oracle(doe))
-    for it in range(N_ITER):
+    torch.manual_seed(seed)
+    campaign = ed.Campaign(spec.space, knowledge_factory(), seed=seed,
+                           validate=False)
+    doe = campaign.suggest_doe(n=spec.n_doe, method="lhs_maximin")
+    campaign.tell(doe, spec.oracle(doe, noise_seed=seed))
+    for it in range(spec.n_iter):
         nxt = campaign.ask(q=1, iteration=it)
-        campaign.tell(nxt, oracle(nxt))
+        campaign.tell(nxt, spec.oracle(nxt, noise_seed=seed * 1000 + it))
     res = campaign.finalize()
+    history = res.history_df
+    cum_best = history["y"].cummax().to_numpy()
+
+    # Noise-free trajectory: for each iteration, evaluate the noiseless
+    # oracle at the X corresponding to the best observed so far. This is
+    # the standard BO-benchmark metric, robust to lucky noise draws.
+    param_cols = spec.space.param_names
+    best_x_so_far: list[dict] = []
+    best_idx = 0
+    for i in range(len(history)):
+        if history["y"].iloc[i] > history["y"].iloc[best_idx]:
+            best_idx = i
+        best_x_so_far.append({c: float(history.iloc[best_idx][c])
+                              for c in param_cols})
+    noiseless_trace = spec.noiseless(pd.DataFrame(best_x_so_far))
     return {
-        "config": name,
-        "seed": seed,
-        "best_y": res.best_y_physical,
-        "history": res.history_df,
+        "best_y": float(cum_best[-1]),
+        "cum_best": cum_best.tolist(),
+        "noiseless_best_at_iter": noiseless_trace.tolist(),
+        "history": history,
     }
 
 
+# --------------------------------------------------------------------- #
+# Main
+# --------------------------------------------------------------------- #
 def main() -> None:
-    warnings.simplefilter("ignore")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dim", type=int, choices=[2, 4, 6], default=2,
+                        help="Problem dimensionality (2, 4, or 6). Default 2.")
+    parser.add_argument("--seeds", type=int, default=5,
+                        help="Number of seeds (each starts from 42). Default 5.")
+    args = parser.parse_args()
 
-    print("=" * 72)
-    print(" Experiment 02 — Knowledge configuration × BO outcome")
-    print(f"   configs = {list(CONFIGS)}")
-    print(f"   seeds   = {SEEDS}   n_doe={N_DOE}, n_iter={N_ITER}")
-    print(f"   DoE method = lhs_maximin (held constant)")
-    print("=" * 72)
+    warnings.simplefilter("ignore")
+    spec = SPECS[args.dim]()
+    seeds = [42 + i for i in range(args.seeds)]
+    total_evals = spec.n_doe + spec.n_iter
+    target = spec.true_opt * 0.95
+
+    print("=" * 80)
+    print(f" Experiment 02 — Knowledge comparison on {args.dim}D")
+    print(f"   oracle      = "
+          f"{'reaction_objective_2d' if args.dim == 2 else f'process_objective_{args.dim}d'}"
+          f"{'_v2' if args.dim == 6 else ''}")
+    print(f"   true_opt    = {spec.true_opt:.4f}  (target = 95 % ≈ {target:.4f})")
+    print(f"   n_doe       = {spec.n_doe}   n_iter = {spec.n_iter}   "
+          f"(total {total_evals} evals)")
+    print(f"   seeds       = {seeds}")
+    print(f"   configs     = {len(spec.configs)}")
+    print("=" * 80)
 
     rows: list[dict] = []
-    history_rows: list[pd.DataFrame] = []
+    traces: list[pd.DataFrame] = []
     t0 = time.time()
-    for name, factory in CONFIGS.items():
-        for seed in SEEDS:
+    for name, factory in spec.configs.items():
+        for seed in seeds:
             tic = time.time()
-            res = run_one(name, factory, seed)
+            try:
+                r = run_one(spec, name, factory, seed)
+                clean = np.asarray(r["noiseless_best_at_iter"], dtype=float)
+            except Exception as exc:
+                print(f"  {name:<36} seed={seed}  FAILED: {exc}")
+                clean = np.full(total_evals, np.nan)
             elapsed = time.time() - tic
-            rows.append({"config": name, "seed": seed,
-                         "best_y": res["best_y"], "secs": elapsed})
-            h = res["history"].copy()
-            h["config"] = name
-            h["seed"] = seed
-            h["trial"] = range(1, len(h) + 1)
-            history_rows.append(h)
+
+            # Gap from true noiseless optimum at each iteration.
+            gap = spec.true_opt - clean
+            # Convergence: first trial where the noise-free best is within
+            # 5 % of the true optimum.
+            reached = [i for i, v in enumerate(clean) if v >= target]
+            trials_to_target = reached[0] + 1 if reached else None
+            rows.append({
+                "config": name, "seed": seed,
+                "clean_final": float(clean[-1]) if len(clean) else float("nan"),
+                "gap_final": float(gap[-1]) if len(gap) else float("nan"),
+                "clean@doe_end": (float(clean[spec.n_doe - 1])
+                                  if len(clean) >= spec.n_doe else float("nan")),
+                "clean@mid": (float(clean[(spec.n_doe + spec.n_iter // 2) - 1])
+                              if len(clean) >= spec.n_doe + spec.n_iter // 2
+                              else float("nan")),
+                "trials_to_95pct": trials_to_target,
+                "secs": elapsed,
+            })
+            traces.append(pd.DataFrame({
+                "config": name, "seed": seed,
+                "trial": np.arange(1, len(clean) + 1),
+                "clean_best_so_far": clean,
+            }))
+            ttg_str = str(trials_to_target) if trials_to_target else "—"
+            final_val = clean[-1] if len(clean) else float("nan")
             print(f"  {name:<36} seed={seed}  "
-                  f"best={res['best_y']:6.2f}  ({elapsed:4.1f}s)")
+                  f"clean={final_val:.4f}  gap={gap[-1] if len(gap) else float('nan'):.4f}  "
+                  f"hit95@{ttg_str:>4}  ({elapsed:4.1f}s)")
     total = (time.time() - t0) / 60.0
     print(f"\n  Total: {total:.1f} min")
 
     summary = pd.DataFrame(rows)
-    agg = (summary.groupby("config")["best_y"]
-                .agg(median="median", best="max", worst="min", std="std")
-                .round(3)
-                .sort_values("median", ascending=False))
-    worst_overall = agg["median"].min()
-    agg["vs worst"] = (agg["median"] - worst_overall).round(3)
-    print("\n" + "─" * 72)
-    print(" Summary (best yield across {} seeds):".format(len(SEEDS)))
-    print("─" * 72)
-    print(agg.to_string())
+    agg_median = (
+        summary.groupby("config")[["clean_final", "gap_final",
+                                   "clean@doe_end", "clean@mid"]]
+        .median().round(4)
+    )
+    summary["_ttg"] = summary["trials_to_95pct"].fillna(total_evals + 1)
+    agg_median["trials_to_95% (median)"] = (
+        summary.groupby("config")["_ttg"].median().astype(int)
+    )
+    agg_median["%seeds_hit_95"] = (
+        summary.groupby("config")["trials_to_95pct"]
+        .apply(lambda s: int(round(100.0 * s.notna().mean())))
+    )
+    # Improvement vs baseline: relative reduction in gap_final
+    # (smaller gap = better; same convention as AGENT_KNOWLEDGE.md §6b).
+    baseline_gap = agg_median.loc["A: baseline (auto Cat ②)", "gap_final"]
+    agg_median["Δ gap vs baseline (%)"] = (
+        100.0 * (baseline_gap - agg_median["gap_final"])
+        / max(abs(baseline_gap), 1e-9)
+    ).round(1)
+    agg_median = agg_median.sort_values("gap_final", ascending=True)
 
-    print("\n Interpretation (refer to AGENT_KNOWLEDGE.md §6b for the 5-category framework):")
-    print("   ① Correct domain knowledge — best ceiling in high-D, second in 4D")
-    print("   ② Pure regularization      — safest default, +50–77% across 2D/4D/6D")
-    print("   ③ Weak GP prior            — stable middle, modest gain")
-    print("   ④ Mean fn only             — dimension-sensitive; may underperform")
-    print("   ⑤ Mono + prior (rescued)   — depends on auto-rescued ε (see v0.3)")
+    print("\n" + "─" * 80)
+    print(f" Convergence summary (median over {len(seeds)} seeds; "
+          f"target = 95 % of true opt ≈ {target:.4f})")
+    print("─" * 80)
+    print(agg_median.to_string())
+
+    print(f"\n Per AGENT_KNOWLEDGE.md §6b on this oracle:")
+    if args.dim == 2:
+        print("   ① full domain knowledge should lead by ~5× (+80% in Exp-7)")
+    elif args.dim == 4:
+        print("   ① / ② are roughly tied (+25-77% range in Exp-10)")
+        print("   ② regularization typically wins on speed; ⑤ on stability")
+    else:  # 6
+        print("   ① / C: Frozen Combined dominate (+91% in Exp-10 6D v2)")
+        print("   ② still strong, but knowledge advantage is clearest here")
+    print("   G (wrong direction) should be slowest and least reliable")
 
     out_dir = Path(__file__).resolve().parent / "outputs"
     out_dir.mkdir(parents=True, exist_ok=True)
-    full = pd.concat(history_rows, axis=0, ignore_index=True)
-    full.to_csv(out_dir / "experiment_02_knowledge.csv", index=False)
-    agg.to_csv(out_dir / "experiment_02_summary.csv")
+    stem = f"experiment_02_knowledge_{args.dim}d"
+    summary.to_csv(out_dir / f"{stem}.csv", index=False)
+    agg_median.to_csv(out_dir / f"{stem}_summary.csv")
+    pd.concat(traces, ignore_index=True).to_csv(
+        out_dir / f"{stem}_traces.csv", index=False,
+    )
     print(f"\nWrote:")
-    print(f"  {out_dir / 'experiment_02_knowledge.csv'}  ({len(full)} rows)")
-    print(f"  {out_dir / 'experiment_02_summary.csv'}")
+    print(f"  {out_dir / f'{stem}.csv'}")
+    print(f"  {out_dir / f'{stem}_summary.csv'}")
+    print(f"  {out_dir / f'{stem}_traces.csv'}")
 
 
 if __name__ == "__main__":
