@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "expdoe-dk"
+version = "0.1.0"
+description = "Experimental Design of Experiments + Bayesian Optimization with Domain Knowledge injection — for chemistry, materials, and lab experimentalists."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "DOEGP Team" }]
+keywords = ["doe", "bayesian-optimization", "chemistry", "materials", "domain-knowledge", "experimental-design"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "torch>=2.0",
+    "botorch>=0.11.0",
+    "gpytorch>=1.11",
+    "ax-platform>=1.2.4",
+    "numpy>=1.24",
+    "scipy>=1.12",
+    "pandas>=2.0",
+    "matplotlib>=3.7",
+    "pyDOE3>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "jupyterlab>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/MI-6/expdoe-dk"
+Documentation = "https://github.com/MI-6/expdoe-dk#readme"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = [
+    "slow: integration tests that may take >5s (use --run-slow to enable)",
+]
