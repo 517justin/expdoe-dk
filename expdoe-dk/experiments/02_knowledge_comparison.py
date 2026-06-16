@@ -28,10 +28,9 @@ Run with:
 from __future__ import annotations
 
 import argparse
-import math
+import sys
 import time
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -41,102 +40,18 @@ import torch
 
 import expdoe_dk as ed
 
-
-# --------------------------------------------------------------------- #
-# Canonical objectives, copied verbatim (only the sign flipped so the
-# Campaign sees positive yield with maximize=True). Each returns a numpy
-# array of yields in physical units.
-# --------------------------------------------------------------------- #
-def _noiseless_2d(df: pd.DataFrame) -> np.ndarray:
-    T = df["T"].to_numpy()
-    c = df["conc"].to_numpy()
-    rate = np.exp(-0.5 / np.clip(T / 600.0, 1e-3, None))
-    eff = 4.0 * c * (1.0 - c)
-    return rate * eff
-
-
-def _noiseless_4d(df: pd.DataFrame) -> np.ndarray:
-    T = df["T"].to_numpy()
-    c = df["conc"].to_numpy()
-    pH = df["pH"].to_numpy()
-    t = df["t"].to_numpy()
-    rate_T = np.exp(-1.0 / np.clip(T / 800.0, 1e-3, None))
-    eff_c = 4.0 * (c / 2.0) * (1.0 - c / 2.0)
-    act_pH = np.exp(-((pH - 7.0) / 1.5) ** 2)
-    yield_t = 1.0 - np.exp(-((t - 10.0) / 110.0) * 3.0)
-    return rate_T * eff_c * act_pH * yield_t
-
-
-def _noiseless_6d(df: pd.DataFrame) -> np.ndarray:
-    T = df["T"].to_numpy()
-    c = df["conc"].to_numpy()
-    pH = df["pH"].to_numpy()
-    t = df["t"].to_numpy()
-    polar = df["polar"].to_numpy()
-    rpm = df["rpm"].to_numpy()
-    rate_T = np.exp(-1.0 / np.clip(T / 800.0, 1e-3, None))
-    eff_c = 4.0 * (c / 2.0) * (1.0 - c / 2.0)
-    act_pH = np.exp(-((pH - 7.0) / 1.5) ** 2)
-    yield_t = 1.0 - np.exp(-((t - 10.0) / 110.0) * 3.0)
-    rpm_norm = (rpm - 100.0) / 900.0
-    eff_rpm = np.exp(-((rpm_norm - 0.667) ** 2) / (2 * 0.15 ** 2))
-    eff_polar = np.abs(np.sin(2.0 * polar * math.pi))
-    return rate_T * eff_c * act_pH * yield_t * eff_polar * eff_rpm
-
-
-def _with_noise(noiseless_fn, df: pd.DataFrame, *, noise_seed: int) -> np.ndarray:
-    """Wrap a noiseless function with 0.01-std Gaussian noise (matches Exp-7/9/10)."""
-    rng = np.random.default_rng(noise_seed)
-    return noiseless_fn(df) + 0.01 * rng.standard_normal(size=len(df))
-
-
-def reaction_objective_2d(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
-    """Plan 2 Exp-7 oracle. Peak at T=600 K (boundary), conc=0.5 (interior).
-    True optimum yield ≈ 0.6065. Returns positive yield with N(0, 0.01²) noise."""
-    return _with_noise(_noiseless_2d, df, noise_seed=noise_seed)
-
-
-def process_objective_4d(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
-    """Plan 2 Exp-9 oracle. T=[300,800], conc=[0,2], pH=[4,10], t=[10,120].
-    True optimum yield ≈ 0.34956. Positive yield with N(0, 0.01²) noise."""
-    return _with_noise(_noiseless_4d, df, noise_seed=noise_seed)
-
-
-def process_objective_6d_v2(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
-    """Plan 2 Exp-10 v2 oracle: 4D + polar (bimodal |sin(2πx)|) + rpm
-    (Gaussian peak at ~700). True optimum yield ≈ 0.34956."""
-    return _with_noise(_noiseless_6d, df, noise_seed=noise_seed)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _oracles import ProblemSpec, make_problem  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
-# Per-dimension setup: bounds, true opt, configs
+# Per-dimension knowledge configurations
 # --------------------------------------------------------------------- #
-@dataclass
-class ProblemSpec:
-    dim: int
-    space: ed.Space
-    oracle: Callable[[pd.DataFrame], np.ndarray]
-    noiseless: Callable[[pd.DataFrame], np.ndarray]
-    true_opt: float
-    n_doe: int
-    n_iter: int
-    configs: dict[str, Callable[[], ed.Knowledge]]
-
-
-def _build_2d() -> ProblemSpec:
-    space = ed.Space(
-        params=[
-            ed.Parameter("T",    bounds=(300.0, 600.0), unit="K"),
-            ed.Parameter("conc", bounds=(0.0, 1.0),     unit="mol/L"),
-        ],
-        objectives="yield",
-        maximize=True,
-    )
-    configs = {
+def _configs_2d() -> dict[str, Callable[[], ed.Knowledge]]:
+    return {
         "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
         "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
         "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
-        # ① correct knowledge: Arrhenius-like monotone in T + peak at c=0.5
         "①: full domain knowledge": lambda: (
             ed.Knowledge().strict()
             .with_arrhenius("T")
@@ -155,71 +70,10 @@ def _build_2d() -> ProblemSpec:
             .with_random_augment(n=20)
         ),
     }
-    return ProblemSpec(
-        dim=2, space=space, oracle=reaction_objective_2d,
-        noiseless=_noiseless_2d,
-        true_opt=0.6065, n_doe=6, n_iter=15, configs=configs,
-    )
 
 
-def _build_4d() -> ProblemSpec:
-    space = ed.Space(
-        params=[
-            ed.Parameter("T",    bounds=(300.0, 800.0), unit="K"),
-            ed.Parameter("conc", bounds=(0.0, 2.0),     unit="mol/L"),
-            ed.Parameter("pH",   bounds=(4.0, 10.0),    unit=""),
-            ed.Parameter("t",    bounds=(10.0, 120.0),  unit="min"),
-        ],
-        objectives="yield",
-        maximize=True,
-    )
-    configs = {
-        "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
-        "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
-        "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
-        "①: full domain knowledge": lambda: (
-            ed.Knowledge().strict()
-            .with_arrhenius("T")
-            .with_quadratic_peak("conc", center=1.0)   # eff_c peaks at c=1
-            .with_quadratic_peak("pH",   center=7.0)
-            .with_monotone("t", effect="increases_objective")
-            .with_random_augment(n=20)
-        ),
-        "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
-        "⑤: mono + gp_prior (rescued)": lambda: (
-            ed.Knowledge().strict()
-            .with_monotone("T", effect="increases_objective", epsilon=0.02)
-            .with_monotone("t", effect="increases_objective", epsilon=0.02)
-            .with_gp_prior(lengthscale="strong")
-        ),
-        "G: WRONG-direction monotone": lambda: (
-            ed.Knowledge().strict()
-            .with_monotone("T", effect="decreases_objective")
-            .with_monotone("t", effect="decreases_objective")
-            .with_random_augment(n=20)
-        ),
-    }
-    return ProblemSpec(
-        dim=4, space=space, oracle=process_objective_4d,
-        noiseless=_noiseless_4d,
-        true_opt=0.34956, n_doe=12, n_iter=30, configs=configs,
-    )
-
-
-def _build_6d() -> ProblemSpec:
-    space = ed.Space(
-        params=[
-            ed.Parameter("T",     bounds=(300.0, 800.0), unit="K"),
-            ed.Parameter("conc",  bounds=(0.0, 2.0),     unit="mol/L"),
-            ed.Parameter("pH",    bounds=(4.0, 10.0),    unit=""),
-            ed.Parameter("t",     bounds=(10.0, 120.0),  unit="min"),
-            ed.Parameter("polar", bounds=(0.0, 1.0),     unit=""),
-            ed.Parameter("rpm",   bounds=(100.0, 1000.0), unit="rpm"),
-        ],
-        objectives="yield",
-        maximize=True,
-    )
-    configs = {
+def _configs_4d() -> dict[str, Callable[[], ed.Knowledge]]:
+    return {
         "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
         "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
         "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
@@ -229,7 +83,6 @@ def _build_6d() -> ProblemSpec:
             .with_quadratic_peak("conc", center=1.0)
             .with_quadratic_peak("pH",   center=7.0)
             .with_monotone("t", effect="increases_objective")
-            .with_quadratic_peak("rpm",  center=700.0)   # Gaussian peak ≈ 700
             .with_random_augment(n=20)
         ),
         "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
@@ -246,14 +99,39 @@ def _build_6d() -> ProblemSpec:
             .with_random_augment(n=20)
         ),
     }
-    return ProblemSpec(
-        dim=6, space=space, oracle=process_objective_6d_v2,
-        noiseless=_noiseless_6d,
-        true_opt=0.34956, n_doe=18, n_iter=30, configs=configs,
-    )
 
 
-SPECS = {2: _build_2d, 4: _build_4d, 6: _build_6d}
+def _configs_6d() -> dict[str, Callable[[], ed.Knowledge]]:
+    return {
+        "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
+        "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
+        "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
+        "①: full domain knowledge": lambda: (
+            ed.Knowledge().strict()
+            .with_arrhenius("T")
+            .with_quadratic_peak("conc", center=1.0)
+            .with_quadratic_peak("pH",   center=7.0)
+            .with_monotone("t", effect="increases_objective")
+            .with_quadratic_peak("rpm",  center=700.0)
+            .with_random_augment(n=20)
+        ),
+        "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
+        "⑤: mono + gp_prior (rescued)": lambda: (
+            ed.Knowledge().strict()
+            .with_monotone("T", effect="increases_objective", epsilon=0.02)
+            .with_monotone("t", effect="increases_objective", epsilon=0.02)
+            .with_gp_prior(lengthscale="strong")
+        ),
+        "G: WRONG-direction monotone": lambda: (
+            ed.Knowledge().strict()
+            .with_monotone("T", effect="decreases_objective")
+            .with_monotone("t", effect="decreases_objective")
+            .with_random_augment(n=20)
+        ),
+    }
+
+
+_CONFIG_BUILDERS = {2: _configs_2d, 4: _configs_4d, 6: _configs_6d}
 
 
 # --------------------------------------------------------------------- #
@@ -306,7 +184,8 @@ def main() -> None:
     args = parser.parse_args()
 
     warnings.simplefilter("ignore")
-    spec = SPECS[args.dim]()
+    spec = make_problem(args.dim)
+    configs = _CONFIG_BUILDERS[args.dim]()
     seeds = [42 + i for i in range(args.seeds)]
     total_evals = spec.n_doe + spec.n_iter
     target = spec.true_opt * 0.95
@@ -320,13 +199,13 @@ def main() -> None:
     print(f"   n_doe       = {spec.n_doe}   n_iter = {spec.n_iter}   "
           f"(total {total_evals} evals)")
     print(f"   seeds       = {seeds}")
-    print(f"   configs     = {len(spec.configs)}")
+    print(f"   configs     = {len(configs)}")
     print("=" * 80)
 
     rows: list[dict] = []
     traces: list[pd.DataFrame] = []
     t0 = time.time()
-    for name, factory in spec.configs.items():
+    for name, factory in configs.items():
         for seed in seeds:
             tic = time.time()
             try:

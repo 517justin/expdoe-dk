@@ -26,32 +26,58 @@ reproduce).
 
 ## Experiment 01 — DoE method comparison
 
-Setup: `n_doe = 8`, `n_iter = 12`, `knowledge = None` (Campaign auto-applies
-`with_random_augment(n=20)` — same Cat ② default for every method, so the
-comparison is fair).
+Uses the same canonical objectives as experiment 02 (Exp-7 / Exp-9 /
+Exp-10 v2). Knowledge config held constant (Campaign auto-applies Cat ②
+default), so the comparison is fair.
 
-Best yield across 3 seeds (oracle optimum = 25.90 %):
+```bash
+python experiments/01_doe_method_comparison.py             # 2D (default)
+python experiments/01_doe_method_comparison.py --dim 4     # ~12 min
+python experiments/01_doe_method_comparison.py --dim 6     # ~17 min
+```
 
-| Method            | median | best   | worst  | std   |
-|-------------------|-------:|-------:|-------:|------:|
-| `halton`          | 25.90  | 25.90  | 25.51  | 0.23  |
-| `lhs_maximin`     | 25.90  | 25.90  | 21.53  | 2.52  |
-| `sobol`           | 25.83  | 25.90  | 23.65  | 1.28  |
-| `lhs_random`      | 24.87  | 25.90  | 24.35  | 0.79  |
-| `random_uniform`  | 24.67  | 25.90  | 24.18  | 0.89  |
+Headline metric is the same noise-free `gap_final` as experiment 02:
+`true_opt − noiseless_oracle(best_x_final)`. Smaller is better.
+
+### 2D results on `reaction_objective_2d` (5 seeds, ~3 min)
+
+True noiseless optimum = 0.6065 at T=600 K, conc=0.5 mol/L.
+
+| Method             | gap_final | Δ vs random_uniform | trials → 95 % |
+|--------------------|----------:|---------------------:|--------------:|
+| `lhs_random`       | 0.0013    | **+72.9 %**          | 10            |
+| `lhs_maximin`      | 0.0024    | **+50.0 %**          | 8             |
+| `d_optimal`        | 0.0036    | +25.0 %              | 8             |
+| `sobol`            | 0.0037    | +22.9 %              | 11            |
+| `random_uniform`   | 0.0048    | 0.0 %                | 8             |
+| `halton`           | 0.0055    | −14.6 %              | 8             |
 
 Takeaways:
-- Three QMC-style methods (`halton`, `lhs_maximin`, `sobol`) tie for top
-  median — all land on the true optimum across seeds.
-- `lhs_maximin` has the widest spread (one seed got stuck at 21.5) because
-  the SA optimisation favours coverage even when feasibility regions are
-  narrow under the A−B≥1 constraint.
-- `random_uniform` underperforms — confirming the standard textbook
-  recommendation that quasi-random initialisation beats pure random for
-  small BO budgets.
 
-The takeaway for chemists: **use `lhs_maximin` by default**, switch to
-`sobol`/`halton` if you have ≥ 20 initial points and want lower variance.
+- **`lhs_random` (+73 %) and `lhs_maximin` (+50 %) take the top two
+  slots** — LHS stratification on the `conc` dim matters more than the
+  marginal QMC-style improvements on this 2D problem.
+- **`halton` underperforms `random_uniform`** in 2D — Halton sequences
+  develop axis correlations in low dimensions that miss the interior peak
+  at `conc = 0.5`. (Halton's reputation as a default works better at
+  higher dim or larger n_init.)
+- The trial-count-to-target column (`trials → 95 %`) is similar across
+  methods (8–11) — the differences appear in *how close to the optimum*
+  each method converges, not whether it gets within 95 %.
+
+### When to use which
+
+- **2D / very small n_init (≤ 10)**: `lhs_random` or `lhs_maximin`. LHS
+  stratification pays off when each parameter has an interior peak.
+- **Mid dim (3D–4D)** with moderate n_init: `lhs_maximin` is the safest.
+- **High dim (5D+) and ≥ 20 initial points**: try `sobol` for low
+  discrepancy, or compare empirically.
+- `d_optimal` shines when you can specify the surrogate-model form
+  (linear or quadratic regression assumption). Less ideal for GP BO.
+- `random_uniform` is the lower bound — never the recommended default
+  but useful as a sanity check.
+
+Re-run with `--dim 4` or `--dim 6` to see how the ranking changes.
 
 ---
 
