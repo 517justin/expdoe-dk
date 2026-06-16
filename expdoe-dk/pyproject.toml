@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "expdoe-dk"
-version = "0.3.0"
+version = "0.4.0"
 description = "Experimental Design of Experiments + Bayesian Optimization with Domain Knowledge injection — for chemistry, materials, and lab experimentalists."
 readme = "README.md"
 requires-python = ">=3.10"

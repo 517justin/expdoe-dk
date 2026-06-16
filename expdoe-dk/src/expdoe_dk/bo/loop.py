@@ -57,6 +57,8 @@ class Result:
     maximize: list[bool]
     knowledge_summary: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    param_units: dict[str, str] = field(default_factory=dict)
+    param_kinds: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -73,6 +75,24 @@ class Result:
 
     def to_json(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2))
+
+    def to_html(self, path: str | Path, title: str | None = None) -> Path:
+        """
+        Render a self-contained HTML report and write it to ``path``.
+
+        Returns the resolved ``Path``. The page uses Chart.js via CDN for the
+        convergence plot and degrades gracefully (table + summary) when JS
+        is disabled. All numbers shown are in physical units.
+        """
+        from .report import write_html_report
+
+        return write_html_report(self, path, title=title)
+
+    def to_html_string(self, title: str | None = None) -> str:
+        """Return the HTML report as a string (no file written)."""
+        from .report import render_html
+
+        return render_html(self, title=title)
 
 
 # --------------------------------------------------------------------- #
@@ -472,6 +492,8 @@ class Campaign:
             objectives=list(self.space.objectives),
             maximize=list(self.space.maximize),
             knowledge_summary=self.knowledge.to_dict()["items"],
+            param_units={p.name: p.unit for p in self.space.params},
+            param_kinds={p.name: p.kind for p in self.space.params},
         )
         if self._auto_default_applied:
             result.notes.append(
