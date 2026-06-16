@@ -71,6 +71,28 @@ The difference between the two is one sign flip the user can't see. `expdoe-dk` 
 
 ---
 
+## Empirical validation (v0.2)
+
+After every K observations, the Campaign quietly cross-checks your knowledge spec against the data and warns when it sees signs of trouble:
+
+| Validator                  | Triggers a warning when                                             |
+|----------------------------|---------------------------------------------------------------------|
+| `MonotoneViolationWarning` | Spearman correlation between a monotone param and Y has the opposite sign, p < 0.05 |
+| `ShapePriorMismatchWarning`| A frozen Arrhenius / quadratic peak shape correlates < 0.30 with Y |
+
+The warning text always points to a concrete remediation (`Knowledge.drop_monotone(param)`, falling back to `with_random_augment`, etc.). Each warning surfaces at most once per parameter, so a stale assumption doesn't spam the log.
+
+Tune or disable via `Campaign(..., validate=..., validation_interval=..., validation_min_obs=...)`. Default: validate every 5 observations once you have ≥ 10 data points.
+
+```python
+campaign = ed.Campaign(space, knowledge,
+                       validate=True,
+                       validation_interval=5,   # how often
+                       validation_min_obs=10)   # how early
+```
+
+---
+
 ## Five categories of knowledge — what to use when
 
 Based on cross-dimension experiments (2D, 4D, 6D):
@@ -121,8 +143,8 @@ The old import path still works via `expdoe_dk.legacy.ax_doe_bo`, but emits `Dep
 
 | Version | Adds |
 |---------|------|
-| v0.1 (this) | Constrained DoE + Knowledge composition + Campaign loop + 1 example |
-| v0.2 | Empirical validator (auto-warn when monotone assumption disagrees with data) |
+| v0.1 | Constrained DoE + Knowledge composition + Campaign loop + 1 example |
+| v0.2 (this) | Empirical validators (Spearman monotone + frozen-mean shape) auto-running every K observations |
 | v0.3 | F_eps auto-rescue (Exp-14 rule applied transparently) |
 | v0.4 | HTML report (`result.to_html()`) |
 | v0.5 | Claude Code skill packaging |

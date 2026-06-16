@@ -29,6 +29,14 @@ from ..knowledge._frame import (
     internal_to_physical,
     physical_to_internal_best,
 )
+from ..knowledge.validators import (
+    check_monotone_assumption,
+    check_shape_prior_fit,
+)
+from ..knowledge.shape import (
+    ArrheniusMeanFrozen,
+    QuadraticMeanFrozen,
+)
 from ..doe import generate as generate_doe
 from .gp import build_gp
 
@@ -94,6 +102,10 @@ class Campaign:
         space: Space,
         knowledge: Knowledge | None = None,
         seed: int = 0,
+        *,
+        validate: bool = True,
+        validation_interval: int = 5,
+        validation_min_obs: int = 10,
     ) -> None:
         if space.n_objectives > 1:
             warnings.warn(
@@ -119,6 +131,14 @@ class Campaign:
         self._y_internal: list[float] = []
         self._y_physical: list[float] = []
         self._trial_kind: list[str] = []  # "doe" / "bo"
+
+        # v0.2 — empirical validators (run on tell, throttled by interval).
+        self.validate_active = bool(validate)
+        self.validation_interval = max(1, int(validation_interval))
+        self.validation_min_obs = max(3, int(validation_min_obs))
+        self._last_validation_n = 0
+        # Cache of warnings already emitted so we don't spam every K obs.
+        self._validation_emitted: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------ #
     # Step 1: initial DoE
@@ -185,6 +205,10 @@ class Campaign:
             )
             self._y_internal.append(y_int)
             self._trial_kind.append(kind)
+
+        # v0.2: run empirical validators (Spearman monotone, shape fit) on a
+        # cadence so each warning surfaces at most ~once until new data comes.
+        self._maybe_run_validators()
 
     # ------------------------------------------------------------------ #
     # Step 3: ask — propose next experiments
@@ -315,6 +339,112 @@ class Campaign:
                 self.save_checkpoint(checkpoint)
 
         return self.finalize()
+
+    # ------------------------------------------------------------------ #
+    # Empirical validators (v0.2)
+    # ------------------------------------------------------------------ #
+    def _maybe_run_validators(self) -> None:
+        """Throttled hook: run empirical validators after enough new data."""
+        if not self.validate_active:
+            return
+        n = len(self._y_internal)
+        if n < self.validation_min_obs:
+            return
+        if n < self._last_validation_n + self.validation_interval:
+            return
+        self._last_validation_n = n
+        self._run_monotone_validators()
+        self._run_shape_validators()
+
+    def _run_monotone_validators(self) -> None:
+        mono_items = self.knowledge.items_of("monotone")
+        if not mono_items:
+            return
+        X_phys = self.history_df()[self.space.param_names].to_numpy()
+        y_user = np.asarray(self._y_physical, dtype=np.float64)
+        for item in mono_items:
+            try:
+                idx = self.space.param_names.index(item.param)
+            except ValueError:
+                continue
+            result = check_monotone_assumption(
+                X_user_units=X_phys,
+                y_user=y_user,
+                param_index=idx,
+                param_name=item.param,
+                declared_effect=item.effect,
+                min_observations=self.validation_min_obs,
+            )
+            if result is None or not result.violation:
+                continue
+            key = ("monotone", item.param)
+            if key in self._validation_emitted:
+                continue
+            self._validation_emitted.add(key)
+            warnings.warn(result.to_warning(), stacklevel=3)
+
+    def _run_shape_validators(self) -> None:
+        shape_items = [
+            it for it in self.knowledge.items
+            if getattr(it, "kind", None) in ("arrhenius", "quadratic_peak")
+        ]
+        if not shape_items:
+            return
+        # Build mean predictions in unit / Y_norm space.
+        X_phys = self.space.to_tensor(
+            self.history_df()[self.space.param_names]
+        )
+        X_unit = self.space.physical_to_unit(X_phys)
+        y_int = torch.tensor(self._y_internal, dtype=torch.float64)
+        if y_int.std() < 1e-9:
+            return
+        y_norm = ((y_int - y_int.mean()) / y_int.std()).cpu().numpy()
+
+        for item in shape_items:
+            try:
+                dim_idx = self.space.param_names.index(item.param)
+            except ValueError:
+                continue
+            kind = getattr(item, "kind")
+            if kind == "arrhenius":
+                fn = ArrheniusMeanFrozen(
+                    temp_dim_index=dim_idx,
+                    activation_energy=item.activation_energy,
+                    amplitude_init=item.amplitude_init,
+                )
+            else:  # quadratic_peak
+                param = self.space.param_by_name(item.param)
+                lo, hi = param.bounds
+                center_unit = (item.center - lo) / (hi - lo)
+                curvature_signs = [0.0] * self.space.n_dims
+                if item.direction == "peak":
+                    sign_internal = +1.0 if self.space.maximize[0] else -1.0
+                else:
+                    sign_internal = -1.0 if self.space.maximize[0] else +1.0
+                curvature_signs[dim_idx] = sign_internal
+                centers = [0.5] * self.space.n_dims
+                centers[dim_idx] = float(center_unit)
+                fn = QuadraticMeanFrozen(
+                    input_dim=self.space.n_dims,
+                    curvature_signs=curvature_signs,
+                    centers=centers,
+                )
+            with torch.no_grad():
+                m_pred = fn(X_unit).detach().cpu().numpy()
+            result = check_shape_prior_fit(
+                mean_predictions=m_pred,
+                y_norm=y_norm,
+                kind=kind,
+                param=item.param,
+                min_observations=self.validation_min_obs,
+            )
+            if result is None or not result.violation:
+                continue
+            key = (kind, item.param)
+            if key in self._validation_emitted:
+                continue
+            self._validation_emitted.add(key)
+            warnings.warn(result.to_warning(), stacklevel=3)
 
     # ------------------------------------------------------------------ #
     # Step 5: finalize — best point in physical frame
