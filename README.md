@@ -1,260 +1,149 @@
-# DOE → Bayesian Optimisation with Ax + BoTorch
+# expdoe-dk
 
-> **Note (2026-06-15)**: this research framework is being rebranded as **[`expdoe-dk`](./expdoe-dk/)** — a chemistry-friendly DoE+BO library with discrete-step parameters, linear constraints, and safe domain-knowledge injection. The original code below is preserved for reproducibility; new work should use `expdoe-dk` (see `./expdoe-dk/README.md`).
+**Experimental Design of Experiments + Bayesian Optimization, with Domain Knowledge injection — for chemistry, materials, and lab experimentalists.**
 
-A unified framework for studying **Design of Experiments (DOE) initialisation strategies** combined with **Gaussian Process Bayesian Optimisation** using Meta's [Ax](https://ax.dev/) Service API and [BoTorch](https://botorch.org/).
+If you're a chemist or materials researcher running a few dozen experiments to find the best conditions, this library gives you:
 
----
-
-## Overview
-
-When running expensive black-box optimisations (e.g. materials/chemical formulation experiments with a budget of 20–40 evaluations), the choice of initial design points can significantly affect how quickly Bayesian Optimisation converges.
-
-This repository implements and benchmarks the **DOE → BO bridging pipeline** using the Ax Service API, demonstrating:
-
-| Part | Topic |
-|------|-------|
-| **A** | Core architecture: `GenerationStrategy` (DOE → BO auto-transition) + `attach_trial()` for injecting custom designs |
-| **B** | Equivalence validation: Ax-BoTorch vs pure BoTorch on 4 benchmarks |
-| **C** | SAASBO: sparse axis-aligned subspace BO for high-dimensional problems |
-| **D** | Batch BO: `get_next_trials(max_trials=q)` for parallel acquisition (q=4) |
-| **E** | JSON serialisation: `save_to_json_file` / `load_from_json_file` for checkpoint-resume |
-
----
-
-## Key Results
-
-### Part B — Ax-BoTorch vs Pure BoTorch (3-seed median final gap)
-
-| Benchmark | Ax-BoTorch | Pure BoTorch | Verdict |
-|-----------|-----------|-------------|---------|
-| Branin 2D | 0.031 | 0.010 | Comparable |
-| Hartmann 3D | **0.0005** | 0.010 | Ax better |
-| Rosenbrock 4D | **11.88** | 17.08 | Ax better |
-| Ackley 4D | 6.66 | 6.59 | Equivalent |
-
-→ **Ax's abstraction layer does not degrade optimisation quality.**
-
-### Part C — SAASBO vs Standard GP (4D benchmarks)
-
-| Benchmark | Ax-BoTorch | Ax-SAASBO |
-|-----------|-----------|----------|
-| Rosenbrock 4D | **11.88** | 18.84 |
-| Ackley 4D | 6.66 | **5.14** |
-
-→ **SAASBO shines in ≥20D settings.** For 4D, it underperforms because: (1) its MCMC inference (NUTS) takes 5–10 min per iteration, and (2) the sparsity assumption hurts in low dimensions. Use standard GP for d ≤ 10.
-
-### Part D — Batch BO (q=4 vs q=1, Branin 2D)
-
-| Strategy | Total evals | Final gap |
-|----------|------------|-----------|
-| q=1 sequential | 16 | 0.031 |
-| **q=4 batch** | 40 | **0.002** |
-
-→ Batch BO with q=4 achieves **16× better gap** by using more parallel evaluations — ideal for experimental setups where parallel runs are possible.
-
----
-
-## Installation
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/your-username/ax-doe-bo.git
-cd ax-doe-bo
-
-# 2. Create and activate a conda environment (recommended)
-conda create -n doegp python=3.11
-conda activate doegp
-
-# 3. Install dependencies
-pip install -r requirements.txt
-```
-
-> **Note**: `ax-platform` pulls in `torch`, `botorch`, and `gpytorch` automatically. Ensure you have a compatible CUDA environment if running on GPU (CPU is fine for these benchmarks).
-
----
-
-## Usage
-
-### Run all experiments
-
-```bash
-python ax_doe_bo.py
-```
-
-This runs all five parts sequentially and saves outputs to `outputs/`:
-
-```
-outputs/
-├── ax_comparison.png      # Part B convergence curves (Ax vs Pure BoTorch)
-├── saasbo_comparison.png  # Part C SAASBO vs standard GP
-├── batch_demo.png         # Part D batch BO (q=1 vs q=4)
-└── experiment_state.json  # Part E JSON checkpoint demo
-```
-
-> **Runtime**: ~12 hours total on CPU (SAASBO in Part C dominates due to MCMC inference). To skip SAASBO, comment out Part C in `__main__`.
-
-### Use as a library
+1. **Constrained, discrete-step DoE** — initial designs that respect "A must be ≥ B + 1 mL" and "this dial only steps in 0.5 mL increments". No more rounding off post-hoc.
+2. **Bayesian optimization** that drives the experiment forward after the initial DoE, using a Gaussian Process surrogate.
+3. **Domain-knowledge injection** — tell the optimizer that "temperature increases yield (Arrhenius)" or "pH peaks at 7" and it will use that hint, not fight you.
+4. **Safe defaults** baked in from two months of empirical research (see [`AGENT_KNOWLEDGE.md`](../AGENT_KNOWLEDGE.md) in the parent project for the lessons).
 
 ```python
-from benchmarks import branin_2d, hartmann_3d, rosenbrock_nd, ackley_nd
-from doe_utils import optimize_lhs_maximin
-from ax_doe_bo import run_ax_bo, make_ax_generation_strategy, inject_doe_trials
+import expdoe_dk as ed
 
-# Generate an Opt-LHS initial design
-design = optimize_lhs_maximin(n_samples=12, n_dims=4, n_iterations=200,
-                               n_restarts=3, seed=42)
-
-# Run DOE → BO with Ax
-cum_best = run_ax_bo(
-    design=design,
-    bench_fn=rosenbrock_nd,
-    n_bo=20,
-    seed=42,
-    surrogate="botorch",   # or "saasbo" for high-dimensional problems
-)
-
-print(f"Final gap: {abs(cum_best[-1] - 0.0):.4f}")
-```
-
-### Bring your own objective function
-
-Replace the benchmark function with your own:
-
-```python
-def my_experiment(X: np.ndarray) -> np.ndarray:
-    """
-    X: shape (n, d), values in [0, 1]^d
-    Returns: shape (n,) — objective values to MINIMISE
-    """
-    # Call your simulator / experimental evaluation here
-    return your_simulator(X)
-
-design = optimize_lhs_maximin(n_samples=10, n_dims=5, seed=42)
-cum_best = run_ax_bo(design, my_experiment, n_bo=20, seed=42)
-```
-
----
-
-## Project Structure
-
-```
-ax-doe-bo/
-├── README.md            # This file
-├── requirements.txt     # Python dependencies
-├── .gitignore
-│
-├── ax_doe_bo.py         # Main script — all five experimental parts
-├── benchmarks.py        # Benchmark functions (Branin / Hartmann / Rosenbrock / Ackley)
-└── doe_utils.py         # DOE utilities (Random LHS, Maximin-Optimised LHS via SA)
-```
-
----
-
-## Architecture Details
-
-### GenerationStrategy: DOE → BO auto-transition
-
-```python
-from ax.generation_strategy.generation_strategy import GenerationStrategy
-from ax.generation_strategy.generation_node import GenerationNode
-from ax.generation_strategy.generator_spec import GeneratorSpec
-from ax.generation_strategy.dispatch_utils import Generators
-from ax.generation_strategy.transition_criterion import MinTrials
-
-doe_node = GenerationNode(
-    name="doe_node",
-    generator_specs=[GeneratorSpec(generator_enum=Generators.SOBOL, ...)],
-    transition_criteria=[
-        MinTrials(
-            threshold=n_init,
-            transition_to="bo_node",
-            use_all_trials_in_exp=True,      # manually attached trials count!
-            count_only_trials_with_data=True,
-        )
+space = ed.Space(
+    params=[
+        ed.Parameter("T",      bounds=(60, 120), unit="°C"),
+        ed.Parameter("time",   bounds=(10, 180), unit="min"),
+        ed.Parameter("conc_A", bounds=(1, 10), unit="mL", kind="discrete", step=1.0),
+        ed.Parameter("conc_B", bounds=(1, 10), unit="mL", kind="discrete", step=1.0),
     ],
+    constraints=[
+        ed.LinearConstraint(coeffs={"conc_A": 1, "conc_B": -1}, lower=1.0),
+    ],
+    objectives="yield_pct",
+    maximize=True,
 )
-bo_node = GenerationNode(
-    name="bo_node",
-    generator_specs=[GeneratorSpec(generator_enum=Generators.BOTORCH_MODULAR)],
-)
-gs = GenerationStrategy(nodes=[doe_node, bo_node])
+
+knowledge = (ed.Knowledge()
+             .with_arrhenius("T")
+             .with_monotone("time", effect="increases_objective")
+             .with_quadratic_peak("conc_A", center=7.0))
+
+campaign = ed.Campaign(space, knowledge, seed=42)
+
+doe   = campaign.suggest_doe(n=12)         # DataFrame in °C / min / mL
+y_doe = run_lab_experiments(doe)           # chemist measures
+campaign.tell(doe, y_doe)
+
+for _ in range(20):
+    next_pts = campaign.ask(q=1)
+    y_next   = run_lab_experiments(next_pts)
+    campaign.tell(next_pts, y_next)
+
+result = campaign.finalize()
+result.to_html("campaign_report.html")     # share-ready HTML
 ```
 
-### Injecting a custom DOE via `attach_trial()`
+The package lives in [`expdoe-dk/`](./expdoe-dk/). The historical research framework (Ax+BoTorch wrapper) is kept in this directory as `ax_doe_bo.py` / `doe_utils.py` / `benchmarks.py` for reproducibility; new work should use `expdoe-dk`.
 
-```python
-from ax.service.ax_client import AxClient
-from ax.service.utils.instantiation import ObjectiveProperties
+---
 
-ax_client = AxClient(generation_strategy=gs, verbose_logging=False)
-ax_client.create_experiment(
-    parameters=[{"name": f"x{i}", "type": "range", "bounds": [0.0, 1.0],
-                 "value_type": "float"} for i in range(d)],
-    objectives={"y": ObjectiveProperties(minimize=True)},
-)
+## Install
 
-# Bypass Ax's internal DOE generator — inject our own design
-for row in design:
-    params = {f"x{j}": float(row[j]) for j in range(d)}
-    _, trial_idx = ax_client.attach_trial(parameters=params)
-    y_val = float(objective_fn(row.reshape(1, -1)).squeeze())
-    ax_client.complete_trial(trial_index=trial_idx, raw_data={"y": (y_val, None)})
+```bash
+cd expdoe-dk
+pip install -e .          # editable install
 ```
 
-After injecting `n_init` trials, `MinTrials` triggers and the next `ax_client.get_next_trial()` call automatically uses the BO node (BOTORCH_MODULAR).
+Requires Python 3.10+, BoTorch ≥ 0.11, Ax ≥ 1.2.4.
 
-### JSON Checkpoint/Resume
+---
 
-```python
-# Save after Phase 1
-ax_client.save_to_json_file("experiment_state.json")
+## Repository layout
 
-# Resume in Phase 2
-ax_client2 = AxClient.load_from_json_file("experiment_state.json")
-params, trial_idx = ax_client2.get_next_trial()   # continues BO seamlessly
+```
+expdoe-dk/                          # ★ the package — use this
+  src/expdoe_dk/
+    space.py                        # Parameter, LinearConstraint, Space
+    doe/                            # 6 DoE methods (LHS maximin / Sobol / Halton / ...)
+    knowledge/                      # Knowledge composition + frame translator
+    bo/                             # Campaign + HTML report
+    legacy/                         # ax_doe_bo backward-compat shims
+  examples/
+    01_reaction_optimization.{py,ipynb}    # chemistry workflow end-to-end
+    02_html_report.py                       # → v0.4 HTML report
+  experiments/
+    01_doe_method_comparison.py             # six DoE methods × same oracle
+    02_knowledge_comparison.py              # five knowledge categories × same oracle
+  tests/                            # 53 unit + integration tests
+  LICENSE / NOTICE                  # Apache 2.0
+
+ax_doe_bo.py / doe_utils.py / benchmarks.py    # historical research framework
+README.md                          # this file
 ```
 
 ---
 
-## Benchmark Functions
+## Examples and experiments
 
-All functions accept `X ∈ [0,1]^d` and return scalar values (minimisation).
+| Path | What it does |
+|------|--------------|
+| [`expdoe-dk/examples/01_reaction_optimization.py`](./expdoe-dk/examples/01_reaction_optimization.py) | A chemist runs DoE → BO end-to-end with knowledge injection. Finds the true optimum in 23 evals. |
+| [`expdoe-dk/examples/02_html_report.py`](./expdoe-dk/examples/02_html_report.py) | Reproduces the v0.4 HTML report (`Result.to_html`). |
+| [`expdoe-dk/experiments/01_doe_method_comparison.py`](./expdoe-dk/experiments/01_doe_method_comparison.py) | Holds knowledge fixed, varies the DoE method. Quantifies how `lhs_maximin` vs Sobol vs random impacts BO. |
+| [`expdoe-dk/experiments/02_knowledge_comparison.py`](./expdoe-dk/experiments/02_knowledge_comparison.py) | Holds DoE fixed, varies knowledge injection (baseline / random_augment / mean function / monotone / combo). Reproduces the 5-category framework empirically. |
 
-| Function | Dim | Global Optimum | Characteristics |
-|----------|-----|---------------|-----------------|
-| `branin_2d` | 2 | 0.3979 (3 optima) | Multimodal, classic benchmark |
-| `hartmann_3d` | 3 | −3.8628 | 4 local minima |
-| `rosenbrock_nd` | n | 0.0 | Narrow curved valley, hard to optimise |
-| `ackley_nd` | n | 0.0 | ~1000s of local minima, highly multimodal |
+Run any of them:
 
----
-
-## When to Use SAASBO
-
-SAASBO (`Generators.SAASBO`) uses a **fully Bayesian sparse GP** with MCMC (No-U-Turn Sampler) to identify relevant dimensions. Recommended when:
-
-- Dimensionality ≥ 20
-- Only a small subset of dimensions is truly active
-- You can afford long per-iteration compute time (1–10 min per BO step)
-
-For d ≤ 10, use `Generators.BOTORCH_MODULAR` (standard GP with MLE hyperparameters).
+```bash
+python expdoe-dk/examples/01_reaction_optimization.py
+python expdoe-dk/experiments/01_doe_method_comparison.py
+```
 
 ---
 
-## Compatibility
+## Five categories of knowledge — what to use when
 
-Tested with:
+Based on cross-dimension experiments (2D, 4D, 6D):
 
-| Package | Version |
-|---------|---------|
-| Python | 3.11 |
-| ax-platform | 1.2.4 |
-| botorch | 0.11.x |
-| torch | 2.x |
-| scipy | 1.12+ |
+| Category                                | API                                                | Best for                                    |
+|-----------------------------------------|----------------------------------------------------|---------------------------------------------|
+| ① Domain knowledge (correct)            | `with_arrhenius`, `with_quadratic_peak`, `with_monotone` | When you have real physics on the system   |
+| ② Pure regularization (safest default)  | `with_random_augment(n=20)`                        | When you have no specific knowledge        |
+| ③ Weak knowledge (GP prior alone)       | `with_gp_prior("medium")`                          | When you want hyperparameter tuning hints  |
+| ④ Avoid (learnable means)               | `with_arrhenius(frozen=False)` (warns)             | Triggers a warning — usually use frozen    |
+| ⑤ Avoid (mono + prior, default ε)       | `with_monotone(epsilon=0.02)` + strong prior        | Now auto-rescued; opt out with `auto_rescue=False` |
 
-> **Note**: `AxClient` is deprecated as of Ax 1.4.0. The modern API uses `ax.api.Client`. This codebase targets Ax 1.2.x; migration to the new API is straightforward — see the [Ax migration guide](https://ax.dev).
+Steering happens through API defaults: users naturally end up in ① or ②.
+
+---
+
+## Safe-by-default behaviours
+
+| Pitfall (found empirically — see AGENT_KNOWLEDGE.md) | What `expdoe-dk` does |
+|------|------|
+| `monotone_dims={dim: "increasing"}` is in user / yield space, but BO minimizes `-yield`, so the GP sees the reversed direction | `with_monotone(effect="increases_objective")` is in physical space; `_frame.flip_for_minimize` translates internally |
+| `MonotonicGPWithDerivatives` ε=0.02 conflicts with Gamma(3,6) lengthscale prior → 13× worse fit | `epsilon="auto"` resolves to `0.3 × prior_lengthscale_mode`; explicit small ε now auto-rescues with a notice (`v0.3`) |
+| Learnable mean parameters get absorbed by MLE → mean function adds no signal | `Arrhenius`, `QuadraticMean` default to `frozen=True`; learnable variants emit `LearnableMeanAbsorptionWarning` |
+| Wrong monotone assumption silently hurts | After K observations the Campaign runs a Spearman check and warns with `MonotoneViolationWarning` (`v0.2`) |
+| No knowledge given at all → user thinks they need to learn the whole API | Campaign auto-applies `with_random_augment(n=20)` and logs a one-liner |
+
+---
+
+## Roadmap
+
+| Version | Adds | Status |
+|---------|------|------|
+| v0.1 | Constrained DoE + Knowledge composition + Campaign loop + 1 example | [released](https://github.com/517justin/expdoe-dk/releases/tag/v0.1.0) |
+| v0.2 | Empirical validators (Spearman monotone + frozen-mean shape) auto-running every K observations | [released](https://github.com/517justin/expdoe-dk/releases/tag/v0.2.0) |
+| v0.3 | ε auto-rescue: `with_monotone` + `with_gp_prior` now transparently raises ε to the Exp-14 safe value | [released](https://github.com/517justin/expdoe-dk/releases/tag/v0.3.0) |
+| v0.4 | HTML report (`Result.to_html()`) | [released](https://github.com/517justin/expdoe-dk/releases/tag/v0.4.0) |
+| v0.5 | Claude Code skill packaging | pending |
+| v0.6 | MCP server | pending |
+| v0.7 | Multi-objective (qLogEHVI, Pareto) | pending |
+| v1.0 | Stable API, remove legacy shim | pending |
 
 ---
 
@@ -262,7 +151,24 @@ Tested with:
 
 Apache License, Version 2.0 — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE).
 
-The historical code in this directory (`ax_doe_bo.py`, `doe_utils.py`,
-`benchmarks.py`) was originally MIT-licensed; the rebrand re-licenses the
-repository under Apache 2.0. The original MIT terms remain available in the
-git history.
+The historical code in this directory (`ax_doe_bo.py`, `doe_utils.py`, `benchmarks.py`) was originally MIT-licensed; the rebrand re-licenses the repository under Apache 2.0. The original MIT terms remain available in the git history.
+
+---
+
+## Appendix — historical research framework (`ax_doe_bo.py`)
+
+Before the rebrand, this repository was a research framework studying DoE → BO bridging via Ax + BoTorch (`ax_doe_bo.py` with 5 parts: GenerationStrategy / Ax-vs-pure-BoTorch / SAASBO / batch BO / JSON checkpoint).
+
+The five parts and their results are preserved in [`ax_doe_bo.py`](./ax_doe_bo.py); the convergence figures live in `outputs/`. Quick re-run:
+
+```bash
+python ax_doe_bo.py            # runs Parts B / C / D / E sequentially
+```
+
+Highlights:
+- Ax-BoTorch vs Pure BoTorch on 4 benchmarks (Branin / Hartmann / Rosenbrock / Ackley) — equivalent or better with Ax's abstraction.
+- SAASBO for 4D underperforms standard GP (designed for ≥ 20D).
+- Batch BO q=4 achieves 16× better gap than sequential q=1 on Branin 2D.
+- JSON checkpoint/resume works end-to-end.
+
+The lessons from this framework (esp. the EI direction sign-flip and frozen mean function rules) are now baked into `expdoe-dk`'s API defaults.
