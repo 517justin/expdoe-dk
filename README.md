@@ -260,4 +260,9 @@ Tested with:
 
 ## License
 
-MIT License. See `LICENSE` for details.
+Apache License, Version 2.0 — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE).
+
+The historical code in this directory (`ax_doe_bo.py`, `doe_utils.py`,
+`benchmarks.py`) was originally MIT-licensed; the rebrand re-licenses the
+repository under Apache 2.0. The original MIT terms remain available in the
+git history.

@@ -136,4 +136,12 @@ The old import path still works via `expdoe_dk.legacy.ax_doe_bo`, but emits `Dep
 
 - Sister project: [DOEGP](..) (research notebooks + experiments 7–16)
 - Original: `ax_doe_bo` (BO research framework, now deprecated)
-- License: MIT
+
+## License
+
+Apache License, Version 2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
+
+The historical code in the parent repository (`ax_doe_bo.py`, `doe_utils.py`,
+`benchmarks.py`) was originally MIT-licensed; this rebrand re-licenses the
+project under Apache 2.0. The original MIT terms remain in the git history
+prior to the relicense commit.

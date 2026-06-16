@@ -8,8 +8,9 @@ version = "0.1.0"
 description = "Experimental Design of Experiments + Bayesian Optimization with Domain Knowledge injection — for chemistry, materials, and lab experimentalists."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "DOEGP Team" }]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "MI-6 / expdoe-dk contributors" }]
 keywords = ["doe", "bayesian-optimization", "chemistry", "materials", "domain-knowledge", "experimental-design"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -40,8 +41,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/MI-6/expdoe-dk"
-Documentation = "https://github.com/MI-6/expdoe-dk#readme"
+Homepage = "https://github.com/517justin/expdoe-dk"
+Documentation = "https://github.com/517justin/expdoe-dk#readme"
+Issues = "https://github.com/517justin/expdoe-dk/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,0 +1,24 @@
+expdoe-dk — Experimental DoE + Bayesian Optimization with Domain Knowledge
+Copyright 2026 MI-6 / expdoe-dk contributors
+
+This product includes software developed by the expdoe-dk contributors
+and is distributed under the Apache License, Version 2.0
+(see LICENSE for the full text).
+
+------------------------------------------------------------------------
+Third-party dependencies (separately licensed under their own terms):
+
+  - BoTorch       — MIT License        — https://github.com/pytorch/botorch
+  - Ax            — MIT License        — https://github.com/facebook/Ax
+  - GPyTorch      — MIT License        — https://github.com/cornellius-gp/gpytorch
+  - PyTorch       — BSD-3-Clause       — https://github.com/pytorch/pytorch
+  - NumPy         — BSD-3-Clause       — https://github.com/numpy/numpy
+  - SciPy         — BSD-3-Clause       — https://github.com/scipy/scipy
+  - pandas        — BSD-3-Clause       — https://github.com/pandas-dev/pandas
+  - matplotlib    — PSF-based          — https://github.com/matplotlib/matplotlib
+  - pyDOE3        — BSD-3-Clause       — https://github.com/relf/pyDOE3
+
+The historical code in this repository (ax_doe_bo.py, doe_utils.py,
+benchmarks.py) was originally released under the MIT License; it is
+re-licensed under Apache 2.0 as part of the expdoe-dk rebrand.
+The original MIT terms remain available in the git history.
