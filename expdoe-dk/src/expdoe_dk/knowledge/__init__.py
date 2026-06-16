@@ -21,6 +21,14 @@ from typing import Any, Literal
 
 from ._frame import PhysicalEffect, flip_for_minimize, InternalDirection
 from .monotone import epsilon_from_prior
+from .validators import (
+    MonotoneCheckResult,
+    MonotoneViolationWarning,
+    ShapeCheckResult,
+    ShapePriorMismatchWarning,
+    check_monotone_assumption,
+    check_shape_prior_fit,
+)
 
 # --------------------------------------------------------------------- #
 # Knowledge item dataclasses (JSON-serializable, no torch tensors stored)
@@ -199,6 +207,38 @@ class Knowledge:
         return self
 
     # ------------------------------------------------------------------ #
+    # Removal (chainable, used by validators' remediation messages)
+    # ------------------------------------------------------------------ #
+    def drop_monotone(self, param: str | None = None) -> "Knowledge":
+        """
+        Remove ``with_monotone`` item(s).
+
+        - ``drop_monotone()`` removes all monotone items.
+        - ``drop_monotone("T")`` removes only items declared for parameter ``T``.
+        """
+        self._items = [
+            it
+            for it in self._items
+            if not (
+                getattr(it, "kind", None) == "monotone"
+                and (param is None or getattr(it, "param", None) == param)
+            )
+        ]
+        return self
+
+    def drop(self, kind: str, param: str | None = None) -> "Knowledge":
+        """Remove items of a given kind (and optionally a specific param)."""
+        self._items = [
+            it
+            for it in self._items
+            if not (
+                getattr(it, "kind", None) == kind
+                and (param is None or getattr(it, "param", None) == param)
+            )
+        ]
+        return self
+
+    # ------------------------------------------------------------------ #
     # Introspection
     # ------------------------------------------------------------------ #
     @property
@@ -314,5 +354,11 @@ __all__ = [
     "Knowledge",
     "EpsilonConflictError",
     "LearnableMeanAbsorptionWarning",
+    "MonotoneViolationWarning",
+    "ShapePriorMismatchWarning",
+    "MonotoneCheckResult",
+    "ShapeCheckResult",
+    "check_monotone_assumption",
+    "check_shape_prior_fit",
     "GP_PRIOR_PRESETS",
 ]
