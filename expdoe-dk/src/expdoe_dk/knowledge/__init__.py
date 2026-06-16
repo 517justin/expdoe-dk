@@ -16,7 +16,7 @@ Lessons from DOEGP Plan 2 hard-coded as safer defaults:
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from ._frame import PhysicalEffect, flip_for_minimize, InternalDirection
@@ -257,8 +257,25 @@ class Knowledge:
     # ------------------------------------------------------------------ #
     # Validation (called by Campaign once all with_* are done)
     # ------------------------------------------------------------------ #
-    def validate(self) -> None:
-        """Raise EpsilonConflictError or similar if config is unsafe."""
+    def validate(self, *, auto_rescue: bool = False) -> "Knowledge":
+        """
+        Detect unsafe configurations (today: the Exp-14 ε vs lengthscale
+        conflict) and either raise or auto-rescue.
+
+        Parameters
+        ----------
+        auto_rescue : bool
+            - False (default): raise ``EpsilonConflictError`` on conflict.
+              Preserves the strict behaviour from v0.1.
+            - True: replace each offending ``with_monotone`` item in place
+              with one whose ``epsilon`` is bumped to the safe value, and
+              emit ``EpsilonAutoRescueNotice`` per rescued item. Returns
+              self for chaining.
+
+        Returns
+        -------
+        Knowledge — self.
+        """
         gp_prior_items = self.items_of("gp_prior")
         monotone_items = self.items_of("monotone")
 
@@ -267,18 +284,42 @@ class Knowledge:
             a, b = GP_PRIOR_PRESETS[preset]["ls"]
             ls_mode = _gamma_mode(a, b)
             min_eps = 0.3 * ls_mode
-            for m in monotone_items:
-                if m.epsilon != "auto":
-                    if float(m.epsilon) < min_eps - 1e-9:
-                        raise EpsilonConflictError(
-                            f"with_monotone(param={m.param!r}, "
-                            f"epsilon={m.epsilon}) is too small for "
-                            f"with_gp_prior(lengthscale={preset!r}) "
-                            f"(prior mode={ls_mode:.3f}, minimum safe "
-                            f"ε={min_eps:.3f}). Use epsilon='auto' or "
-                            f"raise epsilon to ≥ {min_eps:.3f}. "
-                            f"See AGENT_KNOWLEDGE.md Exp-14 for the rule."
-                        )
+            for idx, m in enumerate(list(self._items)):
+                if getattr(m, "kind", None) != "monotone":
+                    continue
+                if m.epsilon == "auto":
+                    continue
+                if float(m.epsilon) >= min_eps - 1e-9:
+                    continue
+                # CONFLICT
+                if not auto_rescue:
+                    raise EpsilonConflictError(
+                        f"with_monotone(param={m.param!r}, "
+                        f"epsilon={m.epsilon}) is too small for "
+                        f"with_gp_prior(lengthscale={preset!r}) "
+                        f"(prior mode={ls_mode:.3f}, minimum safe "
+                        f"ε={min_eps:.3f}). Use epsilon='auto', "
+                        f"raise epsilon to ≥ {min_eps:.3f}, or pass "
+                        f"auto_rescue=True. "
+                        f"See AGENT_KNOWLEDGE.md Exp-14 for the rule."
+                    )
+                # Auto-rescue: replace the frozen dataclass item.
+                rescued_eps = round(max(min_eps, 0.05), 4)
+                self._items[idx] = replace(m, epsilon=rescued_eps)
+                warnings.warn(
+                    EpsilonAutoRescueNotice(
+                        f"Auto-rescued with_monotone(param={m.param!r}): "
+                        f"epsilon {m.epsilon} → {rescued_eps:.4f} so the "
+                        f"virtual-point spacing matches "
+                        f"with_gp_prior(lengthscale={preset!r}) "
+                        f"(prior mode={ls_mode:.3f}). "
+                        f"Set auto_rescue=False to surface this as an error, "
+                        f"or pass an explicit epsilon ≥ {min_eps:.3f} to "
+                        f"silence this notice. See AGENT_KNOWLEDGE.md Exp-14."
+                    ),
+                    stacklevel=2,
+                )
+        return self
 
     def resolve_epsilon(self, monotone: _MonotoneItem) -> float:
         """Translate epsilon='auto' to a concrete value given any GP prior."""
@@ -350,9 +391,18 @@ class LearnableMeanAbsorptionWarning(UserWarning):
     """Issued when a learnable mean function risks MLE absorption."""
 
 
+class EpsilonAutoRescueNotice(UserWarning):
+    """
+    Issued when ``Knowledge.validate(auto_rescue=True)`` automatically
+    raises ``with_monotone(epsilon=…)`` to the safe value derived from the
+    active GP lengthscale prior. Surfaces at most once per rescued item.
+    """
+
+
 __all__ = [
     "Knowledge",
     "EpsilonConflictError",
+    "EpsilonAutoRescueNotice",
     "LearnableMeanAbsorptionWarning",
     "MonotoneViolationWarning",
     "ShapePriorMismatchWarning",

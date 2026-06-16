@@ -106,6 +106,7 @@ class Campaign:
         validate: bool = True,
         validation_interval: int = 5,
         validation_min_obs: int = 10,
+        auto_rescue: bool = True,
     ) -> None:
         if space.n_objectives > 1:
             warnings.warn(
@@ -121,8 +122,10 @@ class Campaign:
             self._auto_default_applied = True
         else:
             self._auto_default_applied = False
-        # Validate now so any conflict is caught before we run anything.
-        self.knowledge.validate()
+        # v0.3: rescue (or raise on) Exp-14 epsilon conflicts before any
+        # acquisition is built.
+        self.auto_rescue = bool(auto_rescue)
+        self.knowledge.validate(auto_rescue=self.auto_rescue)
         self.seed = seed
         self._rng = np.random.default_rng(seed)
 
