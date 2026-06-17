@@ -7,10 +7,10 @@ Small reproducible studies built on top of the `expdoe-dk` API.
 | [`01_doe_method_comparison.py`](./01_doe_method_comparison.py) | Holding knowledge fixed (plain GP), how much does the *DoE method* affect BO outcome? |
 | [`02_knowledge_comparison.py`](./02_knowledge_comparison.py) | Holding the DoE method fixed, how much does the *type of domain knowledge* affect BO outcome? |
 
-Both run on the same three canonical objectives (ports of the sister
-project's Exp-7/9/10 oracles), selectable with `--dim {2,4,6}`, with the
-noise-free gap-from-optimum as the headline metric. Each config is run over
-5 random seeds.
+Both run on the same three canonical objectives (full mathematical
+definitions below in [§ The three oracles](#the-three-oracles)), selectable
+with `--dim {2,4,6}`, with the noise-free gap-from-optimum as the headline
+metric. Each config is run over 5 random seeds.
 
 ```bash
 python experiments/01_doe_method_comparison.py --dim 2   # ~3 min
@@ -23,6 +23,115 @@ reproduce).
 > **Read these as directional, not definitive.** They are single-oracle-family
 > runs over 5 seeds. The breadth needed to make firm recommendations is
 > tracked in roadmap issues #19 / #20 / #21.
+
+---
+
+## The three oracles
+
+All three are deterministic synthetic chemistry yield functions returning
+positive yield in `[0, ~y_max]`, with additive `N(0, 0.01²)` noise added at
+sampling time and a noise-free counterpart used for reporting. Each
+implements the canonical objective from the sister project's experiments
+(see [`_oracles.py`](./_oracles.py) for the exact code).
+
+### `reaction_objective_2d` — Exp-7
+
+Parameters (physical units):
+
+| Param | Bounds        | Role |
+|-------|---------------|------|
+| T     | [300, 600] K  | temperature (Arrhenius rate term) |
+| conc  | [0, 1] mol/L  | reactant concentration (quadratic peak) |
+
+Formula:
+
+$$
+\text{rate}(T) = \exp\!\Big(\!-\frac{0.5}{\max(T/600,\, 10^{-3})}\Big), \qquad
+\text{eff}(c) = 4c\,(1-c)
+$$
+
+$$
+y_{\text{user}} = \text{rate}(T)\cdot\text{eff}(c)\;+\;\varepsilon,\quad \varepsilon\sim\mathcal N(0,\,0.01^2)
+$$
+
+Noiseless optimum ≈ **0.6065** at $(T=600\text{ K},\; \text{conc}=0.5)$.
+
+### `process_objective_4d` — Exp-9
+
+Parameters:
+
+| Param | Bounds          | Role |
+|-------|-----------------|------|
+| T     | [300, 800] K    | Arrhenius rate (peaks at the upper bound)     |
+| conc  | [0, 2] mol/L    | quadratic peak at $c=1$                       |
+| pH    | [4, 10]         | Gaussian-shaped activity, peak at $\text{pH}=7$ |
+| t     | [10, 120] min   | saturating monotone in $t$                    |
+
+Formula:
+
+$$
+\text{rate}(T) = \exp\!\Big(\!-\frac{1}{\max(T/800,\, 10^{-3})}\Big), \quad
+\text{eff}(c) = 4\cdot\frac{c}{2}\cdot\Big(1-\frac{c}{2}\Big)
+$$
+
+$$
+\text{act}(\text{pH}) = \exp\!\Big(\!-\Big(\frac{\text{pH}-7}{1.5}\Big)^{\!2}\Big), \quad
+\text{sat}(t) = 1 - \exp\!\Big(\!-3\cdot\frac{t-10}{110}\Big)
+$$
+
+$$
+y_{\text{user}} = \text{rate}(T)\cdot\text{eff}(c)\cdot\text{act}(\text{pH})\cdot\text{sat}(t)\;+\;\varepsilon
+$$
+
+Noiseless optimum ≈ **0.34956** at $(T=800,\, c=1,\, \text{pH}=7,\, t=120)$.
+
+### `process_objective_6d_v2` — Exp-10 v2
+
+Extends the 4D oracle with two further parameters that the original 6D
+oracle made too easy. The "v2" hardening pushes the structure of `polar`
+into a bimodal `|sin|` and `rpm` into a Gaussian off-centre peak:
+
+| Param   | Bounds         | Role |
+|---------|----------------|------|
+| T, conc, pH, t | (same as 4D) | same                         |
+| polar   | [0, 1]         | bimodal: $\,|\sin(2\pi\cdot\text{polar})|\,$ — peaks at 0.25 *and* 0.75 |
+| rpm     | [100, 1000] rpm | Gaussian peak at $\text{rpm}\approx 700$ (σ = 0.15 in unit space) |
+
+Formula adds two more factors to the 4D product:
+
+$$
+\widehat{\text{rpm}} = \frac{\text{rpm}-100}{900},\qquad
+\text{eff}_{\text{rpm}} = \exp\!\Big(\!-\frac{(\widehat{\text{rpm}}-0.667)^2}{2\cdot 0.15^2}\Big)
+$$
+
+$$
+\text{eff}_{\text{polar}} = \big|\sin(2\pi\cdot\text{polar})\big|
+$$
+
+$$
+y_{\text{user}} = \text{rate}\cdot\text{eff}\cdot\text{act}\cdot\text{sat}\cdot\text{eff}_{\text{polar}}\cdot\text{eff}_{\text{rpm}}\;+\;\varepsilon
+$$
+
+Noiseless optimum ≈ **0.34956** at $(T=800,\, c=1,\, \text{pH}=7,\, t=120,\, \text{polar}\in\{0.25, 0.75\},\, \text{rpm}=700)$.
+The bimodal `polar` axis creates two equivalent global optima.
+
+### Why these shapes matter
+
+The experiments below test whether the `expdoe-dk` knowledge primitives can
+recover these analytic shapes:
+
+| Term                              | Best-matching primitive |
+|-----------------------------------|-------------------------|
+| `rate(T)` (Arrhenius)             | `with_arrhenius("T")`   |
+| `eff(c)` (quadratic peak)         | `with_quadratic_peak("conc", center=...)` |
+| `act(pH)` (Gaussian peak)         | `with_quadratic_peak("pH", center=7.0)` (quadratic approximation) |
+| `sat(t)` (saturating monotone)    | `with_monotone("t", effect="increases_objective")` |
+| `eff_rpm` (Gaussian peak)         | `with_quadratic_peak("rpm", center=700.0)` (quadratic approximation) |
+| `eff_polar` (bimodal `|sin|`)     | **no matching primitive** — see roadmap issue #21 |
+
+The 6D oracle's `polar` axis is deliberately out of reach of the current
+primitives — it is the test case for the "new dataset, new shape" gap
+documented in roadmap #21 (generalising the knowledge API).
 
 ---
 
@@ -244,6 +353,64 @@ collapses to last place. This is the dimension-sensitivity pattern: a single
 mean shape that captures most of a low-D landscape becomes actively
 misleading when 5 other dimensions interact.
 
+### Investigation — why does ① "full domain knowledge" underperform?
+
+The 4D and 6D tables above show ① "full domain knowledge" (Arrhenius +
+quadratic peaks for conc and pH + monotone(t) + random_augment(20)) doing
+*worse* than a plain GP. This is at odds with `AGENT_KNOWLEDGE.md` §6b,
+which reports the canonical "C: Frozen Combined" config beating the
+baseline by **+26 % in 4D** and **+91 % in 6D**. So either the new
+implementation regressed, or something subtler is going on. The ablation
+in [`_ablation_knowledge_4d.py`](./_ablation_knowledge_4d.py) localises
+the issue (4D, same five seeds and budget as exp 02):
+
+| Config                                | gap_med | Δ vs plain GP |
+|---------------------------------------|--------:|--------------:|
+| `monotone(t)` only                    | 0.0019  | **+30.3 %**   |
+| `arrhenius` only                      | 0.0020  | +28.0 %       |
+| 2 peaks (conc + pH)                   | 0.0022  | +19.5 %       |
+| old D_correct (monotone T + t)        | 0.0026  | +7.0 %        |
+| **plain GP**                          | 0.0028  | 0.0 %         |
+| old C: Frozen Combined (3 means)      | 0.0037  | −32.8 %       |
+| Frozen Combined + monotone(t)         | 0.0038  | −37.7 %       |
+| ① full (4 items + `random_augment`)   | 0.0076  | **−175 %**    |
+| Frozen Combined + `random_augment(20)`| 0.0103  | −271 %        |
+
+Two findings, neither of which was visible in `AGENT_KNOWLEDGE.md`:
+
+**Finding 1 — single, targeted knowledge items help; stacking hurts.**
+Every single-item config (just `monotone(t)`, just `arrhenius`, or just
+the two peaks) beats the plain-GP baseline by +20~30 %. The moment two or
+more priors are stacked the advantage disappears, and at four items + a
+random-augment block the result is *strictly worse* than no knowledge at
+all. The library's primitives DO work — when applied one at a time.
+
+**Finding 2 — the apparent ①+25 %/+91 % in `AGENT_KNOWLEDGE.md` was
+partly an artefact of a weaker baseline.** The OLD experiments used Sobol
+for the initial DoE: in 4D the OLD plain-GP-with-Sobol gap was 0.0117,
+and "C: Frozen Combined" reduced that to 0.0087 (a +26 % improvement).
+Our new baseline uses `lhs_maximin` for the initial DoE, which on this
+oracle reaches 0.0028 *without any knowledge* — already better than the
+OLD "C: Frozen Combined" result. In other words, **a stronger DoE
+absorbs the easy gains that the old knowledge configs used to provide**;
+once the baseline is genuinely strong, stacking knowledge over-specifies
+the GP and starts to hurt. This is consistent with experiment 01, which
+showed `lhs_random` / `lhs_maximin` as the strongest DoE methods on
+`process_objective_4d` (Δ +60 % / 0 % vs `random_uniform`).
+
+**Practical takeaway.** Pick **one** piece of knowledge that matches the
+hardest term in your landscape — typically the monotone direction of the
+most important parameter, or a single Arrhenius/peak for one factor with
+known shape — and trust the plain GP for the rest. Reach for additional
+priors only if you have evidence that one piece isn't enough; do **not**
+chain `with_*` calls in the hope that "more knowledge = better fit".
+
+This finding is the immediate motivation for roadmap issue #21 (generalise
+the knowledge API and document an authoring guide that warns against
+over-specification by default) and gives roadmap issue #20 a concrete
+validation question: *across more oracles, does the one-targeted-item
+heuristic continue to dominate stacked configurations?*
+
 ### What this actually says
 
 The corrected (plain-GP) baseline overturns the tidy "knowledge always
@@ -256,7 +423,8 @@ helps" story and replaces it with three honest, more useful findings:
    more datasets.
 2. **A plain GP is a strong baseline** — stronger than we credited while
    the old default was quietly diluting it. Knowledge has to *earn* its
-   place against it.
+   place against it, and (per the investigation above) the right shape is
+   one well-chosen piece, not a stacked combination.
 3. **Correctly-shaped knowledge still wins where it matches the landscape**:
    ④ Arrhenius is the clear 2D/4D winner because the oracle's temperature
    term *is* Arrhenius. But the same config is the worst in 6D — so the
@@ -275,9 +443,10 @@ knowledge API) addresses.
 
 | If you have                                   | Use                                  |
 |-----------------------------------------------|--------------------------------------|
-| A known shape for ONE low-D parameter (Arrhenius / peak) | `with_arrhenius` / `with_quadratic_peak` (`frozen=True`) — the clear winner in 2D/4D when the shape matches |
+| A known shape for ONE low-D parameter (Arrhenius / peak) | One `with_arrhenius` *or* one `with_quadratic_peak` (`frozen=True`) — best when the shape matches the hardest dim. **Do not chain multiple priors.** |
+| A monotone direction you're confident about   | One `with_monotone(effect="increases_objective")` — frame translation handled; v0.2 validator warns if the data disagrees |
+| Several plausible shapes                      | **Pick the one that matches the hardest term.** The ablation above shows stacking 2+ priors strictly hurts on this oracle (Δ goes from +30 % to −175 %) |
 | No specific knowledge                         | **Nothing — `Campaign(space)` runs a plain GP.** It's a strong baseline; don't add structure you can't justify |
-| A monotone direction you're confident about   | `with_monotone(effect="increases_objective")` — frame translation handled; v0.2 validator warns if the data disagrees |
 | The temptation to "regularise for free"       | Avoid `with_random_augment` for now — on these oracles it hurt vs a plain GP. It's opt-in and under validation (#20) |
 | `with_gp_prior` AND `with_monotone` together  | Trust v0.3 `auto_rescue=True`; expect a lower ceiling in low-D |
 | A high-dimensional problem (≥5 active factors) | Reduce dimensionality first; a plain GP was the best config in our 6D test |
