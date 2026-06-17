@@ -110,7 +110,17 @@ python experiments/01_doe_method_comparison.py
 
 ## Five categories of knowledge — what to use when
 
-Based on cross-dimension experiments (2D, 4D, 6D):
+Derived from sweeping the same set of knowledge configurations across three
+synthetic chemistry oracles of increasing dimensionality (i.e. number of
+process parameters being optimised at once):
+
+- **2D** — 2-parameter reaction (temperature × concentration), 21 evals budget
+- **4D** — 4-parameter process (temperature × concentration × pH × time), 42 evals
+- **6D** — 6-parameter process (4D + solvent polarity + stirring rpm), 48 evals
+
+Each category's effect on `gap_final` (distance to the true optimum) shifts as
+the dimensionality grows — see [`experiments/README.md`](./experiments/README.md)
+for the full per-dim tables and the U-shape plot.
 
 | Category                                | API                                                | Best for                                    |
 |-----------------------------------------|----------------------------------------------------|---------------------------------------------|

@@ -79,6 +79,23 @@ Gaussian peak on `rpm`) is far more punishing for DoE-only initialisation.
 | `lhs_maximin`      | 0.0844    | −660.4 %             | 0 %           |
 | `d_optimal`        | 0.3309    | −2881 %              | 20 %          |
 
+> **There is no single "best" DoE method.** Every structural method that
+> wins in 2D / 4D underperforms `random_uniform` here, and `d_optimal`
+> degrades by almost 30×. A method's coverage strategy is tuned to a
+> particular landscape — once the landscape changes (bimodal dim,
+> off-centre Gaussian peak), the strategy backfires.
+>
+> **Practical implication: avoid using DoE on too many dimensions at
+> once.** 6 parameters is already past the point where well-spaced
+> initial designs reliably help. If you have ≥ 5 active factors:
+>
+> 1. Reduce dimensionality first — fix the dims you have least uncertainty
+>    on, screen the rest with a cheap factorial (Plackett–Burman /
+>    fractional-factorial), then run the BO loop on the surviving 2–4.
+> 2. If you must stay in 5D+, pick `random_uniform` or `halton` — they
+>    don't get stuck on the wrong structural assumption — and lean
+>    heavily on knowledge (experiment 02 below) and a larger BO budget.
+
 ### Cross-dim takeaways
 
 - **The DoE-method ranking changes with dimension.** No single method
@@ -100,9 +117,14 @@ Gaussian peak on `rpm`) is far more punishing for DoE-only initialisation.
 |---------|-------------------|
 | 2D / n_init ≤ 10 (interior peaks) | `lhs_random` / `lhs_maximin` |
 | 3–4D mid-budget | `sobol` for the cleanest gap, `lhs_maximin` for robustness |
-| 5–6D high-noise / multi-modal | `random_uniform` — surprising winner |
+| 5–6D high-noise / multi-modal | **Reduce dimensionality first.** If you must stay high-D, prefer `random_uniform` or `halton` — structural methods backfire. |
 | Linear / quadratic surrogate assumed | `d_optimal` (NOT for GP BO) |
 | Sanity-check baseline | `random_uniform` |
+
+**Headline reading from this experiment:** at high dimensionality the
+benefit of clever DoE shrinks (and can flip negative). Spend the
+engineering effort on dimensionality reduction and on injecting correct
+domain knowledge (experiment 02 below) before tuning the DoE method.
 
 ---
 
