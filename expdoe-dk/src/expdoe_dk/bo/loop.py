@@ -111,10 +111,21 @@ class Campaign:
     space : Space
         Parameter space with constraints and objective directions.
     knowledge : Knowledge | None
-        Optional domain knowledge spec. If None (and not `Knowledge().strict()`),
-        the Campaign auto-applies `with_random_augment(n=20)` and logs a notice.
+        Optional domain knowledge spec. If None, the Campaign runs a plain
+        GP with no injected structure — the conservative default. The
+        library does NOT silently add regularization on your behalf;
+        ``with_random_augment`` is opt-in (see the note below).
     seed : int
         Base random seed.
+
+    Notes
+    -----
+    Earlier versions auto-applied ``with_random_augment(n=20)`` when no
+    knowledge was given. That default has been removed: random-augment is
+    pure regularization whose benefit is still under validation, and the
+    useful ``n`` depends on the experiment's sample size — so applying it
+    silently could mislead. Pass ``knowledge=Knowledge().with_random_augment(n=...)``
+    explicitly if you want it.
     """
 
     def __init__(
@@ -136,12 +147,9 @@ class Campaign:
                 stacklevel=2,
             )
         self.space = space
+        # No auto-default: an empty Knowledge means "plain GP". The library
+        # never injects regularization on the user's behalf (see class Notes).
         self.knowledge = knowledge if knowledge is not None else Knowledge()
-        if not self.knowledge.items and not self.knowledge.is_strict():
-            self.knowledge.with_random_augment(n=20)
-            self._auto_default_applied = True
-        else:
-            self._auto_default_applied = False
         # v0.3: rescue (or raise on) Exp-14 epsilon conflicts before any
         # acquisition is built.
         self.auto_rescue = bool(auto_rescue)
@@ -182,12 +190,6 @@ class Campaign:
             n_restarts=n_restarts,
             seed=self.seed,
         )
-        if self._auto_default_applied:
-            log.info(
-                "expdoe_dk: no knowledge provided; auto-applied "
-                "with_random_augment(n=20) (Category ② safe default). "
-                "Use Knowledge().strict() to disable."
-            )
         return df
 
     # ------------------------------------------------------------------ #
@@ -495,9 +497,9 @@ class Campaign:
             param_units={p.name: p.unit for p in self.space.params},
             param_kinds={p.name: p.kind for p in self.space.params},
         )
-        if self._auto_default_applied:
+        if not self.knowledge.items:
             result.notes.append(
-                "Auto-applied with_random_augment(n=20) (Category ② default)."
+                "No domain knowledge applied — plain GP baseline."
             )
         return result
 

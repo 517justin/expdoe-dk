@@ -143,12 +143,17 @@ The reproducible study is in [`experiments/02_knowledge_comparison.py`](../exper
 | Category                                 | API                                                | Best for                                    |
 |------------------------------------------|----------------------------------------------------|---------------------------------------------|
 | ① Domain knowledge (correct)             | `with_arrhenius`, `with_quadratic_peak`, `with_monotone` | When you have real physics on the system   |
-| ② Pure regularization (safest default)   | `with_random_augment(n=20)`                        | When you have no specific knowledge        |
+| ② Pure regularization (⚠️ unvalidated)   | `with_random_augment(n=...)`                       | Exploratory — benefit is dataset-dependent  |
 | ③ Weak knowledge (GP prior alone)        | `with_gp_prior("medium")`                          | When you want hyperparameter tuning hints  |
 | ④ Avoid (learnable means)                | `with_arrhenius(frozen=False)` (warns)             | Triggers a warning — usually use frozen    |
-| ⑤ Avoid (mono + prior with default ε)    | `with_monotone(epsilon=0.02)` + strong prior (errors) | Will raise `EpsilonConflictError`         |
+| ⑤ Avoid (mono + prior with default ε)    | `with_monotone(epsilon=0.02)` + strong prior        | Auto-rescued (`v0.3`); opt out with `auto_rescue=False` |
 
-The "avoid" categories are blocked or warned against by the library; users naturally end up in ① or ②.
+> **⚠️ `with_random_augment` is pure regularization that is still under
+> validation.** Its benefit varies by dataset and the useful `n` scales
+> with sample size, so the library does not apply it for you. With no
+> knowledge given, `Campaign` runs a plain GP — the conservative default.
+> Treat random-augment results as exploratory until the roadmap's
+> validation experiments conclude.
 
 ---
 

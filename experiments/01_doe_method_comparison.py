@@ -20,8 +20,8 @@ same noise-free gap metric — only the experimental variable differs).
 DoE methods compared:
   lhs_maximin / lhs_random / sobol / halton / random_uniform / d_optimal
 
-No injected knowledge: every method runs with the Campaign's auto Cat ②
-default (``with_random_augment(n=20)``), so the comparison is fair.
+No injected knowledge: every method runs with a plain GP (knowledge=None),
+so the only variable is the DoE method and the comparison is fair.
 
 Headline metric
 ---------------

@@ -125,12 +125,20 @@ for the full per-dim tables and the U-shape plot.
 | Category                                | API                                                | Best for                                    |
 |-----------------------------------------|----------------------------------------------------|---------------------------------------------|
 | ① Domain knowledge (correct)            | `with_arrhenius`, `with_quadratic_peak`, `with_monotone` | When you have real physics on the system   |
-| ② Pure regularization (safest default)  | `with_random_augment(n=20)`                        | When you have no specific knowledge        |
+| ② Pure regularization (⚠️ unvalidated)  | `with_random_augment(n=...)`                       | An exploratory option — see the caveat below |
 | ③ Weak knowledge (GP prior alone)       | `with_gp_prior("medium")`                          | When you want hyperparameter tuning hints  |
 | ④ Avoid (learnable means)               | `with_arrhenius(frozen=False)` (warns)             | Triggers a warning — usually use frozen    |
 | ⑤ Avoid (mono + prior, default ε)       | `with_monotone(epsilon=0.02)` + strong prior        | Now auto-rescued; opt out with `auto_rescue=False` |
 
-Steering happens through API defaults: users naturally end up in ① or ②.
+> **⚠️ `with_random_augment` is pure regularization whose benefit is still
+> under validation.** It helped on some of our synthetic oracles but the
+> effect is dataset-dependent, and the useful `n` scales with your sample
+> size — there is no universally good value. It is opt-in: the Campaign
+> never applies it for you (see "Safe-by-default behaviours" below).
+
+If you have no specific knowledge, the conservative default is **just a
+plain GP** (`Campaign(space)` with `knowledge=None`). Add knowledge only
+when you can justify it.
 
 ---
 
@@ -142,7 +150,8 @@ Steering happens through API defaults: users naturally end up in ① or ②.
 | `MonotonicGPWithDerivatives` ε=0.02 conflicts with Gamma(3,6) lengthscale prior → 13× worse fit | `epsilon="auto"` resolves to `0.3 × prior_lengthscale_mode`; explicit small ε now auto-rescues with a notice (`v0.3`) |
 | Learnable mean parameters get absorbed by MLE → mean function adds no signal | `Arrhenius`, `QuadraticMean` default to `frozen=True`; learnable variants emit `LearnableMeanAbsorptionWarning` |
 | Wrong monotone assumption silently hurts | After K observations the Campaign runs a Spearman check and warns with `MonotoneViolationWarning` (`v0.2`) |
-| No knowledge given at all → user thinks they need to learn the whole API | Campaign auto-applies `with_random_augment(n=20)` and logs a one-liner |
+| No knowledge given at all | Campaign runs a **plain GP** — no structure is injected on your behalf. The conservative, no-surprise default. |
+| Reaching for `with_random_augment` as a "free" default | It is pure regularization that is **still being validated** (benefit is dataset-dependent; good `n` scales with sample size). The library will not apply it silently — you must opt in, and should treat results as exploratory until the validation experiments (roadmap) conclude. |
 
 ---
 

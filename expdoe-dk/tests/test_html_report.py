@@ -47,7 +47,7 @@ def _make_dummy_result() -> Result:
              "activation_energy": 1.0, "amplitude_init": -1.0},
             {"kind": "random_augment", "n": 20},
         ],
-        notes=["Auto-applied with_random_augment(n=20) (Category ② default)."],
+        notes=["Example note rendered in the report footer."],
         param_units={"T": "°C", "conc_A": "mL"},
         param_kinds={"T": "continuous", "conc_A": "discrete"},
     )
@@ -86,7 +86,7 @@ def test_report_renders_units_for_each_param():
 def test_report_includes_notes_when_present():
     result = _make_dummy_result()
     html = result.to_html_string()
-    assert "Auto-applied with_random_augment" in html
+    assert "Example note rendered in the report footer." in html
 
 
 def test_report_csv_data_url_decodes_to_valid_history():

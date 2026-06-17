@@ -104,7 +104,7 @@ class Knowledge:
 
     def __init__(self) -> None:
         self._items: list[Any] = []
-        self._strict = False  # set by Knowledge.strict() to disable auto-defaults
+        self._strict = False  # legacy flag; no longer affects Campaign behaviour
 
     # ------------------------------------------------------------------ #
     # Composition (chainable)
@@ -202,7 +202,14 @@ class Knowledge:
         return self
 
     def strict(self) -> "Knowledge":
-        """Disable any implicit default (e.g. auto random_augment)."""
+        """
+        Deprecated no-op, kept for backward compatibility.
+
+        It used to disable the auto-applied ``with_random_augment(n=20)``
+        default. That default has been removed — an empty ``Knowledge`` now
+        always means "plain GP" — so ``strict()`` no longer changes any
+        behaviour. Safe to drop from new code.
+        """
         self._strict = True
         return self
 
