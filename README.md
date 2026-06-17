@@ -63,21 +63,26 @@ Requires Python 3.10+, BoTorch ≥ 0.11, Ax ≥ 1.2.4.
 ## Repository layout
 
 ```
-expdoe-dk/                          # ★ the package — use this
+expdoe-dk/                          # ★ the publishable Python package
   src/expdoe_dk/
     space.py                        # Parameter, LinearConstraint, Space
     doe/                            # 6 DoE methods (LHS maximin / Sobol / Halton / ...)
     knowledge/                      # Knowledge composition + frame translator
     bo/                             # Campaign + HTML report
     legacy/                         # ax_doe_bo backward-compat shims
-  examples/
-    01_reaction_optimization.{py,ipynb}    # chemistry workflow end-to-end
-    02_html_report.py                       # → v0.4 HTML report
-  experiments/
-    01_doe_method_comparison.py             # six DoE methods × same oracle
-    02_knowledge_comparison.py              # five knowledge categories × same oracle
   tests/                            # 53 unit + integration tests
   LICENSE / NOTICE                  # Apache 2.0
+  pyproject.toml                    # build + dependency spec
+
+examples/                           # ★ chemist-facing usage demos
+  01_reaction_optimization.{py,ipynb}   # chemistry workflow end-to-end
+  02_html_report.py                     # → v0.4 HTML report
+
+experiments/                        # ★ reproducible studies on top of the package
+  01_doe_method_comparison.py           # six DoE methods × canonical 2D/4D/6D
+  02_knowledge_comparison.py            # five knowledge categories × canonical 2D/4D/6D
+  _oracles.py                           # shared reaction/process objectives
+  README.md                             # results tables + interpretation
 
 ax_doe_bo.py / doe_utils.py / benchmarks.py    # historical research framework
 README.md                          # this file
@@ -89,16 +94,16 @@ README.md                          # this file
 
 | Path | What it does |
 |------|--------------|
-| [`expdoe-dk/examples/01_reaction_optimization.py`](./expdoe-dk/examples/01_reaction_optimization.py) | A chemist runs DoE → BO end-to-end with knowledge injection. Finds the true optimum in 23 evals. |
-| [`expdoe-dk/examples/02_html_report.py`](./expdoe-dk/examples/02_html_report.py) | Reproduces the v0.4 HTML report (`Result.to_html`). |
-| [`expdoe-dk/experiments/01_doe_method_comparison.py`](./expdoe-dk/experiments/01_doe_method_comparison.py) | Holds knowledge fixed, varies the DoE method. Quantifies how `lhs_maximin` vs Sobol vs random impacts BO. |
-| [`expdoe-dk/experiments/02_knowledge_comparison.py`](./expdoe-dk/experiments/02_knowledge_comparison.py) | Holds DoE fixed, varies knowledge injection (baseline / random_augment / mean function / monotone / combo). Reproduces the 5-category framework empirically. |
+| [`examples/01_reaction_optimization.py`](./examples/01_reaction_optimization.py) | A chemist runs DoE → BO end-to-end with knowledge injection. Finds the true optimum in 23 evals. |
+| [`examples/02_html_report.py`](./examples/02_html_report.py) | Reproduces the v0.4 HTML report (`Result.to_html`). |
+| [`experiments/01_doe_method_comparison.py`](./experiments/01_doe_method_comparison.py) | Holds knowledge fixed, varies the DoE method. Quantifies how `lhs_maximin` vs Sobol vs random impacts BO. |
+| [`experiments/02_knowledge_comparison.py`](./experiments/02_knowledge_comparison.py) | Holds DoE fixed, varies knowledge injection (baseline / random_augment / mean function / monotone / combo). Reproduces the 5-category framework empirically. |
 
 Run any of them:
 
 ```bash
-python expdoe-dk/examples/01_reaction_optimization.py
-python expdoe-dk/experiments/01_doe_method_comparison.py
+python examples/01_reaction_optimization.py
+python experiments/01_doe_method_comparison.py
 ```
 
 ---

@@ -20,7 +20,6 @@ env/
 # OS
 .DS_Store
 
-# Allow example notebooks and pyproject.toml even though the parent
-# repo's .gitignore excludes *.ipynb / *.json — these are part of the package.
-!examples/*.ipynb
+# Allow pyproject.toml even though the parent repo's .gitignore
+# excludes some auxiliary patterns — it is required for the build.
 !pyproject.toml
