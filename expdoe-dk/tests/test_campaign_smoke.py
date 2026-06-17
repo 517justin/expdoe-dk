@@ -50,6 +50,34 @@ def _oracle(df):
     return y + rng.normal(0.0, 0.3, size=len(df))
 
 
+def test_campaign_with_no_knowledge_stays_empty():
+    """No auto-default: an empty Knowledge must remain empty (plain GP)."""
+    warnings.simplefilter("ignore")
+    space = _chem_space()
+
+    # knowledge=None
+    c1 = Campaign(space, knowledge=None, seed=0)
+    assert c1.knowledge.items == []
+
+    # explicit empty Knowledge
+    c2 = Campaign(space, Knowledge(), seed=0)
+    assert c2.knowledge.items == []
+
+    # No random_augment should have been injected.
+    assert not c1.knowledge.has_kind("random_augment")
+    assert not c2.knowledge.has_kind("random_augment")
+
+
+def test_campaign_finalize_notes_plain_gp():
+    warnings.simplefilter("ignore")
+    space = _chem_space()
+    campaign = Campaign(space, knowledge=None, seed=0)
+    doe = campaign.suggest_doe(n=6, method="lhs_random", n_iterations=200)
+    campaign.tell(doe, _oracle(doe))
+    result = campaign.finalize()
+    assert any("plain GP" in n for n in result.notes)
+
+
 @pytest.mark.slow
 def test_campaign_runs_end_to_end_and_improves():
     warnings.simplefilter("ignore")

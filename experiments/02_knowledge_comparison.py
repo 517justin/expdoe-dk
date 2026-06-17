@@ -49,23 +49,23 @@ from _oracles import ProblemSpec, make_problem  # noqa: E402
 # --------------------------------------------------------------------- #
 def _configs_2d() -> dict[str, Callable[[], ed.Knowledge]]:
     return {
-        "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
-        "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
-        "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
+        "A: baseline (plain GP)": lambda: ed.Knowledge(),
+        "②: random_augment only":   lambda: ed.Knowledge().with_random_augment(n=20),
+        "③: gp_prior only":         lambda: ed.Knowledge().with_gp_prior(lengthscale="medium"),
         "①: full domain knowledge": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_arrhenius("T")
             .with_quadratic_peak("conc", center=0.5)
             .with_random_augment(n=20)
         ),
-        "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
+        "④: Arrhenius mean only":   lambda: ed.Knowledge().with_arrhenius("T"),
         "⑤: mono + gp_prior (rescued)": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_monotone("T", effect="increases_objective", epsilon=0.02)
             .with_gp_prior(lengthscale="strong")
         ),
         "G: WRONG-direction monotone": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_monotone("T", effect="decreases_objective")
             .with_random_augment(n=20)
         ),
@@ -74,26 +74,26 @@ def _configs_2d() -> dict[str, Callable[[], ed.Knowledge]]:
 
 def _configs_4d() -> dict[str, Callable[[], ed.Knowledge]]:
     return {
-        "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
-        "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
-        "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
+        "A: baseline (plain GP)": lambda: ed.Knowledge(),
+        "②: random_augment only":   lambda: ed.Knowledge().with_random_augment(n=20),
+        "③: gp_prior only":         lambda: ed.Knowledge().with_gp_prior(lengthscale="medium"),
         "①: full domain knowledge": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_arrhenius("T")
             .with_quadratic_peak("conc", center=1.0)
             .with_quadratic_peak("pH",   center=7.0)
             .with_monotone("t", effect="increases_objective")
             .with_random_augment(n=20)
         ),
-        "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
+        "④: Arrhenius mean only":   lambda: ed.Knowledge().with_arrhenius("T"),
         "⑤: mono + gp_prior (rescued)": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_monotone("T", effect="increases_objective", epsilon=0.02)
             .with_monotone("t", effect="increases_objective", epsilon=0.02)
             .with_gp_prior(lengthscale="strong")
         ),
         "G: WRONG-direction monotone": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_monotone("T", effect="decreases_objective")
             .with_monotone("t", effect="decreases_objective")
             .with_random_augment(n=20)
@@ -103,11 +103,11 @@ def _configs_4d() -> dict[str, Callable[[], ed.Knowledge]]:
 
 def _configs_6d() -> dict[str, Callable[[], ed.Knowledge]]:
     return {
-        "A: baseline (auto Cat ②)": lambda: ed.Knowledge(),
-        "②: random_augment only":   lambda: ed.Knowledge().strict().with_random_augment(n=20),
-        "③: gp_prior only":         lambda: ed.Knowledge().strict().with_gp_prior(lengthscale="medium"),
+        "A: baseline (plain GP)": lambda: ed.Knowledge(),
+        "②: random_augment only":   lambda: ed.Knowledge().with_random_augment(n=20),
+        "③: gp_prior only":         lambda: ed.Knowledge().with_gp_prior(lengthscale="medium"),
         "①: full domain knowledge": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_arrhenius("T")
             .with_quadratic_peak("conc", center=1.0)
             .with_quadratic_peak("pH",   center=7.0)
@@ -115,15 +115,15 @@ def _configs_6d() -> dict[str, Callable[[], ed.Knowledge]]:
             .with_quadratic_peak("rpm",  center=700.0)
             .with_random_augment(n=20)
         ),
-        "④: Arrhenius mean only":   lambda: ed.Knowledge().strict().with_arrhenius("T"),
+        "④: Arrhenius mean only":   lambda: ed.Knowledge().with_arrhenius("T"),
         "⑤: mono + gp_prior (rescued)": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_monotone("T", effect="increases_objective", epsilon=0.02)
             .with_monotone("t", effect="increases_objective", epsilon=0.02)
             .with_gp_prior(lengthscale="strong")
         ),
         "G: WRONG-direction monotone": lambda: (
-            ed.Knowledge().strict()
+            ed.Knowledge()
             .with_monotone("T", effect="decreases_objective")
             .with_monotone("t", effect="decreases_objective")
             .with_random_augment(n=20)
@@ -263,7 +263,7 @@ def main() -> None:
     )
     # Improvement vs baseline: relative reduction in gap_final
     # (smaller gap = better; same convention as AGENT_KNOWLEDGE.md §6b).
-    baseline_gap = agg_median.loc["A: baseline (auto Cat ②)", "gap_final"]
+    baseline_gap = agg_median.loc["A: baseline (plain GP)", "gap_final"]
     agg_median["Δ gap vs baseline (%)"] = (
         100.0 * (baseline_gap - agg_median["gap_final"])
         / max(abs(baseline_gap), 1e-9)
