@@ -130,7 +130,15 @@ campaign = ed.Campaign(space, knowledge,
 
 ## Five categories of knowledge — what to use when
 
-Based on cross-dimension experiments (2D, 4D, 6D):
+Derived from sweeping the same knowledge configurations across three
+synthetic chemistry oracles of increasing dimensionality (i.e. number of
+process parameters being optimised at once):
+
+- **2D** — temperature × concentration (21 evals)
+- **4D** — temperature × concentration × pH × time (42 evals)
+- **6D** — 4D + solvent polarity + stirring rpm (48 evals)
+
+The reproducible study is in [`experiments/02_knowledge_comparison.py`](../experiments/02_knowledge_comparison.py); summary tables for each dimension live in [`experiments/README.md`](../experiments/README.md).
 
 | Category                                 | API                                                | Best for                                    |
 |------------------------------------------|----------------------------------------------------|---------------------------------------------|
