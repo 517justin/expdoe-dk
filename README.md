@@ -137,11 +137,11 @@ for the full per-dim tables and the U-shape plot.
 > never applies it for you (see "Safe-by-default behaviours" below).
 
 If you have no specific knowledge, the conservative default is **just a
-plain GP** (`Campaign(space)` with `knowledge=None`). Add knowledge only
-when you can justify it — and when you do, prefer **one well-chosen item**
-over a stack of priors. The ablation in `experiments/README.md` shows
-that a single `with_monotone` or `with_arrhenius` beats plain GP by
-+20–30 % on the 4D oracle, but stacking 2+ items strictly hurts.
+plain GP** (`Campaign(space)` with `knowledge=None`). On the canonical
+2D/4D/6D oracles studied in `experiments/02_knowledge_comparison.py`,
+the plain GP was the strongest or tied-strongest config at every
+dimension; add knowledge only when you can justify it and prefer a
+single well-chosen primitive over a stack.
 
 ---
 
