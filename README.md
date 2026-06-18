@@ -164,9 +164,10 @@ plain GP** (`Campaign(space)` with `knowledge=None`).
 | v0.2 | Empirical validators (Spearman monotone + frozen-mean shape) auto-running every K observations | [released](https://github.com/517justin/expdoe-dk/releases/tag/v0.2.0) |
 | v0.3 | ε auto-rescue: `with_monotone` + `with_gp_prior` now transparently raises ε to the Exp-14 safe value | [released](https://github.com/517justin/expdoe-dk/releases/tag/v0.3.0) |
 | v0.4 | HTML report (`Result.to_html()`) | [released](https://github.com/517justin/expdoe-dk/releases/tag/v0.4.0) |
-| v0.5 | Claude Code skill packaging | pending |
-| v0.6 | MCP server | pending |
-| v0.7 | Multi-objective (qLogEHVI, Pareto) | pending |
+| v0.5 | Claude Code skill packaging (`.claude/skills/`, stateless API) | pending |
+| v0.6 | MCP server (FastMCP, JSON tool interface) | pending |
+| v0.7 | Multi-objective (qLogEHVI, Pareto frontier) | pending |
+| v0.8 | Multi-fidelity BO (cheap screen → expensive lab, MFKG) | pending |
 | v1.0 | Stable API, remove legacy shim | pending |
 
 ---
