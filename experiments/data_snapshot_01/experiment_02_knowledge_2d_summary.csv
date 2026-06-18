@@ -1,8 +1,0 @@
-config,clean_final,gap_final,clean@doe_end,clean@mid,trials_to_95% (median),%seeds_hit_95,Δ gap vs baseline (%)
-③: gp_prior only,0.6063,0.0002,0.4905,0.6056,8,100,60.0
-①: full domain knowledge,0.6062,0.0003,0.4905,0.605,9,100,40.0
-A: baseline (plain GP),0.606,0.0005,0.4905,0.6039,7,100,0.0
-④: Arrhenius mean only,0.6058,0.0007,0.4905,0.6058,7,100,-40.0
-⑤: mono + gp_prior (rescued),0.6052,0.0013,0.4905,0.5991,10,100,-160.0
-②: random_augment only,0.6044,0.0021,0.4905,0.6024,11,100,-320.0
-G: WRONG-direction monotone,0.6042,0.0023,0.4905,0.6008,10,80,-360.0

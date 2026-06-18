@@ -18,7 +18,7 @@ python experiments/02_knowledge_comparison.py --dim 4    # ~9 min
 ```
 
 Results write to `experiments/outputs/*.csv`. Archived snapshots live in
-numbered folders (e.g. [`simulation_data1/`](./simulation_data1/) — single-RNG noise,
+numbered folders (e.g. [`data_snapshot_01/`](./data_snapshot_01/) — single-RNG noise,
 unified budget n_doe=6 / n_iter=15).
 
 > **Read these as directional, not definitive.** They are single-oracle-family
@@ -271,7 +271,7 @@ python experiments/02_knowledge_comparison.py --dim 6     # ~5 min
 
 Unified budget across all dimensions: **n_doe = 6, n_iter = 15 (total 21 evals)**.
 
-> Data snapshot: [`simulation_data1/`](./simulation_data1/)
+> Data snapshot: [`data_snapshot_01/`](./data_snapshot_01/)
 
 ### 2D results (5 seeds)
 
