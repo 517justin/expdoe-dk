@@ -143,14 +143,14 @@ def run_one(spec: ProblemSpec, name: str,
     torch.manual_seed(seed)
     campaign = ed.Campaign(spec.space, knowledge_factory(), seed=seed,
                            validate=False)
-    # DoE held constant at `sobol` (the same initial-design choice used in
-    # AGENT_KNOWLEDGE.md §6b / Exp-9 / Exp-10), so this experiment's numbers
-    # are directly comparable to the canonical §6b table.
+    # Single RNG per run — all noise draws come from the same sequence,
+    # matching the §6b / Exp-9 / Exp-10 convention.
+    noise_rng = np.random.default_rng(seed)
     doe = campaign.suggest_doe(n=spec.n_doe, method="sobol")
-    campaign.tell(doe, spec.oracle(doe, noise_seed=seed))
+    campaign.tell(doe, spec.oracle(doe, rng=noise_rng))
     for it in range(spec.n_iter):
         nxt = campaign.ask(q=1, iteration=it)
-        campaign.tell(nxt, spec.oracle(nxt, noise_seed=seed * 1000 + it))
+        campaign.tell(nxt, spec.oracle(nxt, rng=noise_rng))
     res = campaign.finalize()
     history = res.history_df
     cum_best = history["y"].cummax().to_numpy()

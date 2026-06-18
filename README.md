@@ -108,40 +108,38 @@ python experiments/01_doe_method_comparison.py
 
 ---
 
-## Five categories of knowledge — what to use when
+## Experiment results at a glance
 
-Derived from sweeping the same set of knowledge configurations across three
-synthetic chemistry oracles of increasing dimensionality (i.e. number of
-process parameters being optimised at once):
+Tested on three synthetic chemistry oracles (2D / 4D / 6D), unified budget
+n_doe=6, n_iter=15 (21 evals), 5 seeds. Full tables in
+[`experiments/README.md`](./experiments/README.md).
 
-- **2D** — 2-parameter reaction (temperature × concentration), 21 evals budget
-- **4D** — 4-parameter process (temperature × concentration × pH × time), 42 evals
-- **6D** — 6-parameter process (4D + solvent polarity + stirring rpm), 48 evals
+| Config | 2D | 4D | 6D |
+|--------|:--:|:--:|:--:|
+| **A: plain GP** | 3rd (gap 0.0005) | 3rd (0.0092) | 2nd (0.1480) |
+| ① full domain knowledge | 2nd (0.0003) | 5th (0.0256) | **1st (0.1012)** |
+| ③ gp_prior only | **1st (0.0002)** | 2nd (0.0087) | 3rd (0.1782) |
+| G: wrong direction | last | last | last |
 
-Each category's effect on `gap_final` (distance to the true optimum) shifts as
-the dimensionality grows — see [`experiments/README.md`](./experiments/README.md)
-for the full per-dim tables and the U-shape plot.
+**Takeaway:** plain GP is a safe default (top-3 everywhere). Domain
+knowledge helps most when data is scarce relative to dimensionality (6D).
+Stacking many primitives can hurt (① collapses at 4D). Wrong-direction
+priors are reliably worst.
 
-| Category                                | API                                                | Best for                                    |
+---
+
+## Knowledge categories
+
+| Category                                | API                                                | When to use                                 |
 |-----------------------------------------|----------------------------------------------------|---------------------------------------------|
-| ① Domain knowledge (correct)            | `with_arrhenius`, `with_quadratic_peak`, `with_monotone` | When you have real physics on the system   |
-| ② Pure regularization (⚠️ unvalidated)  | `with_random_augment(n=...)`                       | An exploratory option — see the caveat below |
-| ③ Weak knowledge (GP prior alone)       | `with_gp_prior("medium")`                          | When you want hyperparameter tuning hints  |
-| ④ Avoid (learnable means)               | `with_arrhenius(frozen=False)` (warns)             | Triggers a warning — usually use frozen    |
+| ① Domain knowledge (correct)            | `with_arrhenius`, `with_quadratic_peak`, `with_monotone` | High-D problems with known physics         |
+| ② Pure regularization (⚠️ unvalidated)  | `with_random_augment(n=...)`                       | Exploratory — hurts under tight budgets     |
+| ③ Weak knowledge (GP prior alone)       | `with_gp_prior("medium")`                          | Low-D problems; hyperparameter tuning hints |
+| ④ Avoid (learnable means)               | `with_arrhenius(frozen=False)` (warns)             | Triggers a warning — use frozen instead     |
 | ⑤ Avoid (mono + prior, default ε)       | `with_monotone(epsilon=0.02)` + strong prior        | Now auto-rescued; opt out with `auto_rescue=False` |
 
-> **⚠️ `with_random_augment` is pure regularization whose benefit is still
-> under validation.** It helped on some of our synthetic oracles but the
-> effect is dataset-dependent, and the useful `n` scales with your sample
-> size — there is no universally good value. It is opt-in: the Campaign
-> never applies it for you (see "Safe-by-default behaviours" below).
-
 If you have no specific knowledge, the conservative default is **just a
-plain GP** (`Campaign(space)` with `knowledge=None`). On the canonical
-2D/4D/6D oracles studied in `experiments/02_knowledge_comparison.py`,
-the plain GP was the strongest or tied-strongest config at every
-dimension; add knowledge only when you can justify it and prefer a
-single well-chosen primitive over a stack.
+plain GP** (`Campaign(space)` with `knowledge=None`).
 
 ---
 

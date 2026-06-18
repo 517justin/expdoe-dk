@@ -70,25 +70,34 @@ def noiseless_6d(df: pd.DataFrame) -> np.ndarray:
 # Noisy variants (used during the BO loop)
 # --------------------------------------------------------------------- #
 def _with_noise(noiseless_fn: Callable[[pd.DataFrame], np.ndarray],
-                df: pd.DataFrame, *, noise_seed: int) -> np.ndarray:
-    rng = np.random.default_rng(noise_seed)
+                df: pd.DataFrame, *,
+                rng: np.random.Generator | None = None,
+                noise_seed: int = 0) -> np.ndarray:
+    if rng is None:
+        rng = np.random.default_rng(noise_seed)
     return noiseless_fn(df) + 0.01 * rng.standard_normal(size=len(df))
 
 
-def reaction_objective_2d(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
+def reaction_objective_2d(df: pd.DataFrame, *,
+                          rng: np.random.Generator | None = None,
+                          noise_seed: int = 0) -> np.ndarray:
     """Exp-7 oracle. Peak at T=600 K (boundary), conc=0.5 (interior).
     True noiseless optimum ≈ 0.6065."""
-    return _with_noise(noiseless_2d, df, noise_seed=noise_seed)
+    return _with_noise(noiseless_2d, df, rng=rng, noise_seed=noise_seed)
 
 
-def process_objective_4d(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
+def process_objective_4d(df: pd.DataFrame, *,
+                         rng: np.random.Generator | None = None,
+                         noise_seed: int = 0) -> np.ndarray:
     """Exp-9 oracle. True noiseless optimum ≈ 0.34956."""
-    return _with_noise(noiseless_4d, df, noise_seed=noise_seed)
+    return _with_noise(noiseless_4d, df, rng=rng, noise_seed=noise_seed)
 
 
-def process_objective_6d_v2(df: pd.DataFrame, *, noise_seed: int = 0) -> np.ndarray:
+def process_objective_6d_v2(df: pd.DataFrame, *,
+                            rng: np.random.Generator | None = None,
+                            noise_seed: int = 0) -> np.ndarray:
     """Exp-10 v2 oracle. True noiseless optimum ≈ 0.34956."""
-    return _with_noise(noiseless_6d, df, noise_seed=noise_seed)
+    return _with_noise(noiseless_6d, df, rng=rng, noise_seed=noise_seed)
 
 
 # --------------------------------------------------------------------- #
@@ -119,7 +128,7 @@ def make_problem(dim: int) -> ProblemSpec:
         return ProblemSpec(
             dim=2, space=space, oracle=reaction_objective_2d,
             noiseless=noiseless_2d,
-            true_opt=0.6065, n_doe=6, n_iter=15,
+            true_opt=0.6065, n_doe=6, n_iter=15,  # unified budget
         )
     if dim == 4:
         space = ed.Space(
@@ -135,7 +144,7 @@ def make_problem(dim: int) -> ProblemSpec:
         return ProblemSpec(
             dim=4, space=space, oracle=process_objective_4d,
             noiseless=noiseless_4d,
-            true_opt=0.34956, n_doe=12, n_iter=30,
+            true_opt=0.34956, n_doe=6, n_iter=15,  # unified budget
         )
     if dim == 6:
         space = ed.Space(
@@ -153,6 +162,6 @@ def make_problem(dim: int) -> ProblemSpec:
         return ProblemSpec(
             dim=6, space=space, oracle=process_objective_6d_v2,
             noiseless=noiseless_6d,
-            true_opt=0.34956, n_doe=18, n_iter=30,
+            true_opt=0.34956, n_doe=6, n_iter=15,  # unified budget
         )
     raise ValueError(f"Unsupported dim={dim}. Use 2, 4, or 6.")

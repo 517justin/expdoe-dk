@@ -1,0 +1,736 @@
+config,seed,trial,clean_best_so_far
+A: baseline (plain GP),42,1,0.0020772544260588698
+A: baseline (plain GP),42,2,0.0020772544260588698
+A: baseline (plain GP),42,3,6.747159300802376e-06
+A: baseline (plain GP),42,4,0.003018282546886445
+A: baseline (plain GP),42,5,0.003018282546886445
+A: baseline (plain GP),42,6,0.003018282546886445
+A: baseline (plain GP),42,7,0.003018282546886445
+A: baseline (plain GP),42,8,0.003018282546886445
+A: baseline (plain GP),42,9,0.003018282546886445
+A: baseline (plain GP),42,10,0.003018282546886445
+A: baseline (plain GP),42,11,0.003018282546886445
+A: baseline (plain GP),42,12,0.026760695762324548
+A: baseline (plain GP),42,13,0.026760695762324548
+A: baseline (plain GP),42,14,0.04195758188422384
+A: baseline (plain GP),42,15,0.04195758188422384
+A: baseline (plain GP),42,16,0.04195758188422384
+A: baseline (plain GP),42,17,0.04195758188422384
+A: baseline (plain GP),42,18,0.04195758188422384
+A: baseline (plain GP),42,19,0.04195758188422384
+A: baseline (plain GP),42,20,0.04195758188422384
+A: baseline (plain GP),42,21,0.0653035938325168
+A: baseline (plain GP),43,1,0.002026641093961663
+A: baseline (plain GP),43,2,0.001853296066491698
+A: baseline (plain GP),43,3,0.053811082628503926
+A: baseline (plain GP),43,4,0.053811082628503926
+A: baseline (plain GP),43,5,0.053811082628503926
+A: baseline (plain GP),43,6,0.053811082628503926
+A: baseline (plain GP),43,7,0.053811082628503926
+A: baseline (plain GP),43,8,0.053811082628503926
+A: baseline (plain GP),43,9,0.053811082628503926
+A: baseline (plain GP),43,10,0.053811082628503926
+A: baseline (plain GP),43,11,0.053811082628503926
+A: baseline (plain GP),43,12,0.053811082628503926
+A: baseline (plain GP),43,13,0.08248380931830936
+A: baseline (plain GP),43,14,0.08248380931830936
+A: baseline (plain GP),43,15,0.08248380931830936
+A: baseline (plain GP),43,16,0.08248380931830936
+A: baseline (plain GP),43,17,0.11931960584011109
+A: baseline (plain GP),43,18,0.1854331692951468
+A: baseline (plain GP),43,19,0.1854331692951468
+A: baseline (plain GP),43,20,0.2366407878528261
+A: baseline (plain GP),43,21,0.2826241864664155
+A: baseline (plain GP),44,1,7.319904085289217e-06
+A: baseline (plain GP),44,2,0.05531052235208306
+A: baseline (plain GP),44,3,0.05531052235208306
+A: baseline (plain GP),44,4,0.05531052235208306
+A: baseline (plain GP),44,5,0.05531052235208306
+A: baseline (plain GP),44,6,0.05531052235208306
+A: baseline (plain GP),44,7,0.05531052235208306
+A: baseline (plain GP),44,8,0.05531052235208306
+A: baseline (plain GP),44,9,0.05531052235208306
+A: baseline (plain GP),44,10,0.077248745043732
+A: baseline (plain GP),44,11,0.077248745043732
+A: baseline (plain GP),44,12,0.077248745043732
+A: baseline (plain GP),44,13,0.077248745043732
+A: baseline (plain GP),44,14,0.077248745043732
+A: baseline (plain GP),44,15,0.06985462635718524
+A: baseline (plain GP),44,16,0.06985462635718524
+A: baseline (plain GP),44,17,0.13492611757395942
+A: baseline (plain GP),44,18,0.15522746131888196
+A: baseline (plain GP),44,19,0.16857702621407458
+A: baseline (plain GP),44,20,0.16857702621407458
+A: baseline (plain GP),44,21,0.20160359520428398
+A: baseline (plain GP),45,1,5.972687764684356e-06
+A: baseline (plain GP),45,2,0.006786511289121916
+A: baseline (plain GP),45,3,0.0006739335744159618
+A: baseline (plain GP),45,4,0.07519323649569942
+A: baseline (plain GP),45,5,0.07519323649569942
+A: baseline (plain GP),45,6,0.07519323649569942
+A: baseline (plain GP),45,7,0.07519323649569942
+A: baseline (plain GP),45,8,0.07519323649569942
+A: baseline (plain GP),45,9,0.12483809197260219
+A: baseline (plain GP),45,10,0.1916450018231646
+A: baseline (plain GP),45,11,0.19766732443167268
+A: baseline (plain GP),45,12,0.19766732443167268
+A: baseline (plain GP),45,13,0.19766732443167268
+A: baseline (plain GP),45,14,0.19766732443167268
+A: baseline (plain GP),45,15,0.22170837150398667
+A: baseline (plain GP),45,16,0.22170837150398667
+A: baseline (plain GP),45,17,0.22170837150398667
+A: baseline (plain GP),45,18,0.22170837150398667
+A: baseline (plain GP),45,19,0.2580278495567735
+A: baseline (plain GP),45,20,0.2580278495567735
+A: baseline (plain GP),45,21,0.2580278495567735
+A: baseline (plain GP),46,1,0.00014408075861248272
+A: baseline (plain GP),46,2,1.1750699130467002e-07
+A: baseline (plain GP),46,3,1.1750699130467002e-07
+A: baseline (plain GP),46,4,0.017995106202638417
+A: baseline (plain GP),46,5,0.017995106202638417
+A: baseline (plain GP),46,6,0.017995106202638417
+A: baseline (plain GP),46,7,0.017995106202638417
+A: baseline (plain GP),46,8,0.017995106202638417
+A: baseline (plain GP),46,9,0.025798861371264574
+A: baseline (plain GP),46,10,0.025798861371264574
+A: baseline (plain GP),46,11,0.025798861371264574
+A: baseline (plain GP),46,12,0.025798861371264574
+A: baseline (plain GP),46,13,0.025798861371264574
+A: baseline (plain GP),46,14,0.025798861371264574
+A: baseline (plain GP),46,15,0.025798861371264574
+A: baseline (plain GP),46,16,0.025291995798484773
+A: baseline (plain GP),46,17,0.025291995798484773
+A: baseline (plain GP),46,18,0.025291995798484773
+A: baseline (plain GP),46,19,0.025291995798484773
+A: baseline (plain GP),46,20,0.025291995798484773
+A: baseline (plain GP),46,21,0.025291995798484773
+②: random_augment only,42,1,0.0020772544260588698
+②: random_augment only,42,2,0.0020772544260588698
+②: random_augment only,42,3,6.747159300802376e-06
+②: random_augment only,42,4,0.003018282546886445
+②: random_augment only,42,5,0.003018282546886445
+②: random_augment only,42,6,0.003018282546886445
+②: random_augment only,42,7,0.003018282546886445
+②: random_augment only,42,8,0.003018282546886445
+②: random_augment only,42,9,0.003018282546886445
+②: random_augment only,42,10,0.003018282546886445
+②: random_augment only,42,11,0.003018282546886445
+②: random_augment only,42,12,0.01587297423932669
+②: random_augment only,42,13,0.01587297423932669
+②: random_augment only,42,14,0.032214916066895395
+②: random_augment only,42,15,0.032214916066895395
+②: random_augment only,42,16,0.032214916066895395
+②: random_augment only,42,17,0.032214916066895395
+②: random_augment only,42,18,0.032214916066895395
+②: random_augment only,42,19,0.032214916066895395
+②: random_augment only,42,20,0.06279793559646916
+②: random_augment only,42,21,0.06279793559646916
+②: random_augment only,43,1,0.002026641093961663
+②: random_augment only,43,2,0.001853296066491698
+②: random_augment only,43,3,0.053811082628503926
+②: random_augment only,43,4,0.053811082628503926
+②: random_augment only,43,5,0.053811082628503926
+②: random_augment only,43,6,0.053811082628503926
+②: random_augment only,43,7,0.053811082628503926
+②: random_augment only,43,8,0.048578373219963965
+②: random_augment only,43,9,0.06694927678439104
+②: random_augment only,43,10,0.06694927678439104
+②: random_augment only,43,11,0.08810683086385682
+②: random_augment only,43,12,0.10167368496581179
+②: random_augment only,43,13,0.10167368496581179
+②: random_augment only,43,14,0.10614583311239954
+②: random_augment only,43,15,0.10614583311239954
+②: random_augment only,43,16,0.10614583311239954
+②: random_augment only,43,17,0.10614583311239954
+②: random_augment only,43,18,0.10614583311239954
+②: random_augment only,43,19,0.10614583311239954
+②: random_augment only,43,20,0.10614583311239954
+②: random_augment only,43,21,0.11999639052668153
+②: random_augment only,44,1,7.319904085289217e-06
+②: random_augment only,44,2,0.05531052235208306
+②: random_augment only,44,3,0.05531052235208306
+②: random_augment only,44,4,0.05531052235208306
+②: random_augment only,44,5,0.05531052235208306
+②: random_augment only,44,6,0.05531052235208306
+②: random_augment only,44,7,0.05531052235208306
+②: random_augment only,44,8,0.05531052235208306
+②: random_augment only,44,9,0.05531052235208306
+②: random_augment only,44,10,0.05531052235208306
+②: random_augment only,44,11,0.05225551877999206
+②: random_augment only,44,12,0.06634696373250455
+②: random_augment only,44,13,0.08908965755763314
+②: random_augment only,44,14,0.10460371488180623
+②: random_augment only,44,15,0.10660755342035957
+②: random_augment only,44,16,0.1904765446683601
+②: random_augment only,44,17,0.1904765446683601
+②: random_augment only,44,18,0.1904765446683601
+②: random_augment only,44,19,0.1904765446683601
+②: random_augment only,44,20,0.1904765446683601
+②: random_augment only,44,21,0.1904765446683601
+②: random_augment only,45,1,5.972687764684356e-06
+②: random_augment only,45,2,0.006786511289121916
+②: random_augment only,45,3,0.0006739335744159618
+②: random_augment only,45,4,0.07519323649569942
+②: random_augment only,45,5,0.07519323649569942
+②: random_augment only,45,6,0.07519323649569942
+②: random_augment only,45,7,0.07519323649569942
+②: random_augment only,45,8,0.07519323649569942
+②: random_augment only,45,9,0.09258282885347503
+②: random_augment only,45,10,0.09258282885347503
+②: random_augment only,45,11,0.15076949049801588
+②: random_augment only,45,12,0.17131103430707922
+②: random_augment only,45,13,0.17131103430707922
+②: random_augment only,45,14,0.2383047554373586
+②: random_augment only,45,15,0.2383047554373586
+②: random_augment only,45,16,0.2383047554373586
+②: random_augment only,45,17,0.2383047554373586
+②: random_augment only,45,18,0.29570488168924786
+②: random_augment only,45,19,0.29570488168924786
+②: random_augment only,45,20,0.31480343171624486
+②: random_augment only,45,21,0.31480343171624486
+②: random_augment only,46,1,0.00014408075861248272
+②: random_augment only,46,2,1.1750699130467002e-07
+②: random_augment only,46,3,1.1750699130467002e-07
+②: random_augment only,46,4,0.017995106202638417
+②: random_augment only,46,5,0.017995106202638417
+②: random_augment only,46,6,0.017995106202638417
+②: random_augment only,46,7,0.017995106202638417
+②: random_augment only,46,8,0.017995106202638417
+②: random_augment only,46,9,0.017995106202638417
+②: random_augment only,46,10,0.017995106202638417
+②: random_augment only,46,11,0.017995106202638417
+②: random_augment only,46,12,0.017995106202638417
+②: random_augment only,46,13,0.017995106202638417
+②: random_augment only,46,14,0.017995106202638417
+②: random_augment only,46,15,0.017995106202638417
+②: random_augment only,46,16,0.017995106202638417
+②: random_augment only,46,17,0.017995106202638417
+②: random_augment only,46,18,0.017995106202638417
+②: random_augment only,46,19,0.017995106202638417
+②: random_augment only,46,20,0.0658746492852377
+②: random_augment only,46,21,0.0658746492852377
+③: gp_prior only,42,1,0.0020772544260588698
+③: gp_prior only,42,2,0.0020772544260588698
+③: gp_prior only,42,3,6.747159300802376e-06
+③: gp_prior only,42,4,0.003018282546886445
+③: gp_prior only,42,5,0.003018282546886445
+③: gp_prior only,42,6,0.003018282546886445
+③: gp_prior only,42,7,0.003018282546886445
+③: gp_prior only,42,8,0.003018282546886445
+③: gp_prior only,42,9,0.003018282546886445
+③: gp_prior only,42,10,0.003018282546886445
+③: gp_prior only,42,11,0.003018282546886445
+③: gp_prior only,42,12,0.003018282546886445
+③: gp_prior only,42,13,0.003018282546886445
+③: gp_prior only,42,14,0.003018282546886445
+③: gp_prior only,42,15,0.003018282546886445
+③: gp_prior only,42,16,0.003018282546886445
+③: gp_prior only,42,17,0.003018282546886445
+③: gp_prior only,42,18,0.003018282546886445
+③: gp_prior only,42,19,0.003018282546886445
+③: gp_prior only,42,20,0.003018282546886445
+③: gp_prior only,42,21,0.003018282546886445
+③: gp_prior only,43,1,0.002026641093961663
+③: gp_prior only,43,2,0.001853296066491698
+③: gp_prior only,43,3,0.053811082628503926
+③: gp_prior only,43,4,0.053811082628503926
+③: gp_prior only,43,5,0.053811082628503926
+③: gp_prior only,43,6,0.053811082628503926
+③: gp_prior only,43,7,0.053811082628503926
+③: gp_prior only,43,8,0.05350030013003508
+③: gp_prior only,43,9,0.05350030013003508
+③: gp_prior only,43,10,0.05026429251278964
+③: gp_prior only,43,11,0.05026429251278964
+③: gp_prior only,43,12,0.10351001028635665
+③: gp_prior only,43,13,0.12099456135079684
+③: gp_prior only,43,14,0.1348470006750471
+③: gp_prior only,43,15,0.1402458970861066
+③: gp_prior only,43,16,0.1402458970861066
+③: gp_prior only,43,17,0.1402458970861066
+③: gp_prior only,43,18,0.1402458970861066
+③: gp_prior only,43,19,0.17285464117732507
+③: gp_prior only,43,20,0.18881974218331804
+③: gp_prior only,43,21,0.18881974218331804
+③: gp_prior only,44,1,7.319904085289217e-06
+③: gp_prior only,44,2,0.05531052235208306
+③: gp_prior only,44,3,0.05531052235208306
+③: gp_prior only,44,4,0.05531052235208306
+③: gp_prior only,44,5,0.05531052235208306
+③: gp_prior only,44,6,0.05531052235208306
+③: gp_prior only,44,7,0.05531052235208306
+③: gp_prior only,44,8,0.06695998472744435
+③: gp_prior only,44,9,0.05479561408313846
+③: gp_prior only,44,10,0.09144214560344571
+③: gp_prior only,44,11,0.09645602128016212
+③: gp_prior only,44,12,0.09645602128016212
+③: gp_prior only,44,13,0.09645602128016212
+③: gp_prior only,44,14,0.09645602128016212
+③: gp_prior only,44,15,0.09645602128016212
+③: gp_prior only,44,16,0.09645602128016212
+③: gp_prior only,44,17,0.09645602128016212
+③: gp_prior only,44,18,0.09645602128016212
+③: gp_prior only,44,19,0.12867114869203738
+③: gp_prior only,44,20,0.14798515577991433
+③: gp_prior only,44,21,0.1595218724639323
+③: gp_prior only,45,1,5.972687764684356e-06
+③: gp_prior only,45,2,0.006786511289121916
+③: gp_prior only,45,3,0.0006739335744159618
+③: gp_prior only,45,4,0.07519323649569942
+③: gp_prior only,45,5,0.07519323649569942
+③: gp_prior only,45,6,0.07519323649569942
+③: gp_prior only,45,7,0.07519323649569942
+③: gp_prior only,45,8,0.09499188063307785
+③: gp_prior only,45,9,0.09499188063307785
+③: gp_prior only,45,10,0.12723282469794567
+③: gp_prior only,45,11,0.12723282469794567
+③: gp_prior only,45,12,0.15498445899188984
+③: gp_prior only,45,13,0.15498445899188984
+③: gp_prior only,45,14,0.1952065286151581
+③: gp_prior only,45,15,0.22312911642609334
+③: gp_prior only,45,16,0.22312911642609334
+③: gp_prior only,45,17,0.23969430995713262
+③: gp_prior only,45,18,0.23969430995713262
+③: gp_prior only,45,19,0.25718441502930117
+③: gp_prior only,45,20,0.26628758936940666
+③: gp_prior only,45,21,0.26628758936940666
+③: gp_prior only,46,1,0.00014408075861248272
+③: gp_prior only,46,2,1.1750699130467002e-07
+③: gp_prior only,46,3,1.1750699130467002e-07
+③: gp_prior only,46,4,0.017995106202638417
+③: gp_prior only,46,5,0.017995106202638417
+③: gp_prior only,46,6,0.017995106202638417
+③: gp_prior only,46,7,0.017995106202638417
+③: gp_prior only,46,8,0.017995106202638417
+③: gp_prior only,46,9,0.033674648660563786
+③: gp_prior only,46,10,0.044440430412127155
+③: gp_prior only,46,11,0.044440430412127155
+③: gp_prior only,46,12,0.08851261253681407
+③: gp_prior only,46,13,0.11865421301183099
+③: gp_prior only,46,14,0.14854315531761303
+③: gp_prior only,46,15,0.15362822026131642
+③: gp_prior only,46,16,0.15907348668214447
+③: gp_prior only,46,17,0.15907348668214447
+③: gp_prior only,46,18,0.15907348668214447
+③: gp_prior only,46,19,0.1808818374250197
+③: gp_prior only,46,20,0.1713918450275226
+③: gp_prior only,46,21,0.1713918450275226
+①: full domain knowledge,42,1,0.0020772544260588698
+①: full domain knowledge,42,2,0.0020772544260588698
+①: full domain knowledge,42,3,6.747159300802376e-06
+①: full domain knowledge,42,4,0.003018282546886445
+①: full domain knowledge,42,5,0.003018282546886445
+①: full domain knowledge,42,6,0.003018282546886445
+①: full domain knowledge,42,7,0.003018282546886445
+①: full domain knowledge,42,8,0.003018282546886445
+①: full domain knowledge,42,9,0.003018282546886445
+①: full domain knowledge,42,10,0.003018282546886445
+①: full domain knowledge,42,11,0.003018282546886445
+①: full domain knowledge,42,12,0.003018282546886445
+①: full domain knowledge,42,13,0.003018282546886445
+①: full domain knowledge,42,14,0.003018282546886445
+①: full domain knowledge,42,15,0.003018282546886445
+①: full domain knowledge,42,16,0.003018282546886445
+①: full domain knowledge,42,17,0.003018282546886445
+①: full domain knowledge,42,18,0.003018282546886445
+①: full domain knowledge,42,19,0.003018282546886445
+①: full domain knowledge,42,20,0.003018282546886445
+①: full domain knowledge,42,21,0.003018282546886445
+①: full domain knowledge,43,1,0.002026641093961663
+①: full domain knowledge,43,2,0.001853296066491698
+①: full domain knowledge,43,3,0.053811082628503926
+①: full domain knowledge,43,4,0.053811082628503926
+①: full domain knowledge,43,5,0.053811082628503926
+①: full domain knowledge,43,6,0.053811082628503926
+①: full domain knowledge,43,7,0.07918805703988777
+①: full domain knowledge,43,8,0.07918805703988777
+①: full domain knowledge,43,9,0.2074980973822517
+①: full domain knowledge,43,10,0.21613894501554823
+①: full domain knowledge,43,11,0.2389734931961889
+①: full domain knowledge,43,12,0.2389734931961889
+①: full domain knowledge,43,13,0.2389734931961889
+①: full domain knowledge,43,14,0.2389734931961889
+①: full domain knowledge,43,15,0.2389734931961889
+①: full domain knowledge,43,16,0.2389734931961889
+①: full domain knowledge,43,17,0.2389734931961889
+①: full domain knowledge,43,18,0.2483923550920655
+①: full domain knowledge,43,19,0.2483923550920655
+①: full domain knowledge,43,20,0.2483923550920655
+①: full domain knowledge,43,21,0.2483923550920655
+①: full domain knowledge,44,1,7.319904085289217e-06
+①: full domain knowledge,44,2,0.05531052235208306
+①: full domain knowledge,44,3,0.05531052235208306
+①: full domain knowledge,44,4,0.05531052235208306
+①: full domain knowledge,44,5,0.05531052235208306
+①: full domain knowledge,44,6,0.05531052235208306
+①: full domain knowledge,44,7,0.05531052235208306
+①: full domain knowledge,44,8,0.05531052235208306
+①: full domain knowledge,44,9,0.053844517173096344
+①: full domain knowledge,44,10,0.053844517173096344
+①: full domain knowledge,44,11,0.053844517173096344
+①: full domain knowledge,44,12,0.06061978796713924
+①: full domain knowledge,44,13,0.0722534685815894
+①: full domain knowledge,44,14,0.07308123108327319
+①: full domain knowledge,44,15,0.07127416857879276
+①: full domain knowledge,44,16,0.07127416857879276
+①: full domain knowledge,44,17,0.07127416857879276
+①: full domain knowledge,44,18,0.0762643946971622
+①: full domain knowledge,44,19,0.27718916554453316
+①: full domain knowledge,44,20,0.28974559173863956
+①: full domain knowledge,44,21,0.3011274564051699
+①: full domain knowledge,45,1,5.972687764684356e-06
+①: full domain knowledge,45,2,0.006786511289121916
+①: full domain knowledge,45,3,0.0006739335744159618
+①: full domain knowledge,45,4,0.07519323649569942
+①: full domain knowledge,45,5,0.07519323649569942
+①: full domain knowledge,45,6,0.07519323649569942
+①: full domain knowledge,45,7,0.1425177962981746
+①: full domain knowledge,45,8,0.23985227888411953
+①: full domain knowledge,45,9,0.3331268023039688
+①: full domain knowledge,45,10,0.33123496420183657
+①: full domain knowledge,45,11,0.33123496420183657
+①: full domain knowledge,45,12,0.33123496420183657
+①: full domain knowledge,45,13,0.33123496420183657
+①: full domain knowledge,45,14,0.33123496420183657
+①: full domain knowledge,45,15,0.33123496420183657
+①: full domain knowledge,45,16,0.33123496420183657
+①: full domain knowledge,45,17,0.33123496420183657
+①: full domain knowledge,45,18,0.33123496420183657
+①: full domain knowledge,45,19,0.33123496420183657
+①: full domain knowledge,45,20,0.3306318271324944
+①: full domain knowledge,45,21,0.3306318271324944
+①: full domain knowledge,46,1,0.00014408075861248272
+①: full domain knowledge,46,2,1.1750699130467002e-07
+①: full domain knowledge,46,3,1.1750699130467002e-07
+①: full domain knowledge,46,4,0.017995106202638417
+①: full domain knowledge,46,5,0.017995106202638417
+①: full domain knowledge,46,6,0.017995106202638417
+①: full domain knowledge,46,7,0.027246142610810438
+①: full domain knowledge,46,8,0.027246142610810438
+①: full domain knowledge,46,9,0.027246142610810438
+①: full domain knowledge,46,10,0.0375175318566068
+①: full domain knowledge,46,11,0.052700734877071526
+①: full domain knowledge,46,12,0.052700734877071526
+①: full domain knowledge,46,13,0.052700734877071526
+①: full domain knowledge,46,14,0.10286007592933247
+①: full domain knowledge,46,15,0.1322610205961266
+①: full domain knowledge,46,16,0.14206085255918438
+①: full domain knowledge,46,17,0.16944115760097084
+①: full domain knowledge,46,18,0.16944115760097084
+①: full domain knowledge,46,19,0.18555205880333103
+①: full domain knowledge,46,20,0.18555205880333103
+①: full domain knowledge,46,21,0.18555205880333103
+④: Arrhenius mean only,42,1,0.0020772544260588698
+④: Arrhenius mean only,42,2,0.0020772544260588698
+④: Arrhenius mean only,42,3,6.747159300802376e-06
+④: Arrhenius mean only,42,4,0.003018282546886445
+④: Arrhenius mean only,42,5,0.003018282546886445
+④: Arrhenius mean only,42,6,0.003018282546886445
+④: Arrhenius mean only,42,7,0.003018282546886445
+④: Arrhenius mean only,42,8,0.003018282546886445
+④: Arrhenius mean only,42,9,0.003018282546886445
+④: Arrhenius mean only,42,10,0.003018282546886445
+④: Arrhenius mean only,42,11,0.003018282546886445
+④: Arrhenius mean only,42,12,0.003018282546886445
+④: Arrhenius mean only,42,13,0.003018282546886445
+④: Arrhenius mean only,42,14,0.003018282546886445
+④: Arrhenius mean only,42,15,0.003018282546886445
+④: Arrhenius mean only,42,16,0.003018282546886445
+④: Arrhenius mean only,42,17,0.003018282546886445
+④: Arrhenius mean only,42,18,0.003018282546886445
+④: Arrhenius mean only,42,19,0.003018282546886445
+④: Arrhenius mean only,42,20,0.003018282546886445
+④: Arrhenius mean only,42,21,0.003018282546886445
+④: Arrhenius mean only,43,1,0.002026641093961663
+④: Arrhenius mean only,43,2,0.001853296066491698
+④: Arrhenius mean only,43,3,0.053811082628503926
+④: Arrhenius mean only,43,4,0.053811082628503926
+④: Arrhenius mean only,43,5,0.053811082628503926
+④: Arrhenius mean only,43,6,0.053811082628503926
+④: Arrhenius mean only,43,7,0.05498868544769608
+④: Arrhenius mean only,43,8,0.05498868544769608
+④: Arrhenius mean only,43,9,0.05498868544769608
+④: Arrhenius mean only,43,10,0.05498868544769608
+④: Arrhenius mean only,43,11,0.07647903887500887
+④: Arrhenius mean only,43,12,0.11720460430474537
+④: Arrhenius mean only,43,13,0.1803007577387021
+④: Arrhenius mean only,43,14,0.1803007577387021
+④: Arrhenius mean only,43,15,0.1803007577387021
+④: Arrhenius mean only,43,16,0.18098770598895011
+④: Arrhenius mean only,43,17,0.18098770598895011
+④: Arrhenius mean only,43,18,0.18098770598895011
+④: Arrhenius mean only,43,19,0.18098770598895011
+④: Arrhenius mean only,43,20,0.18098770598895011
+④: Arrhenius mean only,43,21,0.1895202270942607
+④: Arrhenius mean only,44,1,7.319904085289217e-06
+④: Arrhenius mean only,44,2,0.05531052235208306
+④: Arrhenius mean only,44,3,0.05531052235208306
+④: Arrhenius mean only,44,4,0.05531052235208306
+④: Arrhenius mean only,44,5,0.05531052235208306
+④: Arrhenius mean only,44,6,0.05531052235208306
+④: Arrhenius mean only,44,7,0.05531052235208306
+④: Arrhenius mean only,44,8,0.05531052235208306
+④: Arrhenius mean only,44,9,0.06286049093179874
+④: Arrhenius mean only,44,10,0.06286049093179874
+④: Arrhenius mean only,44,11,0.06286049093179874
+④: Arrhenius mean only,44,12,0.06286049093179874
+④: Arrhenius mean only,44,13,0.06286049093179874
+④: Arrhenius mean only,44,14,0.06286049093179874
+④: Arrhenius mean only,44,15,0.06655419755187734
+④: Arrhenius mean only,44,16,0.06655419755187734
+④: Arrhenius mean only,44,17,0.06655419755187734
+④: Arrhenius mean only,44,18,0.06655419755187734
+④: Arrhenius mean only,44,19,0.06655419755187734
+④: Arrhenius mean only,44,20,0.06655419755187734
+④: Arrhenius mean only,44,21,0.06655419755187734
+④: Arrhenius mean only,45,1,5.972687764684356e-06
+④: Arrhenius mean only,45,2,0.006786511289121916
+④: Arrhenius mean only,45,3,0.0006739335744159618
+④: Arrhenius mean only,45,4,0.07519323649569942
+④: Arrhenius mean only,45,5,0.07519323649569942
+④: Arrhenius mean only,45,6,0.07519323649569942
+④: Arrhenius mean only,45,7,0.07519323649569942
+④: Arrhenius mean only,45,8,0.07519323649569942
+④: Arrhenius mean only,45,9,0.07519323649569942
+④: Arrhenius mean only,45,10,0.14011051345342368
+④: Arrhenius mean only,45,11,0.14011051345342368
+④: Arrhenius mean only,45,12,0.2104645079998591
+④: Arrhenius mean only,45,13,0.28914703877775566
+④: Arrhenius mean only,45,14,0.28914703877775566
+④: Arrhenius mean only,45,15,0.28914703877775566
+④: Arrhenius mean only,45,16,0.28914703877775566
+④: Arrhenius mean only,45,17,0.28914703877775566
+④: Arrhenius mean only,45,18,0.28914703877775566
+④: Arrhenius mean only,45,19,0.28914703877775566
+④: Arrhenius mean only,45,20,0.28914703877775566
+④: Arrhenius mean only,45,21,0.28914703877775566
+④: Arrhenius mean only,46,1,0.00014408075861248272
+④: Arrhenius mean only,46,2,1.1750699130467002e-07
+④: Arrhenius mean only,46,3,1.1750699130467002e-07
+④: Arrhenius mean only,46,4,0.017995106202638417
+④: Arrhenius mean only,46,5,0.017995106202638417
+④: Arrhenius mean only,46,6,0.017995106202638417
+④: Arrhenius mean only,46,7,0.017995106202638417
+④: Arrhenius mean only,46,8,0.017995106202638417
+④: Arrhenius mean only,46,9,0.017995106202638417
+④: Arrhenius mean only,46,10,0.017995106202638417
+④: Arrhenius mean only,46,11,0.017995106202638417
+④: Arrhenius mean only,46,12,0.017995106202638417
+④: Arrhenius mean only,46,13,0.017995106202638417
+④: Arrhenius mean only,46,14,0.017995106202638417
+④: Arrhenius mean only,46,15,0.017995106202638417
+④: Arrhenius mean only,46,16,0.018426821298528524
+④: Arrhenius mean only,46,17,0.018426821298528524
+④: Arrhenius mean only,46,18,0.018426821298528524
+④: Arrhenius mean only,46,19,0.018426821298528524
+④: Arrhenius mean only,46,20,0.018426821298528524
+④: Arrhenius mean only,46,21,0.018426821298528524
+⑤: mono + gp_prior (rescued),42,1,0.0020772544260588698
+⑤: mono + gp_prior (rescued),42,2,0.0020772544260588698
+⑤: mono + gp_prior (rescued),42,3,6.747159300802376e-06
+⑤: mono + gp_prior (rescued),42,4,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,5,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,6,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,7,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,8,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,9,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,10,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,11,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,12,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,13,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,14,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,15,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,16,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,17,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,18,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,19,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,20,0.003018282546886445
+⑤: mono + gp_prior (rescued),42,21,0.003018282546886445
+⑤: mono + gp_prior (rescued),43,1,0.002026641093961663
+⑤: mono + gp_prior (rescued),43,2,0.001853296066491698
+⑤: mono + gp_prior (rescued),43,3,0.053811082628503926
+⑤: mono + gp_prior (rescued),43,4,0.053811082628503926
+⑤: mono + gp_prior (rescued),43,5,0.053811082628503926
+⑤: mono + gp_prior (rescued),43,6,0.053811082628503926
+⑤: mono + gp_prior (rescued),43,7,0.053811082628503926
+⑤: mono + gp_prior (rescued),43,8,0.053811082628503926
+⑤: mono + gp_prior (rescued),43,9,0.08371420962876605
+⑤: mono + gp_prior (rescued),43,10,0.0925667914058107
+⑤: mono + gp_prior (rescued),43,11,0.10698267864130247
+⑤: mono + gp_prior (rescued),43,12,0.10698267864130247
+⑤: mono + gp_prior (rescued),43,13,0.14021181152242518
+⑤: mono + gp_prior (rescued),43,14,0.14021181152242518
+⑤: mono + gp_prior (rescued),43,15,0.16042215102953494
+⑤: mono + gp_prior (rescued),43,16,0.16111588882324193
+⑤: mono + gp_prior (rescued),43,17,0.1802862746947375
+⑤: mono + gp_prior (rescued),43,18,0.18538344164796422
+⑤: mono + gp_prior (rescued),43,19,0.18538344164796422
+⑤: mono + gp_prior (rescued),43,20,0.20830419010677048
+⑤: mono + gp_prior (rescued),43,21,0.20830419010677048
+⑤: mono + gp_prior (rescued),44,1,7.319904085289217e-06
+⑤: mono + gp_prior (rescued),44,2,0.05531052235208306
+⑤: mono + gp_prior (rescued),44,3,0.05531052235208306
+⑤: mono + gp_prior (rescued),44,4,0.05531052235208306
+⑤: mono + gp_prior (rescued),44,5,0.05531052235208306
+⑤: mono + gp_prior (rescued),44,6,0.05531052235208306
+⑤: mono + gp_prior (rescued),44,7,0.05531052235208306
+⑤: mono + gp_prior (rescued),44,8,0.05531052235208306
+⑤: mono + gp_prior (rescued),44,9,0.054991957391589345
+⑤: mono + gp_prior (rescued),44,10,0.054991957391589345
+⑤: mono + gp_prior (rescued),44,11,0.054991957391589345
+⑤: mono + gp_prior (rescued),44,12,0.054991957391589345
+⑤: mono + gp_prior (rescued),44,13,0.054991957391589345
+⑤: mono + gp_prior (rescued),44,14,0.054991957391589345
+⑤: mono + gp_prior (rescued),44,15,0.06852814422741492
+⑤: mono + gp_prior (rescued),44,16,0.06852814422741492
+⑤: mono + gp_prior (rescued),44,17,0.06852814422741492
+⑤: mono + gp_prior (rescued),44,18,0.06852814422741492
+⑤: mono + gp_prior (rescued),44,19,0.06852814422741492
+⑤: mono + gp_prior (rescued),44,20,0.07442476197083382
+⑤: mono + gp_prior (rescued),44,21,0.07442476197083382
+⑤: mono + gp_prior (rescued),45,1,5.972687764684356e-06
+⑤: mono + gp_prior (rescued),45,2,0.006786511289121916
+⑤: mono + gp_prior (rescued),45,3,0.0006739335744159618
+⑤: mono + gp_prior (rescued),45,4,0.07519323649569942
+⑤: mono + gp_prior (rescued),45,5,0.07519323649569942
+⑤: mono + gp_prior (rescued),45,6,0.07519323649569942
+⑤: mono + gp_prior (rescued),45,7,0.11666157237458
+⑤: mono + gp_prior (rescued),45,8,0.1403132020034881
+⑤: mono + gp_prior (rescued),45,9,0.1403132020034881
+⑤: mono + gp_prior (rescued),45,10,0.1403132020034881
+⑤: mono + gp_prior (rescued),45,11,0.17146010675107679
+⑤: mono + gp_prior (rescued),45,12,0.20928101324397888
+⑤: mono + gp_prior (rescued),45,13,0.20928101324397888
+⑤: mono + gp_prior (rescued),45,14,0.20928101324397888
+⑤: mono + gp_prior (rescued),45,15,0.20928101324397888
+⑤: mono + gp_prior (rescued),45,16,0.22982707592433604
+⑤: mono + gp_prior (rescued),45,17,0.22982707592433604
+⑤: mono + gp_prior (rescued),45,18,0.20881450867563175
+⑤: mono + gp_prior (rescued),45,19,0.24119055535899758
+⑤: mono + gp_prior (rescued),45,20,0.2429447693811473
+⑤: mono + gp_prior (rescued),45,21,0.2661410218028578
+⑤: mono + gp_prior (rescued),46,1,0.00014408075861248272
+⑤: mono + gp_prior (rescued),46,2,1.1750699130467002e-07
+⑤: mono + gp_prior (rescued),46,3,1.1750699130467002e-07
+⑤: mono + gp_prior (rescued),46,4,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,5,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,6,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,7,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,8,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,9,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,10,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,11,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,12,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,13,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,14,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,15,0.017995106202638417
+⑤: mono + gp_prior (rescued),46,16,0.02730235451373454
+⑤: mono + gp_prior (rescued),46,17,0.02730235451373454
+⑤: mono + gp_prior (rescued),46,18,0.02730235451373454
+⑤: mono + gp_prior (rescued),46,19,0.02730235451373454
+⑤: mono + gp_prior (rescued),46,20,0.02730235451373454
+⑤: mono + gp_prior (rescued),46,21,0.02730235451373454
+G: WRONG-direction monotone,42,1,0.0020772544260588698
+G: WRONG-direction monotone,42,2,0.0020772544260588698
+G: WRONG-direction monotone,42,3,6.747159300802376e-06
+G: WRONG-direction monotone,42,4,0.003018282546886445
+G: WRONG-direction monotone,42,5,0.003018282546886445
+G: WRONG-direction monotone,42,6,0.003018282546886445
+G: WRONG-direction monotone,42,7,0.003018282546886445
+G: WRONG-direction monotone,42,8,0.003018282546886445
+G: WRONG-direction monotone,42,9,0.003018282546886445
+G: WRONG-direction monotone,42,10,0.003018282546886445
+G: WRONG-direction monotone,42,11,0.003018282546886445
+G: WRONG-direction monotone,42,12,0.003018282546886445
+G: WRONG-direction monotone,42,13,0.003018282546886445
+G: WRONG-direction monotone,42,14,0.004888115279504138
+G: WRONG-direction monotone,42,15,0.004888115279504138
+G: WRONG-direction monotone,42,16,0.004888115279504138
+G: WRONG-direction monotone,42,17,0.004888115279504138
+G: WRONG-direction monotone,42,18,0.004888115279504138
+G: WRONG-direction monotone,42,19,0.004888115279504138
+G: WRONG-direction monotone,42,20,0.004888115279504138
+G: WRONG-direction monotone,42,21,0.004888115279504138
+G: WRONG-direction monotone,43,1,0.002026641093961663
+G: WRONG-direction monotone,43,2,0.001853296066491698
+G: WRONG-direction monotone,43,3,0.053811082628503926
+G: WRONG-direction monotone,43,4,0.053811082628503926
+G: WRONG-direction monotone,43,5,0.053811082628503926
+G: WRONG-direction monotone,43,6,0.053811082628503926
+G: WRONG-direction monotone,43,7,0.0726412987941116
+G: WRONG-direction monotone,43,8,0.0726412987941116
+G: WRONG-direction monotone,43,9,0.0726412987941116
+G: WRONG-direction monotone,43,10,0.08065588840175189
+G: WRONG-direction monotone,43,11,0.08065588840175189
+G: WRONG-direction monotone,43,12,0.08065588840175189
+G: WRONG-direction monotone,43,13,0.08065588840175189
+G: WRONG-direction monotone,43,14,0.08065588840175189
+G: WRONG-direction monotone,43,15,0.08065588840175189
+G: WRONG-direction monotone,43,16,0.12242167496229533
+G: WRONG-direction monotone,43,17,0.12242167496229533
+G: WRONG-direction monotone,43,18,0.13969367155003565
+G: WRONG-direction monotone,43,19,0.15840921028437396
+G: WRONG-direction monotone,43,20,0.16506941022975907
+G: WRONG-direction monotone,43,21,0.17292839072613178
+G: WRONG-direction monotone,44,1,7.319904085289217e-06
+G: WRONG-direction monotone,44,2,0.05531052235208306
+G: WRONG-direction monotone,44,3,0.05531052235208306
+G: WRONG-direction monotone,44,4,0.05531052235208306
+G: WRONG-direction monotone,44,5,0.05531052235208306
+G: WRONG-direction monotone,44,6,0.05531052235208306
+G: WRONG-direction monotone,44,7,0.05531052235208306
+G: WRONG-direction monotone,44,8,0.05531052235208306
+G: WRONG-direction monotone,44,9,0.05625052561901542
+G: WRONG-direction monotone,44,10,0.05625052561901542
+G: WRONG-direction monotone,44,11,0.0545283406887536
+G: WRONG-direction monotone,44,12,0.0545283406887536
+G: WRONG-direction monotone,44,13,0.0545283406887536
+G: WRONG-direction monotone,44,14,0.0545283406887536
+G: WRONG-direction monotone,44,15,0.0545283406887536
+G: WRONG-direction monotone,44,16,0.0545283406887536
+G: WRONG-direction monotone,44,17,0.0545283406887536
+G: WRONG-direction monotone,44,18,0.0545283406887536
+G: WRONG-direction monotone,44,19,0.0545283406887536
+G: WRONG-direction monotone,44,20,0.05689687351529731
+G: WRONG-direction monotone,44,21,0.05689687351529731
+G: WRONG-direction monotone,45,1,5.972687764684356e-06
+G: WRONG-direction monotone,45,2,0.006786511289121916
+G: WRONG-direction monotone,45,3,0.0006739335744159618
+G: WRONG-direction monotone,45,4,0.07519323649569942
+G: WRONG-direction monotone,45,5,0.07519323649569942
+G: WRONG-direction monotone,45,6,0.07519323649569942
+G: WRONG-direction monotone,45,7,0.07519323649569942
+G: WRONG-direction monotone,45,8,0.07519323649569942
+G: WRONG-direction monotone,45,9,0.09470516140279986
+G: WRONG-direction monotone,45,10,0.14447449694559966
+G: WRONG-direction monotone,45,11,0.14447449694559966
+G: WRONG-direction monotone,45,12,0.14447449694559966
+G: WRONG-direction monotone,45,13,0.14447449694559966
+G: WRONG-direction monotone,45,14,0.16595745135944107
+G: WRONG-direction monotone,45,15,0.18823809849584597
+G: WRONG-direction monotone,45,16,0.20044408428164726
+G: WRONG-direction monotone,45,17,0.1882566860824081
+G: WRONG-direction monotone,45,18,0.18583800638971879
+G: WRONG-direction monotone,45,19,0.18583800638971879
+G: WRONG-direction monotone,45,20,0.2139377239381906
+G: WRONG-direction monotone,45,21,0.2139377239381906
+G: WRONG-direction monotone,46,1,0.00014408075861248272
+G: WRONG-direction monotone,46,2,1.1750699130467002e-07
+G: WRONG-direction monotone,46,3,1.1750699130467002e-07
+G: WRONG-direction monotone,46,4,0.017995106202638417
+G: WRONG-direction monotone,46,5,0.017995106202638417
+G: WRONG-direction monotone,46,6,0.017995106202638417
+G: WRONG-direction monotone,46,7,0.017995106202638417
+G: WRONG-direction monotone,46,8,0.017995106202638417
+G: WRONG-direction monotone,46,9,0.017995106202638417
+G: WRONG-direction monotone,46,10,0.017995106202638417
+G: WRONG-direction monotone,46,11,0.017995106202638417
+G: WRONG-direction monotone,46,12,0.017995106202638417
+G: WRONG-direction monotone,46,13,0.017995106202638417
+G: WRONG-direction monotone,46,14,0.017995106202638417
+G: WRONG-direction monotone,46,15,0.017995106202638417
+G: WRONG-direction monotone,46,16,0.017995106202638417
+G: WRONG-direction monotone,46,17,0.025625782077137976
+G: WRONG-direction monotone,46,18,0.025625782077137976
+G: WRONG-direction monotone,46,19,0.025625782077137976
+G: WRONG-direction monotone,46,20,0.025625782077137976
+G: WRONG-direction monotone,46,21,0.025625782077137976

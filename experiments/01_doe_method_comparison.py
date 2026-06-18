@@ -66,11 +66,12 @@ def run_one(spec, method: str, seed: int) -> dict:
     torch.manual_seed(seed)
     campaign = ed.Campaign(spec.space, knowledge=None, seed=seed,
                            validate=False)
+    noise_rng = np.random.default_rng(seed)
     doe = campaign.suggest_doe(n=spec.n_doe, method=method)
-    campaign.tell(doe, spec.oracle(doe, noise_seed=seed))
+    campaign.tell(doe, spec.oracle(doe, rng=noise_rng))
     for it in range(spec.n_iter):
         nxt = campaign.ask(q=1, iteration=it)
-        campaign.tell(nxt, spec.oracle(nxt, noise_seed=seed * 1000 + it))
+        campaign.tell(nxt, spec.oracle(nxt, rng=noise_rng))
     res = campaign.finalize()
     history = res.history_df
 

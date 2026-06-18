@@ -17,8 +17,9 @@ python experiments/01_doe_method_comparison.py --dim 2   # ~3 min
 python experiments/02_knowledge_comparison.py --dim 4    # ~9 min
 ```
 
-Results write to `experiments/outputs/*.csv` (git-ignored — re-run to
-reproduce).
+Results write to `experiments/outputs/*.csv`. Archived snapshots live in
+numbered folders (e.g. [`data_snapshot_01/`](./data_snapshot_01/) — single-RNG noise,
+unified budget n_doe=6 / n_iter=15).
 
 > **Read these as directional, not definitive.** They are single-oracle-family
 > runs over 5 seeds. The breadth needed to make firm recommendations is
@@ -143,9 +144,13 @@ variable is the DoE method and the comparison is fair.
 
 ```bash
 python experiments/01_doe_method_comparison.py             # 2D (default)
-python experiments/01_doe_method_comparison.py --dim 4     # ~12 min
-python experiments/01_doe_method_comparison.py --dim 6     # ~17 min
+python experiments/01_doe_method_comparison.py --dim 4
+python experiments/01_doe_method_comparison.py --dim 6
 ```
+
+> **Note:** The tables below were generated under the previous per-dimension
+> budget (2D: 6+15, 4D: 12+30, 6D: 18+30). The code now uses the unified
+> budget (n_doe=6, n_iter=15 for all dims). Re-run to get updated numbers.
 
 Headline metric is the same noise-free `gap_final` as experiment 02:
 `true_opt − noiseless_oracle(best_x_final)`. Smaller is better.
@@ -153,7 +158,7 @@ Headline metric is the same noise-free `gap_final` as experiment 02:
 All knowledge held at *none* (plain GP). `Δ vs random_uniform` is the
 relative gap reduction against the random-uniform baseline.
 
-### 2D results on `reaction_objective_2d` (5 seeds, ~3 min)
+### 2D results on `reaction_objective_2d` (5 seeds)
 
 True noiseless optimum = 0.6065 at T=600 K, conc=0.5 mol/L.
 
@@ -253,151 +258,102 @@ one to avoid for GP-based BO.
 
 ## Experiment 02 — Knowledge comparison
 
-This experiment uses the **canonical objectives** from the sister project's
-empirical studies (Exp-7 / Exp-9 / Exp-10 in `AGENT_KNOWLEDGE.md`):
-
-- `reaction_objective_2d`   (T × conc, the Exp-7 problem)
-- `process_objective_4d`    (T × conc × pH × t, the Exp-9 problem)
-- `process_objective_6d_v2` (4D + polar (bimodal) + rpm (Gaussian peak))
-
-> **Two history notes that matter for reading the numbers below.**
->
-> 1. **Baseline is now a plain GP.** Earlier versions of this experiment
->    used a baseline that silently auto-applied `with_random_augment(n=20)`.
->    That auto-default has been removed — `A: baseline` is `knowledge=None`,
->    a genuine plain GP. All `Δ gap` numbers are relative to that.
-> 2. **DoE is held constant at `sobol`** — the same initial-design choice
->    used by the historical Exp-7 / Exp-9 / Exp-10 v2 runs in
->    `AGENT_KNOWLEDGE.md` §6b. This makes the numbers directly comparable
->    to that table. (Experiment 01 separately compares DoE methods and finds
->    `lhs_random` strongest; for this experiment we hold DoE constant.)
->
-> Even with Sobol DoE matching §6b, the plain-GP baseline here is much
-> stronger than the historical §6b "A: Standard BO" baseline
-> (4D gap ≈ 0.003 vs the §6b 0.012). The likely cause is implementation
-> drift unrelated to this study — the old run used `torch.quasirandom`'s
-> Sobol while expdoe-dk uses `scipy.stats.qmc`, plus the OLD oracle drew
-> noise from a single per-run RNG while this one re-seeds per call.
-> Treat the §6b magnitudes as a directionally-useful historical reference,
-> not a target the rerun should reproduce exactly.
-
-### Why this needs a noise-free gap metric
-
-The objectives all carry N(0, 0.01²) noise — the same level of variability
-as the actual gap between best methods. Comparing "best observed yield"
-would conflate "BO genuinely converged" with "BO got lucky on a noisy
-draw". The script therefore re-evaluates the **noise-free oracle** at each
-trial's best-so-far X and reports the gap from the true optimum. This is
-the standard BO-benchmark practice.
-
-### How to run
+Uses the **canonical objectives** (Exp-7 / Exp-9 / Exp-10 in
+`AGENT_KNOWLEDGE.md`), with `sobol` DoE held constant and a **single-RNG
+noise stream** per run (matching the §6b convention). Baseline `A` is a
+plain GP (`knowledge=None`).
 
 ```bash
-python experiments/02_knowledge_comparison.py             # 2D (default), ~3 min
-python experiments/02_knowledge_comparison.py --dim 4     # ~12 min
-python experiments/02_knowledge_comparison.py --dim 6     # ~17 min
-python experiments/02_knowledge_comparison.py --seeds 3   # fewer seeds, faster
+python experiments/02_knowledge_comparison.py             # 2D (default), ~2 min
+python experiments/02_knowledge_comparison.py --dim 4     # ~4 min
+python experiments/02_knowledge_comparison.py --dim 6     # ~5 min
 ```
 
-Setup: `sobol` DoE held constant (matches Exp-7/9/10). Budget:
+Unified budget across all dimensions: **n_doe = 6, n_iter = 15 (total 21 evals)**.
 
-| dim | n_doe | n_iter | total evals |
-|-----|------:|-------:|-----------:|
-| 2D  | 6     | 15     | 21         |
-| 4D  | 12    | 30     | 42         |
-| 6D  | 18    | 30     | 48         |
+> Data snapshot: [`data_snapshot_01/`](./data_snapshot_01/)
 
-### 2D results (5 seeds, ~3 min)
+### 2D results (5 seeds)
 
-True noiseless optimum = 0.6065 at T=600 K, conc=0.5 mol/L.
-**`gap_final`** is `|true_opt − noiseless_yield(best_x_final)|` — smaller is better.
-`Δ gap` is relative to the plain-GP baseline.
+True noiseless optimum = 0.6065.
 
 | Config                              | gap_final | Δ gap vs baseline | %seeds hit 95 |
 |-------------------------------------|----------:|------------------:|--------------:|
-| ③ gp_prior only                     | 0.0002    | **+66.7 %**       | 100 %         |
-| **A: baseline (plain GP)**          | 0.0006    | 0.0 %             | 100 %         |
-| ① full domain knowledge             | 0.0009    | −50 %             | 100 %         |
-| ② random_augment only               | 0.0037    | −517 %            | 100 %         |
-| ④ Arrhenius mean only               | 0.0037    | −517 %            | 100 %         |
-| ⑤ monotone + gp_prior (rescued)     | 0.0040    | −567 %            | 100 %         |
-| G: WRONG-direction monotone         | 0.0119    | −1883 %           | 80 %          |
+| ③ gp_prior only                     | 0.0002    | **+60.0 %**       | 100 %         |
+| ① full domain knowledge             | 0.0003    | **+40.0 %**       | 100 %         |
+| **A: baseline (plain GP)**          | 0.0005    | 0.0 %             | 100 %         |
+| ④ Arrhenius mean only               | 0.0007    | −40.0 %           | 100 %         |
+| ⑤ mono + gp_prior (rescued)         | 0.0013    | −160.0 %          | 100 %         |
+| ② random_augment only               | 0.0021    | −320.0 %          | 100 %         |
+| G: WRONG-direction monotone         | 0.0023    | −360.0 %          | 80 %          |
 
-In 2D, only `③ gp_prior only` beats the plain GP (+67 %). Every other
-knowledge config underperforms — the plain-GP baseline already hits gap
-0.0006 (≈ 0.1 % of the optimum), leaving very little room for any prior
-to add value.
+2D is easy enough that all configs converge (gap < 0.003). ③ and ① edge
+out the plain GP; G wrong-direction is last with 1 seed failing to hit 95 %.
 
-### 4D results on `process_objective_4d` (5 seeds, ~9 min)
+### 4D results (5 seeds)
 
 True noiseless optimum ≈ 0.34956.
 
 | Config                              | gap_final | Δ gap vs baseline | %seeds hit 95 |
 |-------------------------------------|----------:|------------------:|--------------:|
-| **A: baseline (plain GP)**          | 0.0033    | 0.0 %             | 100 %         |
-| ④ Arrhenius mean only               | 0.0037    | −12.1 %           | 100 %         |
-| ② random_augment only               | 0.0050    | −51.5 %           | 80 %          |
-| ① full domain knowledge             | 0.0058    | −75.8 %           | 80 %          |
-| ⑤ mono+prior (rescued)              | 0.0082    | −148.5 %          | 100 %         |
-| ③ gp_prior only                     | 0.0084    | −154.5 %          | 100 %         |
-| G: WRONG-direction monotone         | 0.0727    | −2103 %           | 20 %          |
+| ⑤ mono + gp_prior (rescued)         | 0.0081    | **+12.0 %**       | 60 %          |
+| ③ gp_prior only                     | 0.0087    | +5.4 %            | 60 %          |
+| **A: baseline (plain GP)**          | 0.0092    | 0.0 %             | 80 %          |
+| ④ Arrhenius mean only               | 0.0151    | −64.1 %           | 80 %          |
+| ① full domain knowledge             | 0.0256    | −178.3 %          | 40 %          |
+| ② random_augment only               | 0.0916    | −895.7 %          | 20 %          |
+| G: WRONG-direction monotone         | 0.1796    | −1852.2 %         | 0 %           |
 
-In 4D, **no knowledge config beats the plain GP**. ④ Arrhenius is the
-closest (−12 %), then ② and ①. ③ gp_prior moves from the 2D winner to
-mid-pack; G wrong-direction is the clear bottom, as expected.
+In 4D with only 21 evals, ⑤ and ③ marginally beat plain GP. Stacked
+knowledge ① hurts (−178 %). ② random_augment collapses under tight budget.
 
-### 6D results on `process_objective_6d_v2` (5 seeds, ~13 min)
+### 6D results (5 seeds)
+
+True noiseless optimum ≈ 0.34956.
 
 | Config                              | gap_final | Δ gap vs baseline | %seeds hit 95 |
 |-------------------------------------|----------:|------------------:|--------------:|
-| **A: baseline (plain GP)**          | 0.0160    | 0.0 %             | 80 %          |
-| ② random_augment only               | 0.0284    | −77.5 %           | 20 %          |
-| ⑤ mono+prior (rescued)              | 0.0471    | −194 %            | 0 %           |
-| ④ Arrhenius mean only               | 0.0542    | −239 %            | 0 %           |
-| ③ gp_prior only                     | 0.0598    | −274 %            | 20 %          |
-| ① full domain knowledge             | 0.0684    | −328 %            | 0 %           |
-| G: WRONG-direction monotone         | 0.1769    | −1006 %           | 0 %           |
+| **① full domain knowledge**         | 0.1012    | **+31.6 %**       | 20 %          |
+| **A: baseline (plain GP)**          | 0.1480    | 0.0 %             | 0 %           |
+| ③ gp_prior only                     | 0.1782    | −20.4 %           | 0 %           |
+| ② random_augment only               | 0.2296    | −55.1 %           | 0 %           |
+| ⑤ mono + gp_prior (rescued)         | 0.2751    | −85.9 %           | 0 %           |
+| ④ Arrhenius mean only               | 0.2830    | −91.2 %           | 0 %           |
+| G: WRONG-direction monotone         | 0.2927    | −97.8 %           | 0 %           |
 
-In 6D, the plain GP wins again. ① drops to next-to-last (−328 %); ④
-Arrhenius-alone — the 2D leader — collapses (−239 %). The dimension-
-sensitivity pattern is intact: a single mean shape that fits one of six
-dims becomes actively misleading on the remaining five.
+6D with 21 evals is severely budget-starved — no config reliably hits 95 %.
+But **① full domain knowledge leads for the first time** (+31.6 %), showing
+that correct structural priors help most when data is scarce relative to
+dimensionality.
 
-### What this actually says
+### Cross-dim patterns
 
-A plain GP is a strong baseline on these oracles — strong enough that
-none of the canonical knowledge configurations match or beat it cleanly
-across all three dimensions:
+| Pattern | 2D | 4D | 6D |
+|---------|:--:|:--:|:--:|
+| Plain GP rank | 3rd | 3rd | 2nd |
+| ① full DK rank | 2nd | 5th | **1st** |
+| ② random_augment | 6th | 6th | 4th |
+| G wrong-direction | last | last | last |
 
-1. **`random_augment` hurt on every dimension** (−26 % / −52 % / −78 %).
-   This is the empirical basis for removing it as an auto-default. Pure
-   regularization is not a "free win"; its benefit is dataset-dependent
-   and the right `n` scales with sample size (roadmap #20).
-2. **The §6b "stacked-knowledge wins big" reading does not reproduce
-   here**, even with Sobol DoE matching §6b's setup. Best guess: the
-   absolute baselines differ because of implementation drift
-   (`torch.quasirandom` vs `scipy.stats.qmc`; single-RNG noise vs
-   per-call seeded noise). The qualitative §6b patterns — direction
-   correctness matters most in high-D, Cat ④ is dimension-sensitive,
-   wrong-direction priors hurt — all still show up.
-3. **Among knowledge configs, simpler tends to be less bad.** ④
-   Arrhenius alone is the closest to plain GP in 2D and 4D; once 6D
-   adds dims with no matching primitive (bimodal `polar`, Gaussian
-   `rpm`), no config recovers.
-
-These conclusions are single-oracle-family results on 5 seeds; treat
-them as directional. The breadth needed to make firm recommendations is
-tracked in roadmap issues #20 (knowledge across datasets, including
-the pure-regularization sweep) and #21 (generalising the knowledge API
-so chemists can author primitives that actually match their landscape).
+1. **Budget matters more than knowledge at low-D.** 21 evals is generous
+   for 2D (all gap < 0.003) but starving for 6D (all gap > 0.10). The
+   choice of knowledge matters most when data is scarce relative to dim.
+2. **① leads in 6D but collapses in 4D.** Stacking 5 primitives helps only
+   when the problem is hard enough that each one contributes; at 4D the
+   overhead outweighs the signal.
+3. **② random_augment hurts under tight budget** — 20 virtual points eat
+   capacity when you only have 21 real observations.
+4. **G wrong-direction is reliably worst** — the Spearman validator would
+   catch this.
+5. **Plain GP is a safe default** — top-3 at every dimension, never worst.
 
 ### Chemist's quick-reference
 
 | If you have                                   | Use                                  |
 |-----------------------------------------------|--------------------------------------|
-| No specific knowledge                         | **Nothing — `Campaign(space)` runs a plain GP.** On these oracles it was the strongest or tied-strongest config at every dimension |
-| A monotone direction you're confident about   | One `with_monotone(effect="increases_objective")` — frame translation handled; v0.2 validator warns if the data disagrees |
-| A known shape for ONE low-D parameter (Arrhenius / peak) | One `with_arrhenius` *or* one `with_quadratic_peak` (`frozen=True`). Single primitives stayed close to plain GP; don't chain several at once |
-| The temptation to "regularise for free"       | Avoid `with_random_augment` — it hurt at every dimension. Opt-in only, under validation in #20 |
-| `with_gp_prior` AND `with_monotone` together  | Trust v0.3 `auto_rescue=True`; the combo never won here, expect a low ceiling |
-| A high-dimensional problem (≥ 5 active factors) | Reduce dimensionality first; a plain GP was the strongest config in our 6D test |
+| No specific knowledge                         | **Nothing — `Campaign(space)` runs a plain GP.** Top-3 at every dimension tested |
+| A high-D problem (≥ 5 factors) + correct domain knowledge | `with_arrhenius` / `with_quadratic_peak` / `with_monotone` — ① led in 6D by +32 % |
+| A low-D problem (2–4 factors)                 | Plain GP or at most one `with_gp_prior("medium")` |
+| A monotone direction you're confident about   | One `with_monotone(effect="increases_objective")` — v0.2 validator warns if data disagrees |
+| The temptation to stack many primitives       | Don't — ① collapsed at 4D. One well-chosen primitive is safer |
+| `with_random_augment` as a "safe default"     | Avoid under tight budgets — it hurt at 4D/6D. Opt-in only |
