@@ -143,7 +143,10 @@ def run_one(spec: ProblemSpec, name: str,
     torch.manual_seed(seed)
     campaign = ed.Campaign(spec.space, knowledge_factory(), seed=seed,
                            validate=False)
-    doe = campaign.suggest_doe(n=spec.n_doe, method="lhs_maximin")
+    # DoE held constant at `sobol` (the same initial-design choice used in
+    # AGENT_KNOWLEDGE.md §6b / Exp-9 / Exp-10), so this experiment's numbers
+    # are directly comparable to the canonical §6b table.
+    doe = campaign.suggest_doe(n=spec.n_doe, method="sobol")
     campaign.tell(doe, spec.oracle(doe, noise_seed=seed))
     for it in range(spec.n_iter):
         nxt = campaign.ask(q=1, iteration=it)
