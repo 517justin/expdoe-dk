@@ -64,3 +64,13 @@ def test_maximin_beats_random_in_spread():
     d_rand = float(pdist(df_rand.to_numpy()).min())
     # maximin should produce a strictly larger minimum pairwise distance.
     assert d_max > d_rand
+
+
+def test_discrete_step_that_does_not_divide_range_never_snaps_past_bounds():
+    p = Parameter("dose", bounds=(0.0, 1.0), kind="discrete", step=0.6)
+
+    assert p.levels.tolist() == [0.0, 0.6]
+    snapped = p.snap(np.array([0.0, 0.59, 0.9, 1.0]))
+
+    assert np.all(snapped <= 1.0)
+    assert snapped.tolist() == [0.0, 0.6, 0.6, 0.6]

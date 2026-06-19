@@ -83,6 +83,15 @@ def test_report_renders_units_for_each_param():
     assert ">7 mL<" in html
 
 
+def test_result_to_dict_preserves_param_report_metadata():
+    result = _make_dummy_result()
+
+    payload = result.to_dict()
+
+    assert payload["param_units"] == {"T": "°C", "conc_A": "mL"}
+    assert payload["param_kinds"] == {"T": "continuous", "conc_A": "discrete"}
+
+
 def test_report_includes_notes_when_present():
     result = _make_dummy_result()
     html = result.to_html_string()

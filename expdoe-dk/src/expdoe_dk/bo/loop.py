@@ -70,6 +70,8 @@ class Result:
             "maximize": self.maximize,
             "knowledge_summary": self.knowledge_summary,
             "notes": self.notes,
+            "param_units": self.param_units,
+            "param_kinds": self.param_kinds,
             "history_records": self.history_df.to_dict(orient="records"),
         }
 
@@ -302,6 +304,11 @@ class Campaign:
             ]
         )
 
+        def row_key(row: pd.Series) -> tuple[float, ...]:
+            return tuple(round(float(row[p]), 12) for p in self.space.param_names)
+
+        seen_keys = {row_key(row) for _, row in X_phys_df.iterrows()}
+
         # Optimize acquisition with rejection sampling for constraints.
         candidates: list[pd.DataFrame] = []
         tries = 0
@@ -325,16 +332,43 @@ class Campaign:
             if not bool(self.space.feasibility_mask(df_cand).all().item()):
                 # Try one local random nudge.
                 continue
+            key = row_key(df_cand.iloc[0])
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             candidates.append(df_cand)
 
         if len(candidates) < q:
             # Fallback: random feasible sample to fill the batch.
-            missing = q - len(candidates)
-            extra = generate_doe(
-                self.space, n=missing, method="random_uniform",
-                seed=self.seed + tries,
+            fallback_tries = 0
+            while len(candidates) < q and fallback_tries < max_tries:
+                missing = q - len(candidates)
+                extra = generate_doe(
+                    self.space,
+                    n=max(missing * 3, missing),
+                    method="random_uniform",
+                    seed=self.seed + tries + fallback_tries,
+                )
+                unique_rows = []
+                for _, row in extra.iterrows():
+                    key = row_key(row)
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    unique_rows.append(row)
+                    if len(unique_rows) >= missing:
+                        break
+                if unique_rows:
+                    candidates.append(
+                        pd.DataFrame(unique_rows, columns=self.space.param_names)
+                    )
+                fallback_tries += 1
+
+        if len(candidates) < q:
+            raise RuntimeError(
+                f"Campaign.ask(q={q}) could not find enough unique feasible "
+                "candidates. Consider reducing q or relaxing constraints."
             )
-            candidates.append(extra)
 
         return pd.concat(candidates, axis=0).reset_index(drop=True).head(q)
 

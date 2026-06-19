@@ -88,9 +88,9 @@ class Parameter:
         if self.kind != "discrete":
             raise AttributeError(f"Parameter {self.name} is continuous.")
         lo, hi = self.bounds
-        # Use a small tolerance so the right endpoint is included when it
-        # lands exactly on the grid (avoids float arange off-by-one).
-        n = int(round((hi - lo) / self.step)) + 1
+        # Include the right endpoint only when it lands on the grid. Using
+        # floor prevents non-dividing steps from creating out-of-bounds levels.
+        n = int(math.floor((hi - lo) / self.step + 1e-12)) + 1
         return lo + np.arange(n, dtype=np.float64) * self.step
 
     def snap(self, x: np.ndarray | Tensor) -> np.ndarray | Tensor:

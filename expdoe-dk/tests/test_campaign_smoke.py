@@ -4,7 +4,9 @@ End-to-end smoke test of the Campaign loop on a small chemistry oracle.
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
+import torch
 
 from expdoe_dk import (
     Campaign,
@@ -117,3 +119,36 @@ def test_campaign_checkpoint_roundtrip(tmp_path):
     # History rows match.
     assert len(campaign2._X_phys) == len(campaign._X_phys)
     assert np.allclose(campaign2._y_internal, campaign._y_internal)
+
+
+def test_ask_batch_deduplicates_repeated_acquisition_candidates(monkeypatch):
+    """Repeated q=1 acquisition optima should not duplicate a lab run."""
+    from expdoe_dk.bo import loop as loop_mod
+
+    space = Space(
+        params=[
+            Parameter("x0", bounds=(0.0, 1.0)),
+            Parameter("x1", bounds=(0.0, 1.0)),
+        ],
+        objectives="y",
+        maximize=True,
+    )
+    campaign = Campaign(space, Knowledge(), seed=7)
+    X = pd.DataFrame({"x0": [0.1, 0.5, 0.9], "x1": [0.2, 0.5, 0.8]})
+    campaign.tell(X, [0.0, 1.0, 0.0])
+
+    repeated = torch.tensor([[0.25, 0.75]], dtype=torch.float64)
+    monkeypatch.setattr(loop_mod, "fit_gpytorch_mll", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(loop_mod, "optimize_acqf", lambda *_args, **_kwargs: (repeated, None))
+    monkeypatch.setattr(
+        loop_mod,
+        "generate_doe",
+        lambda space, n, **_kwargs: pd.DataFrame(
+            {"x0": np.linspace(0.4, 0.4 + 0.1 * (n - 1), n), "x1": np.full(n, 0.2)}
+        ),
+    )
+
+    batch = campaign.ask(q=2)
+
+    assert len(batch) == 2
+    assert len(batch.drop_duplicates()) == 2
