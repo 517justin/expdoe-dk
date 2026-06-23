@@ -1,3 +1,5 @@
+[中文版 README](./README_zh.md)
+
 # expdoe-dk
 
 **Experimental Design of Experiments + Bayesian Optimization, with Domain Knowledge injection — for chemistry, materials, and lab experimentalists.**

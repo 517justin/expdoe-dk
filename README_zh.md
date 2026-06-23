@@ -1,3 +1,5 @@
+[English README](./README.md)
+
 # expdoe-dk
 
 **實驗設計 (DoE) + 貝葉斯優化 (BO)，支援領域知識注入 — 專為化學、材料及實驗研究者打造。**
