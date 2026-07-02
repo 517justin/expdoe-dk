@@ -87,7 +87,7 @@ def _process_knowledge() -> ed.Knowledge:
         ed.Knowledge()
         .with_quadratic_peak("pH", center=7.0)
         .with_quadratic_peak("catalyst", center=2.5)
-        .with_quadratic_peak("time", center=130.0)
+        .with_quadratic_peak("time", center=105.0)
     )
 
 
@@ -182,6 +182,8 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=5)
     parser.add_argument("--doe-method", choices=["auto", *METHODS], default="auto")
     args = parser.parse_args()
+    if args.seeds < 1:
+        parser.error("--seeds must be >= 1")
 
     warnings.simplefilter("ignore")
     spec = make_problem(args.dim)
