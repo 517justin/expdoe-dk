@@ -15,15 +15,28 @@ SIM_DIR = REPO_ROOT / "experiments" / "simulation_data2"
 
 def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
     assert spec is not None
     assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    missing = object()
+    previous_module = sys.modules.get(name, missing)
+    previous_oracles = sys.modules.get("_oracles", missing)
     old_path = list(sys.path)
     sys.path.insert(0, str(path.parent))
+    sys.modules[name] = module
+    sys.modules.pop("_oracles", None)
     try:
         spec.loader.exec_module(module)
     finally:
         sys.path[:] = old_path
+        if previous_module is missing:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous_module
+        if previous_oracles is missing:
+            sys.modules.pop("_oracles", None)
+        else:
+            sys.modules["_oracles"] = previous_oracles
     return module
 
 
