@@ -118,41 +118,67 @@ def _failure_lab_metrics(total_evals: int) -> dict[str, object]:
     }
 
 
-def summarize(raw: pd.DataFrame, total_evals: int) -> pd.DataFrame:
+def summarize(
+    rows_or_raw: pd.DataFrame | list[dict[str, object]],
+    group_col: str,
+    baseline_label: str | None = None,
+) -> pd.DataFrame:
+    raw = pd.DataFrame(rows_or_raw).copy()
+    if group_col not in raw.columns:
+        raise KeyError(f"summary group column not found: {group_col}")
+
+    median_cols = [
+        col
+        for col in ["clean_final", "gap_final", "clean@doe_end", "clean@mid"]
+        if col in raw.columns
+    ]
+    grouped = raw.groupby(group_col, dropna=False)
     summary = (
-        raw.groupby("method")[["clean_final", "gap_final", "clean@doe_end", "clean@mid"]]
-        .median()
-        .round(4)
+        grouped[median_cols].median().round(4)
+        if median_cols
+        else pd.DataFrame(index=grouped.size().index)
     )
-    raw = raw.copy()
-    raw["_ttg"] = raw["trials_to_95pct"].fillna(total_evals + 1)
-    summary["trials_to_95 median"] = raw.groupby("method")["_ttg"].median().astype(int)
-    summary["%seeds_hit_95"] = (
-        raw.groupby("method")["trials_to_95pct"]
-        .apply(lambda s: round(100.0 * s.notna().mean(), 1))
-    )
-    summary["%runs_feasible"] = (
-        raw.groupby("method")["all_rows_feasible"].apply(lambda s: round(100.0 * s.mean(), 1))
-    )
-    summary["%runs_on_grid"] = (
-        raw.groupby("method")["all_rows_on_grid"].apply(lambda s: round(100.0 * s.mean(), 1))
-    )
-    summary["duplicate median"] = raw.groupby("method")["duplicate_rows"].median()
 
-    if "random_uniform" in summary.index:
-        baseline_gap = float(
-            raw.loc[raw["method"] == "random_uniform", "gap_final"].median()
-        )
-        if abs(baseline_gap) < 1e-4:
-            summary["delta gap vs random_uniform"] = np.nan
+    if "trials_to_95pct" in raw.columns:
+        if "total_evals" in raw.columns and raw["total_evals"].notna().any():
+            total_eval_fallback = int(raw["total_evals"].max()) + 1
         else:
-            summary["delta gap vs random_uniform"] = (
-                100.0 * (baseline_gap - summary["gap_final"]) / abs(baseline_gap)
-            ).round(1)
-    else:
-        summary["delta gap vs random_uniform"] = np.nan
+            total_eval_fallback = int(grouped.size().max()) + 1
+        raw["_ttg"] = raw["trials_to_95pct"].fillna(total_eval_fallback)
+        summary["trials_to_95 median"] = grouped["_ttg"].median().astype(int)
+        summary["%seeds_hit_95"] = grouped["trials_to_95pct"].apply(
+            lambda s: round(100.0 * s.notna().mean(), 1)
+        )
 
-    return summary.sort_values("gap_final", ascending=True)
+    if "all_rows_feasible" in raw.columns:
+        summary["%runs_feasible"] = grouped["all_rows_feasible"].apply(
+            lambda s: round(100.0 * s.mean(), 1)
+        )
+    if "all_rows_on_grid" in raw.columns:
+        summary["%runs_on_grid"] = grouped["all_rows_on_grid"].apply(
+            lambda s: round(100.0 * s.mean(), 1)
+        )
+    if "duplicate_rows" in raw.columns:
+        summary["duplicate median"] = grouped["duplicate_rows"].median()
+
+    if baseline_label is not None:
+        delta_col = f"delta gap vs {baseline_label}"
+        if baseline_label in summary.index and "gap_final" in raw.columns:
+            baseline_gap = float(
+                raw.loc[raw[group_col] == baseline_label, "gap_final"].median()
+            )
+            if abs(baseline_gap) < 1e-4:
+                summary[delta_col] = np.nan
+            else:
+                summary[delta_col] = (
+                    100.0 * (baseline_gap - summary["gap_final"]) / abs(baseline_gap)
+                ).round(1)
+        else:
+            summary[delta_col] = np.nan
+
+    if "gap_final" in summary.columns:
+        return summary.sort_values("gap_final", ascending=True)
+    return summary
 
 
 def main() -> None:
@@ -216,6 +242,7 @@ def main() -> None:
                         float(clean[mid_idx]) if len(clean) > mid_idx else float("nan")
                     ),
                     "trials_to_95pct": trials_to_target,
+                    "total_evals": total_evals,
                     "secs": elapsed,
                     **metrics,
                 }
@@ -242,7 +269,7 @@ def main() -> None:
     print(f"\n  Total: {(time.time() - started) / 60.0:.1f} min")
 
     raw = pd.DataFrame(rows)
-    summary = summarize(raw, total_evals)
+    summary = summarize(raw, "method", baseline_label="random_uniform")
 
     print("\n" + "-" * 80)
     print(f" Summary (median over {len(seeds)} seed(s))")
