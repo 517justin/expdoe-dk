@@ -74,7 +74,7 @@ def lab_metrics(space: ed.Space, history: pd.DataFrame) -> dict[str, object]:
     }
 
 
-def _clean_best_trace(spec: ProblemSpec, history: pd.DataFrame) -> np.ndarray:
+def clean_best_trace(spec: ProblemSpec, history: pd.DataFrame) -> np.ndarray:
     """Re-evaluate the best observed X so far with the noiseless oracle."""
     param_cols = spec.space.param_names
     best_idx = 0
@@ -102,7 +102,7 @@ def run_one(spec: ProblemSpec, method: str, seed: int) -> dict[str, object]:
     result = campaign.finalize()
     history = result.history_df
     return {
-        "clean": _clean_best_trace(spec, history),
+        "clean": clean_best_trace(spec, history),
         "history": history,
         "lab_metrics": lab_metrics(spec.space, history),
     }
@@ -126,21 +126,23 @@ def summarize(raw: pd.DataFrame, total_evals: int) -> pd.DataFrame:
     )
     raw = raw.copy()
     raw["_ttg"] = raw["trials_to_95pct"].fillna(total_evals + 1)
-    summary["trials_to_95% median"] = raw.groupby("method")["_ttg"].median().astype(int)
-    summary["% seeds hit 95"] = (
+    summary["trials_to_95 median"] = raw.groupby("method")["_ttg"].median().astype(int)
+    summary["%seeds_hit_95"] = (
         raw.groupby("method")["trials_to_95pct"]
         .apply(lambda s: round(100.0 * s.notna().mean(), 1))
     )
-    summary["% runs feasible"] = (
+    summary["%runs_feasible"] = (
         raw.groupby("method")["all_rows_feasible"].apply(lambda s: round(100.0 * s.mean(), 1))
     )
-    summary["% runs on grid"] = (
+    summary["%runs_on_grid"] = (
         raw.groupby("method")["all_rows_on_grid"].apply(lambda s: round(100.0 * s.mean(), 1))
     )
     summary["duplicate median"] = raw.groupby("method")["duplicate_rows"].median()
 
     if "random_uniform" in summary.index:
-        baseline_gap = float(summary.loc["random_uniform", "gap_final"])
+        baseline_gap = float(
+            raw.loc[raw["method"] == "random_uniform", "gap_final"].median()
+        )
         if abs(baseline_gap) < 1e-4:
             summary["delta gap vs random_uniform"] = np.nan
         else:
