@@ -9,8 +9,9 @@ emphasizes engineering validity:
 
 - every factor is discrete;
 - 6D includes linear formulation constraints;
-- summaries report feasibility, grid validity, duplicate rows, runtime, and
-  clean optimization metrics;
+- summaries report feasibility, grid validity, duplicate rows, and clean
+  optimization metrics; raw CSV rows include per-run runtime as `secs`, and the
+  console log prints elapsed time;
 - Experiment 02 can choose its DoE method from Experiment 01 output.
 
 ## Problems
@@ -56,7 +57,9 @@ For faster smoke runs:
 
 ```bash
 python experiments/simulation_data2/01_doe_method_comparison.py --dim 4 --seeds 1
+python experiments/simulation_data2/01_doe_method_comparison.py --dim 6 --seeds 1
 python experiments/simulation_data2/02_knowledge_comparison.py --dim 4 --seeds 1 --doe-method auto
+python experiments/simulation_data2/02_knowledge_comparison.py --dim 6 --seeds 1 --doe-method auto
 ```
 
 ## Interpreting Results
@@ -66,7 +69,7 @@ algorithm. A successful run should have:
 
 - zero constraint violations;
 - zero grid violations;
-- duplicate suggestions recorded in `n_duplicate_rows`;
+- duplicate suggestions recorded in `duplicate_rows`;
 - all scripts completing without crashes;
 - 6D visibly harder than 4D;
 - wrong knowledge not consistently beating full or partial knowledge.
