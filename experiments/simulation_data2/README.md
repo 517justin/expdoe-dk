@@ -87,10 +87,27 @@ feasible and on-grid, and the median duplicate count was zero.
 Knowledge is held fixed at a plain GP, so the only variable is the initial
 DoE method.
 
-| Dim | Best method | clean_final | gap_final | %seeds_hit_95 |
-| --- | --- | ---: | ---: | ---: |
-| 4D | `sobol` | 0.4886 | 0.0249 | 66.7 |
-| 6D | `lhs_maximin` | 0.5217 | 0.0842 | 33.3 |
+#### 4D
+
+| Method | clean_final | gap_final | clean@doe_end | clean@mid | trials_to_95 median | %seeds_hit_95 | Gap improvement vs `random_uniform` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `sobol` | 0.4886 | 0.0249 | 0.2676 | 0.4096 | 19 | 66.7 | 69.4% |
+| `halton` | 0.4846 | 0.0289 | 0.1987 | 0.3355 | 22 | 33.3 | 64.5% |
+| `lhs_random` | 0.4743 | 0.0391 | 0.1677 | 0.3247 | 22 | 0.0 | 52.0% |
+| `lhs_maximin` | 0.4534 | 0.0600 | 0.1650 | 0.1846 | 22 | 0.0 | 26.3% |
+| `random_uniform` | 0.4320 | 0.0814 | 0.2351 | 0.3320 | 22 | 33.3 | 0.0% |
+| `d_optimal` | 0.4160 | 0.0974 | 0.0208 | 0.2345 | 22 | 0.0 | -19.6% |
+
+#### 6D
+
+| Method | clean_final | gap_final | clean@doe_end | clean@mid | trials_to_95 median | %seeds_hit_95 | Gap improvement vs `random_uniform` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `lhs_maximin` | 0.5217 | 0.0842 | 0.0559 | 0.3054 | 31 | 33.3 | 78.7% |
+| `sobol` | 0.4949 | 0.1109 | 0.1072 | 0.2946 | 31 | 0.0 | 71.9% |
+| `halton` | 0.4194 | 0.1865 | 0.1401 | 0.2082 | 31 | 0.0 | 52.8% |
+| `lhs_random` | 0.3269 | 0.2790 | 0.0500 | 0.1392 | 31 | 0.0 | 29.4% |
+| `random_uniform` | 0.2108 | 0.3951 | 0.0492 | 0.0952 | 31 | 33.3 | -0.0% |
+| `d_optimal` | 0.1670 | 0.4388 | 0.0207 | 0.1286 | 31 | 0.0 | -11.1% |
 
 Result: the preferred DoE method changes with dimensionality. `sobol` is the
 best 4D choice in this run, while `lhs_maximin` is best in 6D. Experiment 02
@@ -101,10 +118,29 @@ uses these Experiment 01 summaries when `--doe-method auto` is selected.
 Experiment 02 uses the best available DoE method from Experiment 01 and
 compares knowledge configurations.
 
-| Dim | Best config | clean_final | gap_final | Gap improvement vs baseline |
-| --- | --- | ---: | ---: | ---: |
-| 4D | `D: process knowledge` | 0.5098 | 0.0036 | 85.5% |
-| 6D | `G: full mixed knowledge` | 0.5982 | 0.0076 | 91.0% |
+#### 4D
+
+| Config | clean_final | gap_final | clean@doe_end | clean@mid | trials_to_95 median | %seeds_hit_95 | Gap improvement vs baseline |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `D: process knowledge` | 0.5098 | 0.0036 | 0.2676 | 0.4811 | 18 | 66.7 | 85.5% |
+| `C: gp_prior only` | 0.5062 | 0.0072 | 0.2676 | 0.4369 | 20 | 100.0 | 71.1% |
+| `G: full mixed knowledge` | 0.4964 | 0.0170 | 0.2676 | 0.4644 | 21 | 66.7 | 31.6% |
+| `F: wrong process knowledge` | 0.4921 | 0.0213 | 0.2676 | 0.3822 | 18 | 66.7 | 14.4% |
+| `B: random_augment only` | 0.4920 | 0.0214 | 0.2676 | 0.4534 | 16 | 66.7 | 14.0% |
+| `E: partial process knowledge` | 0.4909 | 0.0225 | 0.2676 | 0.4437 | 18 | 100.0 | 9.5% |
+| `A: baseline (plain GP)` | 0.4886 | 0.0249 | 0.2676 | 0.4096 | 19 | 66.7 | -0.1% |
+
+#### 6D
+
+| Config | clean_final | gap_final | clean@doe_end | clean@mid | trials_to_95 median | %seeds_hit_95 | Gap improvement vs baseline |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `G: full mixed knowledge` | 0.5982 | 0.0076 | 0.0559 | 0.4922 | 23 | 100.0 | 91.0% |
+| `A: baseline (plain GP)` | 0.5217 | 0.0842 | 0.0559 | 0.3054 | 31 | 33.3 | -0.0% |
+| `B: random_augment only` | 0.3923 | 0.2136 | 0.0559 | 0.1664 | 31 | 0.0 | -153.7% |
+| `D: process knowledge` | 0.3688 | 0.2370 | 0.0559 | 0.0764 | 31 | 0.0 | -181.5% |
+| `F: wrong process knowledge` | 0.3566 | 0.2493 | 0.0559 | 0.1423 | 31 | 0.0 | -196.1% |
+| `E: partial process knowledge` | 0.2652 | 0.3407 | 0.0559 | 0.1200 | 31 | 33.3 | -304.7% |
+| `C: gp_prior only` | 0.2626 | 0.3432 | 0.0559 | 0.0806 | 31 | 0.0 | -307.6% |
 
 Result: process knowledge is already useful in 4D, but the full formulation
 plus process knowledge is most valuable in 6D. The 6D case is harder than 4D,
