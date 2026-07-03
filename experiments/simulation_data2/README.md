@@ -76,3 +76,47 @@ algorithm. A successful run should have:
 
 When baseline gap is near zero, relative gap improvement is reported as
 `NaN` to avoid misleading percentages.
+
+## Results Snapshot
+
+The latest checked run used 3 seeds for each 4D/6D script. All rows were
+feasible and on-grid, and the median duplicate count was zero.
+
+### Experiment 01 - DoE Method Comparison
+
+Knowledge is held fixed at a plain GP, so the only variable is the initial
+DoE method.
+
+| Dim | Best method | clean_final | gap_final | %seeds_hit_95 |
+| --- | --- | ---: | ---: | ---: |
+| 4D | `sobol` | 0.4886 | 0.0249 | 66.7 |
+| 6D | `lhs_maximin` | 0.5217 | 0.0842 | 33.3 |
+
+Result: the preferred DoE method changes with dimensionality. `sobol` is the
+best 4D choice in this run, while `lhs_maximin` is best in 6D. Experiment 02
+uses these Experiment 01 summaries when `--doe-method auto` is selected.
+
+### Experiment 02 - Knowledge Comparison
+
+Experiment 02 uses the best available DoE method from Experiment 01 and
+compares knowledge configurations.
+
+| Dim | Best config | clean_final | gap_final | Gap improvement vs baseline |
+| --- | --- | ---: | ---: | ---: |
+| 4D | `D: process knowledge` | 0.5098 | 0.0036 | 85.5% |
+| 6D | `G: full mixed knowledge` | 0.5982 | 0.0076 | 91.0% |
+
+Result: process knowledge is already useful in 4D, but the full formulation
+plus process knowledge is most valuable in 6D. The 6D case is harder than 4D,
+yet the full mixed knowledge configuration reached the 95% target in all
+tested seeds.
+
+## Takeaways
+
+- The tool remains usable under realistic discrete grids and linear
+  formulation constraints.
+- DoE method choice matters: no single method is best across 4D and 6D.
+- Knowledge injection matters more in the harder 6D mixed formulation/process
+  setting.
+- The feasibility checks passed cleanly: zero constraint violations, zero
+  grid violations, and zero median duplicate rows.
