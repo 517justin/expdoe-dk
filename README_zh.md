@@ -2,174 +2,147 @@
 
 # expdoe-dk
 
-**實驗設計 (DoE) + 貝葉斯優化 (BO)，支援領域知識注入 — 專為化學、材料及實驗研究者打造。**
+**實驗設計 (DoE) + 貝葉斯優化 (BO)，支援選擇性領域知識注入，適合化學、材料與實驗室流程。**
 
-如果你是化學家或材料研究者，需要在幾十次實驗內找到最佳條件，這個函式庫提供：
+`expdoe-dk` 協助實驗者規劃少量初始實驗，遵守真實實驗限制，並接著用高斯過程貝葉斯優化推進下一批條件。套件以物理單位、離散操作刻度、線性限制與領域知識為核心，例如單調趨勢、Arrhenius 溫度效應與峰值型因子。
 
-1. **支援限制條件與離散刻度的 DoE** — 初始設計自動滿足「A 必須 ≥ B + 1 mL」、「這個旋鈕只能以 0.5 mL 為單位調整」等限制，不需要事後手動取整。
-2. **貝葉斯優化** — 在初始 DoE 之後用高斯過程 (GP) 代理模型驅動後續實驗。
-3. **領域知識注入** — 告訴優化器「溫度提高產率 (Arrhenius)」或「pH 在 7 時達到峰值」，它會利用這些提示而非與你對抗。
+## 功能概覽
+
+| 功能 | 說明 |
+|------|------|
+| 限制式 DoE | 使用 LHS、Sobol、Halton、D-optimal 或 random 產生初始點，同時遵守邊界、離散步階與線性限制。 |
+| 貝葉斯優化 | 初始 DoE 後，以 GP 模型和 ask/tell campaign loop 繼續建議實驗條件。 |
+| 領域知識 | 用 `Knowledge().with_arrhenius(...)`、`with_monotone(...)`、`with_quadratic_peak(...)` 等 helper 編碼已知趨勢。 |
+| 實驗室輸出 | 使用物理單位操作，並可輸出可分享的 HTML campaign report。 |
+| 安全預設 | 若未提供知識，Campaign 使用純 GP，不會偷偷注入假設。 |
+
+## 快速範例
 
 ```python
 import expdoe_dk as ed
 
 space = ed.Space(
     params=[
-        ed.Parameter("T",      bounds=(60, 120), unit="°C"),
-        ed.Parameter("time",   bounds=(10, 180), unit="min"),
-        ed.Parameter("conc_A", bounds=(1, 10), unit="mL", kind="discrete", step=1.0),
-        ed.Parameter("conc_B", bounds=(1, 10), unit="mL", kind="discrete", step=1.0),
-    ],
-    constraints=[
-        ed.LinearConstraint(coeffs={"conc_A": 1, "conc_B": -1}, lower=1.0),
+        ed.Parameter("T", bounds=(60, 120), unit="degC", kind="discrete", step=1),
+        ed.Parameter("time", bounds=(10, 180), unit="min", kind="discrete", step=5),
+        ed.Parameter("pH", bounds=(4, 10), kind="discrete", step=1),
+        ed.Parameter("conc_A", bounds=(1, 10), unit="mL", kind="discrete", step=1),
     ],
     objectives="yield_pct",
     maximize=True,
 )
 
-knowledge = (ed.Knowledge()
-             .with_arrhenius("T")
-             .with_monotone("time", effect="increases_objective")
-             .with_quadratic_peak("conc_A", center=7.0))
+knowledge = (
+    ed.Knowledge()
+    .with_arrhenius("T")
+    .with_monotone("time", effect="increases_objective")
+    .with_quadratic_peak("pH", center=7)
+)
 
 campaign = ed.Campaign(space, knowledge, seed=42)
 
-doe   = campaign.suggest_doe(n=12)         # 回傳 DataFrame，單位為 °C / min / mL
-y_doe = run_lab_experiments(doe)           # 化學家實測
+doe = campaign.suggest_doe(n=12)
+y_doe = run_lab_experiments(doe)
 campaign.tell(doe, y_doe)
 
 for _ in range(20):
-    next_pts = campaign.ask(q=1)
-    y_next   = run_lab_experiments(next_pts)
-    campaign.tell(next_pts, y_next)
+    x_next = campaign.ask(q=1)
+    y_next = run_lab_experiments(x_next)
+    campaign.tell(x_next, y_next)
 
 result = campaign.finalize()
-result.to_html("campaign_report.html")     # 可分享的 HTML 報告
+result.to_html("campaign_report.html")
 ```
-
-套件位於 [`expdoe-dk/`](./expdoe-dk/)。歷史研究框架（Ax+BoTorch wrapper）保留在 `ax_doe_bo.py` / `doe_utils.py` / `benchmarks.py` 供重現；新工作請使用 `expdoe-dk`。
-
----
 
 ## 安裝
 
+從 repo 根目錄進行一般開發安裝：
+
 ```bash
-cd expdoe-dk
-pip install -e .          # 可編輯安裝
+pip install -r requirements.txt
+pip install -e ./expdoe-dk
 ```
 
-需要 Python 3.10+、BoTorch >= 0.11、Ax >= 1.2.4。
+或直接從套件目錄安裝：
 
----
+```bash
+cd expdoe-dk
+pip install -e .
+```
+
+執行時需求列在 [`requirements.txt`](./requirements.txt)，並同步寫在 [`expdoe-dk/pyproject.toml`](./expdoe-dk/pyproject.toml)：Python 3.10+、PyTorch、BoTorch、GPyTorch、Ax、NumPy、SciPy、pandas、matplotlib、pyDOE3。
+
+開發與測試工具：
+
+```bash
+cd expdoe-dk
+pip install -e ".[dev]"
+pytest -q
+```
+
+若要執行較慢的整合測試：
+
+```bash
+pytest -q --run-slow
+```
 
 ## 目錄結構
 
-```
-expdoe-dk/                          # ★ 可發布的 Python 套件
+```text
+expdoe-dk/                          # 可發布的 Python 套件
   src/expdoe_dk/
     space.py                        # Parameter, LinearConstraint, Space
-    doe/                            # 6 種 DoE 方法 (LHS maximin / Sobol / Halton / ...)
-    knowledge/                      # 知識組合 + 座標翻譯器
-    bo/                             # Campaign + HTML 報告
-    legacy/                         # ax_doe_bo 向後相容 shim
-  tests/                            # 53 個單元+整合測試
-  LICENSE / NOTICE                  # Apache 2.0
-  pyproject.toml                    # 建置 + 依賴規格
+    doe/                            # DoE 方法
+    knowledge/                      # 知識規格與座標翻譯
+    bo/                             # Campaign loop 與 HTML 報告
+    legacy/                         # ax_doe_bo 相容 shim
+  tests/                            # 單元與整合測試
+  pyproject.toml                    # 套件 metadata 與 dependencies
 
-examples/                           # ★ 化學家導向的使用示範
-  01_reaction_optimization.{py,ipynb}   # 化學工作流端對端示範
-  02_html_report.py                     # v0.4 HTML 報告示範
-
-experiments/                        # ★ 基於套件的可重現研究
-  README.md                             # 實驗總覽 + 解讀
-  simulation_data1/                     # 標準 clean-oracle 實驗
-  simulation_data2/                     # 離散限制式實驗
-
+examples/                           # 端對端使用範例
+experiments/                        # 可重現研究與結果說明
 docs/superpowers/specs/              # 規劃中實驗的設計文件
-```
 
----
+ax_doe_bo.py / doe_utils.py / benchmarks.py
+                                    # 保留供重現的歷史研究框架
+```
 
 ## 範例與實驗
 
-| 路徑 | 功能 |
+| 路徑 | 用途 |
 |------|------|
-| [`examples/01_reaction_optimization.py`](./examples/01_reaction_optimization.py) | 化學家端對端執行 DoE → BO + 知識注入，23 次評估找到真正最佳值 |
-| [`examples/02_html_report.py`](./examples/02_html_report.py) | 重現 v0.4 HTML 報告 (`Result.to_html`) |
-| [`experiments/simulation_data1/01_doe_method_comparison.py`](./experiments/simulation_data1/01_doe_method_comparison.py) | 固定知識設定，比較 DoE 方法對 BO 結果的影響 |
-| [`experiments/simulation_data1/02_knowledge_comparison.py`](./experiments/simulation_data1/02_knowledge_comparison.py) | 固定 DoE 方法，比較知識注入類型的效果 |
+| [`examples/01_reaction_optimization.py`](./examples/01_reaction_optimization.py) | DoE 到 BO 的端對端反應優化範例。 |
+| [`examples/02_html_report.py`](./examples/02_html_report.py) | 示範 `Result.to_html(...)`。 |
+| [`experiments/simulation_data1/`](./experiments/simulation_data1/) | 乾淨 synthetic oracle 的 DoE 方法與知識比較研究。 |
+| [`experiments/simulation_data2/`](./experiments/simulation_data2/) | 離散、限制式、接近實驗室情境的 simulation study。 |
+| [`docs/superpowers/specs/`](./docs/superpowers/specs/) | 未來 simulation datasets 的規劃文件。 |
 
-執行方式：
+首頁 README 只保留實驗入口與簡短說明。詳細方法、表格與結論放在 [`experiments/`](./experiments/)，特別是 [`experiments/README.md`](./experiments/README.md) 與各 simulation dataset 的 README。
 
-```bash
-python examples/01_reaction_optimization.py
-python experiments/simulation_data1/01_doe_method_comparison.py
-```
+## 使用建議
 
----
-
-## 實驗結果摘要
-
-使用三個合成化學目標函數 (2D / 4D / 6D) 測試，統一預算
-n_doe=6、n_iter=15（共 21 次評估），5 個隨機種子。完整表格見
-[`experiments/README.md`](./experiments/README.md)。
-
-| 配置 | 2D | 4D | 6D |
-|------|:--:|:--:|:--:|
-| **A: 純 GP** | 第 3 (gap 0.0005) | 第 3 (0.0092) | 第 2 (0.1480) |
-| ① 完整領域知識 | 第 2 (0.0003) | 第 5 (0.0256) | **第 1 (0.1012)** |
-| ③ 僅 GP 先驗 | **第 1 (0.0002)** | 第 2 (0.0087) | 第 3 (0.1782) |
-| G: 錯誤方向 | 最後 | 最後 | 最後 |
-
-**結論：** 純 GP 是安全的預設選擇（所有維度都在前三名）。領域知識在資料相對維度不足時幫助最大（6D）。堆疊多個知識原語可能有害（① 在 4D 崩潰）。錯誤方向的先驗穩定墊底。
-
----
-
-## 知識類別
-
-| 類別 | API | 適用時機 |
-|------|-----|----------|
-| ① 領域知識（正確） | `with_arrhenius`、`with_quadratic_peak`、`with_monotone` | 高維問題且有已知物理/化學知識 |
-| ② 純正則化（未驗證） | `with_random_augment(n=...)` | 探索性選項 — 預算緊時可能有害 |
-| ③ 弱知識（僅 GP 先驗） | `with_gp_prior("medium")` | 低維問題；超參數調整提示 |
-| ④ 避免使用（可學習均值） | `with_arrhenius(frozen=False)`（會觸發警告） | 請改用 frozen 版本 |
-| ⑤ 避免使用（單調 + 先驗） | `with_monotone(epsilon=0.02)` + 強先驗 | 已有自動救援機制 |
-
-如果沒有特定知識，保守的預設選擇是 **純 GP**（`Campaign(space)` 搭配 `knowledge=None`）。
-
----
-
-## 安全預設行為
-
-| 陷阱（經實驗發現） | expdoe-dk 的處理方式 |
-|-------------------|---------------------|
-| 單調方向在使用者/產率空間定義，但 BO 最小化 `-yield`，GP 看到的方向相反 | `with_monotone(effect="increases_objective")` 使用物理空間語義；`_frame.flip_for_minimize` 在內部自動翻轉 |
-| `MonotonicGPWithDerivatives` 的 epsilon=0.02 與 Gamma(3,6) lengthscale 先驗衝突，導致 13 倍劣化 | `epsilon="auto"` 解析為 `0.3 x prior_lengthscale_mode`；明確設定過小的 epsilon 會自動救援 (v0.3) |
-| 可學習均值參數被 MLE 吸收，均值函數失去作用 | `Arrhenius`、`QuadraticMean` 預設 `frozen=True`；可學習版本會發出 `LearnableMeanAbsorptionWarning` |
-| 錯誤的單調假設無聲地傷害結果 | 每 K 次觀測後 Campaign 執行 Spearman 檢驗，不一致時發出 `MonotoneViolationWarning` (v0.2) |
-| 未給定任何知識 | Campaign 執行 **純 GP** — 不會自動注入任何結構。保守、無意外的預設 |
-| 把 `with_random_augment` 當作「免費」預設 | 這是純正則化，效益**仍在驗證中**。函式庫不會自動套用 — 必須手動啟用 |
-
----
+- 沒有明確物理假設時，先使用 `Campaign(space)`，也就是純 GP。
+- 有強假設時再加入領域知識，例如「溫度提高產率」或「pH 約在 7 達峰值」。
+- `with_random_augment(...)` 視為探索性正則化，不要當作預設。
+- 實驗預算有限時，主動優化的因子數不要太多。
+- 需要放入實驗紀錄或分享給合作者時，使用 `result.to_html(...)` 輸出報告。
 
 ## 路線圖
 
 | 版本 | 新增功能 | 狀態 |
-|------|---------|------|
-| v0.1 | 限制式 DoE + 知識組合 + Campaign 迴圈 + 1 個範例 | [已發布](https://github.com/517justin/expdoe-dk/releases/tag/v0.1.0) |
-| v0.2 | 經驗驗證器（Spearman 單調檢驗 + frozen-mean 形狀檢驗）每 K 次觀測自動執行 | [已發布](https://github.com/517justin/expdoe-dk/releases/tag/v0.2.0) |
-| v0.3 | epsilon 自動救援：`with_monotone` + `with_gp_prior` 自動提升 epsilon 至安全值 | [已發布](https://github.com/517justin/expdoe-dk/releases/tag/v0.3.0) |
-| v0.4 | HTML 報告 (`Result.to_html()`) | [已發布](https://github.com/517justin/expdoe-dk/releases/tag/v0.4.0) |
-| v0.5 | Claude Code skill 封裝（`.claude/skills/`、無狀態 API） | 待開發 |
-| v0.6 | MCP server（FastMCP、JSON 工具介面） | 待開發 |
-| v0.7 | 多目標優化（qLogEHVI、Pareto 前沿） | 待開發 |
-| v0.8 | 多保真度 BO（低成本篩選 → 高成本實驗，MFKG） | 待開發 |
-| v1.0 | 穩定 API、移除 legacy shim | 待開發 |
-
----
+|------|----------|------|
+| v0.1 | 限制式 DoE、知識組合、Campaign loop、第一個範例 | 已發布 |
+| v0.2 | 單調性與 frozen-mean shape 的經驗驗證器 | 已發布 |
+| v0.3 | monotone knowledge + GP prior 的 epsilon 自動救援 | 已發布 |
+| v0.4 | 單檔 HTML report | 已發布 |
+| v0.5 | Claude Code skill 封裝 | 規劃中 |
+| v0.6 | MCP server 介面 | 規劃中 |
+| v0.7 | 多目標 BO | 規劃中 |
+| v0.8 | 多保真度 BO | 規劃中 |
+| v1.0 | 穩定 API 並移除 legacy shim | 規劃中 |
 
 ## 授權
 
-Apache License, Version 2.0 — 見 [`LICENSE`](./LICENSE) 及 [`NOTICE`](./NOTICE)。
+Apache License, Version 2.0。詳見 [`LICENSE`](./LICENSE) 與 [`NOTICE`](./NOTICE)。
 
-此目錄中的歷史程式碼（`ax_doe_bo.py`、`doe_utils.py`、`benchmarks.py`）原為 MIT 授權；改版後統一採用 Apache 2.0。原 MIT 條款保留在 git 歷史中。
+歷史檔案 `ax_doe_bo.py`、`doe_utils.py`、`benchmarks.py` 原為 MIT 授權，保留作為重現用途；原始條款可在 git 歷史中查到。
