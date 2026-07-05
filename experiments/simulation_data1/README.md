@@ -13,11 +13,11 @@ with `--dim {2,4,6}`, with the noise-free gap-from-optimum as the headline
 metric. Each config is run over 5 random seeds.
 
 ```bash
-python experiments/01_doe_method_comparison.py --dim 2   # ~3 min
-python experiments/02_knowledge_comparison.py --dim 4    # ~9 min
+python experiments/simulation_data1/01_doe_method_comparison.py --dim 2   # ~3 min
+python experiments/simulation_data1/02_knowledge_comparison.py --dim 4    # ~9 min
 ```
 
-Results write to `experiments/outputs/*.csv`. Archived snapshots live in
+Results write to `experiments/simulation_data1/outputs/*.csv`. Archived snapshots live in
 numbered folders (e.g. [`data_snapshot_01/`](./data_snapshot_01/) — single-RNG noise,
 unified budget n_doe=6 / n_iter=15).
 
@@ -143,9 +143,9 @@ Exp-10 v2). Knowledge is held constant at *none* (plain GP), so the only
 variable is the DoE method and the comparison is fair.
 
 ```bash
-python experiments/01_doe_method_comparison.py             # 2D (default)
-python experiments/01_doe_method_comparison.py --dim 4
-python experiments/01_doe_method_comparison.py --dim 6
+python experiments/simulation_data1/01_doe_method_comparison.py             # 2D (default)
+python experiments/simulation_data1/01_doe_method_comparison.py --dim 4
+python experiments/simulation_data1/01_doe_method_comparison.py --dim 6
 ```
 
 > **Note:** The tables below were generated under the previous per-dimension
@@ -264,9 +264,9 @@ noise stream** per run (matching the §6b convention). Baseline `A` is a
 plain GP (`knowledge=None`).
 
 ```bash
-python experiments/02_knowledge_comparison.py             # 2D (default), ~2 min
-python experiments/02_knowledge_comparison.py --dim 4     # ~4 min
-python experiments/02_knowledge_comparison.py --dim 6     # ~5 min
+python experiments/simulation_data1/02_knowledge_comparison.py             # 2D (default), ~2 min
+python experiments/simulation_data1/02_knowledge_comparison.py --dim 4     # ~4 min
+python experiments/simulation_data1/02_knowledge_comparison.py --dim 6     # ~5 min
 ```
 
 Unified budget across all dimensions: **n_doe = 6, n_iter = 15 (total 21 evals)**.

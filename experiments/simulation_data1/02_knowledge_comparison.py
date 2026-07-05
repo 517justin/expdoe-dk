@@ -20,10 +20,10 @@ running this script against them should reproduce the §6b pattern:
   G  wrong direction — v0.2 Spearman validator warns; performance suffers
 
 Run with:
-    python experiments/02_knowledge_comparison.py             # 2D (default)
-    python experiments/02_knowledge_comparison.py --dim 4
-    python experiments/02_knowledge_comparison.py --dim 6
-    python experiments/02_knowledge_comparison.py --seeds 3   # fewer seeds, faster
+    python experiments/simulation_data1/02_knowledge_comparison.py             # 2D (default)
+    python experiments/simulation_data1/02_knowledge_comparison.py --dim 4
+    python experiments/simulation_data1/02_knowledge_comparison.py --dim 6
+    python experiments/simulation_data1/02_knowledge_comparison.py --seeds 3   # fewer seeds, faster
 """
 from __future__ import annotations
 

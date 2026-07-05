@@ -138,7 +138,7 @@ process parameters being optimised at once):
 - **4D** — temperature × concentration × pH × time (42 evals)
 - **6D** — 4D + solvent polarity + stirring rpm (48 evals)
 
-The reproducible study is in [`experiments/02_knowledge_comparison.py`](../experiments/02_knowledge_comparison.py); summary tables for each dimension live in [`experiments/README.md`](../experiments/README.md).
+The reproducible study is in [`experiments/simulation_data1/02_knowledge_comparison.py`](../experiments/simulation_data1/02_knowledge_comparison.py); summary tables for each dimension live in [`experiments/README.md`](../experiments/README.md).
 
 | Category                                 | API                                                | Best for                                    |
 |------------------------------------------|----------------------------------------------------|---------------------------------------------|

@@ -81,10 +81,11 @@ examples/                           # ★ 化學家導向的使用示範
   02_html_report.py                     # v0.4 HTML 報告示範
 
 experiments/                        # ★ 基於套件的可重現研究
-  01_doe_method_comparison.py           # 6 種 DoE 方法 × 標準 2D/4D/6D
-  02_knowledge_comparison.py            # 5 類知識配置 × 標準 2D/4D/6D
-  _oracles.py                           # 共用的反應/製程目標函數
-  README.md                             # 結果表格 + 解讀
+  README.md                             # 實驗總覽 + 解讀
+  simulation_data1/                     # 標準 clean-oracle 實驗
+  simulation_data2/                     # 離散限制式實驗
+
+docs/superpowers/specs/              # 規劃中實驗的設計文件
 ```
 
 ---
@@ -95,14 +96,14 @@ experiments/                        # ★ 基於套件的可重現研究
 |------|------|
 | [`examples/01_reaction_optimization.py`](./examples/01_reaction_optimization.py) | 化學家端對端執行 DoE → BO + 知識注入，23 次評估找到真正最佳值 |
 | [`examples/02_html_report.py`](./examples/02_html_report.py) | 重現 v0.4 HTML 報告 (`Result.to_html`) |
-| [`experiments/01_doe_method_comparison.py`](./experiments/01_doe_method_comparison.py) | 固定知識設定，比較 DoE 方法對 BO 結果的影響 |
-| [`experiments/02_knowledge_comparison.py`](./experiments/02_knowledge_comparison.py) | 固定 DoE 方法，比較知識注入類型的效果 |
+| [`experiments/simulation_data1/01_doe_method_comparison.py`](./experiments/simulation_data1/01_doe_method_comparison.py) | 固定知識設定，比較 DoE 方法對 BO 結果的影響 |
+| [`experiments/simulation_data1/02_knowledge_comparison.py`](./experiments/simulation_data1/02_knowledge_comparison.py) | 固定 DoE 方法，比較知識注入類型的效果 |
 
 執行方式：
 
 ```bash
 python examples/01_reaction_optimization.py
-python experiments/01_doe_method_comparison.py
+python experiments/simulation_data1/01_doe_method_comparison.py
 ```
 
 ---

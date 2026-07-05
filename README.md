@@ -81,10 +81,11 @@ examples/                           # ★ chemist-facing usage demos
   02_html_report.py                     # → v0.4 HTML report
 
 experiments/                        # ★ reproducible studies on top of the package
-  01_doe_method_comparison.py           # six DoE methods × canonical 2D/4D/6D
-  02_knowledge_comparison.py            # five knowledge categories × canonical 2D/4D/6D
-  _oracles.py                           # shared reaction/process objectives
-  README.md                             # results tables + interpretation
+  README.md                             # experiment overview + interpretation
+  simulation_data1/                     # canonical clean-oracle experiments
+  simulation_data2/                     # constrained discrete lab-like experiments
+
+docs/superpowers/specs/              # design specs for planned experiments
 
 ax_doe_bo.py / doe_utils.py / benchmarks.py    # historical research framework
 README.md                          # this file
@@ -98,14 +99,14 @@ README.md                          # this file
 |------|--------------|
 | [`examples/01_reaction_optimization.py`](./examples/01_reaction_optimization.py) | A chemist runs DoE → BO end-to-end with knowledge injection. Finds the true optimum in 23 evals. |
 | [`examples/02_html_report.py`](./examples/02_html_report.py) | Reproduces the v0.4 HTML report (`Result.to_html`). |
-| [`experiments/01_doe_method_comparison.py`](./experiments/01_doe_method_comparison.py) | Holds knowledge fixed, varies the DoE method. Quantifies how `lhs_maximin` vs Sobol vs random impacts BO. |
-| [`experiments/02_knowledge_comparison.py`](./experiments/02_knowledge_comparison.py) | Holds DoE fixed, varies knowledge injection (baseline / random_augment / mean function / monotone / combo). Reproduces the 5-category framework empirically. |
+| [`experiments/simulation_data1/01_doe_method_comparison.py`](./experiments/simulation_data1/01_doe_method_comparison.py) | Holds knowledge fixed, varies the DoE method. Quantifies how `lhs_maximin` vs Sobol vs random impacts BO. |
+| [`experiments/simulation_data1/02_knowledge_comparison.py`](./experiments/simulation_data1/02_knowledge_comparison.py) | Holds DoE fixed, varies knowledge injection (baseline / random_augment / mean function / monotone / combo). Reproduces the 5-category framework empirically. |
 
 Run any of them:
 
 ```bash
 python examples/01_reaction_optimization.py
-python experiments/01_doe_method_comparison.py
+python experiments/simulation_data1/01_doe_method_comparison.py
 ```
 
 ---

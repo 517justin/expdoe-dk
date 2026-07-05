@@ -4,8 +4,8 @@ Small reproducible studies built on top of the `expdoe-dk` API.
 
 | Script | Question |
 |--------|----------|
-| [`01_doe_method_comparison.py`](./01_doe_method_comparison.py) | Holding knowledge fixed (plain GP), how much does the *DoE method* affect BO outcome? |
-| [`02_knowledge_comparison.py`](./02_knowledge_comparison.py) | Holding the DoE method fixed, how much does the *type of domain knowledge* affect BO outcome? |
+| [`simulation_data1/01_doe_method_comparison.py`](./simulation_data1/01_doe_method_comparison.py) | Holding knowledge fixed (plain GP), how much does the *DoE method* affect BO outcome? |
+| [`simulation_data1/02_knowledge_comparison.py`](./simulation_data1/02_knowledge_comparison.py) | Holding the DoE method fixed, how much does the *type of domain knowledge* affect BO outcome? |
 
 Both run on the same three canonical objectives (full mathematical
 definitions below in [§ The three oracles](#the-three-oracles)), selectable
@@ -13,11 +13,11 @@ with `--dim {2,4,6}`, with the noise-free gap-from-optimum as the headline
 metric. Each config is run over 5 random seeds.
 
 ```bash
-python experiments/01_doe_method_comparison.py --dim 2   # ~3 min
-python experiments/02_knowledge_comparison.py --dim 4    # ~9 min
+python experiments/simulation_data1/01_doe_method_comparison.py --dim 2   # ~3 min
+python experiments/simulation_data1/02_knowledge_comparison.py --dim 4    # ~9 min
 ```
 
-Results write to `experiments/outputs/*.csv`. Archived snapshots live in
+Results write to `experiments/simulation_data1/outputs/*.csv`. Archived snapshots live in
 numbered folders (e.g. [`simulation_data1/`](./simulation_data1/) — single-RNG noise,
 unified budget n_doe=6 / n_iter=15).
 
@@ -33,7 +33,7 @@ All three are deterministic synthetic chemistry yield functions returning
 positive yield in `[0, ~y_max]`, with additive `N(0, 0.01²)` noise added at
 sampling time and a noise-free counterpart used for reporting. Each
 implements the canonical objective from the sister project's experiments
-(see [`_oracles.py`](./_oracles.py) for the exact code).
+(see [`_oracles.py`](./simulation_data1/_oracles.py) for the exact code).
 
 ### `reaction_objective_2d` — Exp-7
 
@@ -143,9 +143,9 @@ Exp-10 v2). Knowledge is held constant at *none* (plain GP), so the only
 variable is the DoE method and the comparison is fair.
 
 ```bash
-python experiments/01_doe_method_comparison.py             # 2D (default)
-python experiments/01_doe_method_comparison.py --dim 4
-python experiments/01_doe_method_comparison.py --dim 6
+python experiments/simulation_data1/01_doe_method_comparison.py             # 2D (default)
+python experiments/simulation_data1/01_doe_method_comparison.py --dim 4
+python experiments/simulation_data1/01_doe_method_comparison.py --dim 6
 ```
 
 > **Note:** The tables below were generated under the previous per-dimension
@@ -264,9 +264,9 @@ noise stream** per run (matching the §6b convention). Baseline `A` is a
 plain GP (`knowledge=None`).
 
 ```bash
-python experiments/02_knowledge_comparison.py             # 2D (default), ~2 min
-python experiments/02_knowledge_comparison.py --dim 4     # ~4 min
-python experiments/02_knowledge_comparison.py --dim 6     # ~5 min
+python experiments/simulation_data1/02_knowledge_comparison.py             # 2D (default), ~2 min
+python experiments/simulation_data1/02_knowledge_comparison.py --dim 4     # ~4 min
+python experiments/simulation_data1/02_knowledge_comparison.py --dim 6     # ~5 min
 ```
 
 Unified budget across all dimensions: **n_doe = 6, n_iter = 15 (total 21 evals)**.

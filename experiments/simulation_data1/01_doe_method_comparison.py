@@ -29,10 +29,10 @@ Headline metric
 Smaller is better. Robust to lucky / unlucky noise draws.
 
 Run with:
-    python experiments/01_doe_method_comparison.py                # 2D, ~3 min
-    python experiments/01_doe_method_comparison.py --dim 4        # ~12 min
-    python experiments/01_doe_method_comparison.py --dim 6        # ~17 min
-    python experiments/01_doe_method_comparison.py --seeds 3
+    python experiments/simulation_data1/01_doe_method_comparison.py                # 2D, ~3 min
+    python experiments/simulation_data1/01_doe_method_comparison.py --dim 4        # ~12 min
+    python experiments/simulation_data1/01_doe_method_comparison.py --dim 6        # ~17 min
+    python experiments/simulation_data1/01_doe_method_comparison.py --seeds 3
 """
 from __future__ import annotations
 
