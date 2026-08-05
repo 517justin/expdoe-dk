@@ -137,6 +137,27 @@ Only successful rows enter model fitting. Failed and warning rows may inform fea
 
 `PendingBatch` contains candidate identifiers and physical conditions. `Campaign.ask()` conditions acquisitions on pending points to avoid duplicate batch recommendations.
 
+### 4.6 Initial-design engine contract
+
+`suggest_design()` is the sole public engine entry point for initial experimental designs. It accepts a `Space`, requested count, requested method, seed, compiled parameter constraints, knowledge-source identifiers, and optional existing/pending conditions to avoid. The legacy call returning a physical-unit DataFrame remains valid; callers may request a `DesignBatch` containing the same frame plus diagnostics.
+
+The engine distinguishes the requested method from the effective method. `method="auto"` is an explicit deterministic policy: it selects `lhs_maximin` for spaces without nominal categorical factors and `sobol` for spaces containing categorical factors. The result records both names and the capability rule used. An explicitly requested incompatible method fails with `CONFIG_INVALID` and lists compatible methods; it never changes algorithms implicitly.
+
+Method capabilities in v0.5 are:
+
+| Method | Supported factor kinds | Required behavior |
+|---|---|---|
+| `lhs_maximin`, `lhs_random` | continuous, integer, discrete, ordinal | Preserve numerical/ordered stratification after snapping |
+| `sobol`, `halton` | all supported kinds | Deterministic decoding with balanced categorical/ordinal level counts when feasibility permits |
+| `d_optimal` | continuous, integer, discrete | Use the declared deterministic design matrix; reject categorical or ordinal spaces |
+| `random_uniform` | all supported kinds | Reference baseline, explicitly labeled as such |
+
+The engine removes the current `d_optimal` dependency-based fallback. Missing optional capability or incompatible factor types are errors. Every successful `DesignBatch` records requested/effective method, seed, factor encodings, constraint digest, knowledge-source identifiers, categorical/ordinal level counts, minimum model-space distance, rejection counts, and candidate keys.
+
+Initial design consumes only hard parameter constraints compiled from approved knowledge, including `safe_region` and `forbidden_region`. Shape, interaction, physics, outcome, and acquisition-preference artifacts remain recorded but do not bias initial sampling in v0.5. Conflicting or invalid safety artifacts fail before sampling.
+
+After decoding and snapping, the engine rechecks bounds and every hard constraint, removes duplicates against the batch and supplied existing/pending conditions, and returns exactly `n` feasible unique rows. If the feasible finite cardinality or sampled feasible set cannot supply `n`, it raises `SPACE_INFEASIBLE` with requested count, available/estimated cardinality, rejection counts, method, and seed. Hard constraints are never relaxed.
+
 ## 5. Knowledge Pattern Registry
 
 ### 5.1 Serialized pattern envelope
