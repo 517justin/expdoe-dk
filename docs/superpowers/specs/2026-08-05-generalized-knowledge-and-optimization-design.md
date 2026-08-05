@@ -166,6 +166,7 @@ All persisted knowledge uses `KnowledgePatternSpec`:
 
 ```python
 KnowledgePatternSpec(
+    pattern_id: str,
     pattern: str,
     version: str,
     parameters: dict[str, JSONValue],
@@ -176,7 +177,7 @@ KnowledgePatternSpec(
 )
 ```
 
-`scope` names the affected factor or factors, objectives, optional categorical conditions, and optional physical region. `confidence` is in `[0, 1]`. Evidence records a type such as expert experience, internal data, literature, or physical law plus a citation or note. Evidence content is provenance; it is not executable.
+`pattern_id` identifies one immutable declaration instance and is preserved in validation results and compiled artifacts; `pattern` identifies the registered pattern type. Explicit IDs must be unique in a knowledge set. Fluent helpers generate a deterministic `KP-<12 hex chars>` identifier from normalized content. `scope` names the affected factor or factors, objectives, optional categorical conditions, and optional physical region. `confidence` is in `[0, 1]`. Evidence records a type such as expert experience, internal data, literature, or physical law plus a citation or note. Evidence content is provenance; it is not executable.
 
 Validation state is campaign output, not user-authored truth. The original pattern remains immutable while validation results and effective confidence evolve in checkpoints.
 
@@ -258,7 +259,7 @@ OptimizationArtifacts(
 )
 ```
 
-Compilation is deterministic for a fixed pattern set, data, engine version, and seed. Each artifact records the source pattern identifier so candidate diagnostics can explain knowledge influence.
+Compilation is deterministic for a fixed pattern set, data, engine version, and seed. Each artifact records `source_pattern_id`, registered pattern type, and version so design/candidate diagnostics can identify the exact declaration that influenced the result.
 
 Multiple artifacts combine through declared composition rules. Hard constraints intersect. Mean/kernel components use registered combiners. Acquisition preferences are normalized and bounded. Unsupported combinations fail rather than relying on registration order.
 
