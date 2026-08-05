@@ -138,7 +138,7 @@ git commit -m "test: freeze v0.4 compatibility surface"
 
 **Interfaces:**
 - Produces: `EngineError(code, message, details, hints)`, `Objective(name, direction, target, unit, priority)`, `Objective.to_utility(values)`, and `normalize_objectives(objectives, maximize)`.
-- Consumed by: Tasks 5-10 and the optimization pipeline plan.
+- Consumed by: Tasks 5-11 and the optimization pipeline plan.
 
 - [ ] **Step 1: Write failing objective and error tests**
 
@@ -519,6 +519,14 @@ class Space:
     def model_to_physical(self, tensor: torch.Tensor) -> pd.DataFrame:
         data = {parameter.name: parameter.decode(tensor[:, index].tolist()) for index, parameter in enumerate(self.params)}
         return pd.DataFrame(data, columns=self.param_names)
+
+    def with_constraints(self, *additional: Constraint) -> "Space":
+        return Space(
+            params=self.params,
+            constraints=(*self.constraints, *additional),
+            objectives=self.objective_specs,
+            outcome_constraints=self.outcome_constraints,
+        )
 ```
 
 Replace `expdoe_dk/space.py` with re-exports from `expdoe_dk.domain`. Keep `physical_to_unit()` and `unit_to_physical()` as numerical-space aliases that delegate to the mixed transform for legacy callers.
@@ -562,7 +570,168 @@ git add expdoe-dk/src/expdoe_dk/domain/space.py expdoe-dk/src/expdoe_dk/space.py
 git commit -m "feat: generalize experiment spaces"
 ```
 
-## Task 6: Add Observation and Pending Batch Contracts
+## Task 6: Make Initial Design Capability-aware, Safe, and Diagnostic
+
+**Files:**
+- Create: `expdoe-dk/src/expdoe_dk/doe/design.py`
+- Modify: `expdoe-dk/src/expdoe_dk/doe/constrained.py`
+- Modify: `expdoe-dk/src/expdoe_dk/doe/__init__.py`
+- Modify: `expdoe-dk/src/expdoe_dk/__init__.py`
+- Create: `expdoe-dk/tests/doe/test_design_capabilities.py`
+- Create: `expdoe-dk/tests/doe/test_design_invariants.py`
+- Modify: `expdoe-dk/tests/test_constrained_lhs.py`
+- Modify: `expdoe-dk/tests/test_v04_compatibility.py`
+
+**Interfaces:**
+- Produces: `DesignDiagnostics`, `DesignBatch`, `compatible_design_methods(space)`, and `suggest_design(space, n, method="auto", *, seed=42, parameter_constraints=(), knowledge_sources=(), existing=None, pending=None, return_diagnostics=False)`.
+- Preserves: legacy `suggest_design(...) -> DataFrame` and `doe.generate(...) -> DataFrame` calls.
+- Consumed by: `Campaign.suggest_doe()` and platform `create_design()`.
+
+- [ ] **Step 1: Write failing method-capability and no-fallback tests**
+
+```python
+def test_auto_selects_sobol_for_nominal_categorical_space(mixed_space):
+    batch = suggest_design(mixed_space, 6, method="auto", seed=4, return_diagnostics=True)
+    assert batch.diagnostics.requested_method == "auto"
+    assert batch.diagnostics.effective_method == "sobol"
+    assert batch.diagnostics.selection_rule == "auto:nominal-categorical->sobol"
+
+
+def test_explicit_d_optimal_rejects_categorical_without_fallback(mixed_space):
+    with pytest.raises(EngineError) as caught:
+        suggest_design(mixed_space, 6, method="d_optimal", seed=4)
+    assert caught.value.code is ErrorCode.CONFIG_INVALID
+    assert "sobol" in caught.value.details["compatible_methods"]
+```
+
+- [ ] **Step 2: Write failing safety, balance, uniqueness, and cardinality tests**
+
+```python
+def test_compiled_safety_constraints_filter_initial_design(numeric_space):
+    safe = ExpressionConstraint("safe-lower", "x >= 0.2")
+    forbidden_complement = ExpressionConstraint("forbidden-upper-complement", "x <= 0.8")
+    batch = suggest_design(
+        numeric_space, 8, method="sobol", seed=9,
+        parameter_constraints=(safe, forbidden_complement),
+        knowledge_sources=("safe-1", "forbidden-1"),
+        return_diagnostics=True,
+    )
+    assert batch.frame["x"].between(0.2, 0.8, inclusive="both").all()
+    assert batch.diagnostics.knowledge_sources == ("safe-1", "forbidden-1")
+
+
+def test_mixed_design_is_deterministic_balanced_and_avoids_existing(mixed_space, existing_mixed_rows):
+    first = suggest_design(mixed_space, 6, method="sobol", seed=7, existing=existing_mixed_rows, return_diagnostics=True)
+    second = suggest_design(mixed_space, 6, method="sobol", seed=7, existing=existing_mixed_rows, return_diagnostics=True)
+    pd.testing.assert_frame_equal(first.frame, second.frame)
+    assert not candidate_keys(first.frame, mixed_space) & candidate_keys(existing_mixed_rows, mixed_space)
+    counts = first.frame["binder"].value_counts()
+    assert counts.max() - counts.min() <= 1
+
+
+def test_finite_space_shortage_is_structured(tiny_discrete_space):
+    with pytest.raises(EngineError) as caught:
+        suggest_design(tiny_discrete_space, 5, method="sobol", seed=2)
+    assert caught.value.code is ErrorCode.SPACE_INFEASIBLE
+    assert caught.value.details["requested"] == 5
+    assert caught.value.details["available_cardinality"] == 4
+```
+
+- [ ] **Step 3: Run tests to verify failure**
+
+Run: `cd expdoe-dk && pytest -q tests/doe/test_design_capabilities.py tests/doe/test_design_invariants.py`
+
+Expected: FAIL because design diagnostics, capability routing, and external parameter constraints are unavailable.
+
+- [ ] **Step 4: Implement exact capability resolution and diagnostic types**
+
+```python
+METHOD_KINDS = {
+    "lhs_maximin": frozenset({"continuous", "integer", "discrete", "ordinal"}),
+    "lhs_random": frozenset({"continuous", "integer", "discrete", "ordinal"}),
+    "sobol": frozenset({"continuous", "integer", "discrete", "ordinal", "categorical"}),
+    "halton": frozenset({"continuous", "integer", "discrete", "ordinal", "categorical"}),
+    "d_optimal": frozenset({"continuous", "integer", "discrete"}),
+    "random_uniform": frozenset({"continuous", "integer", "discrete", "ordinal", "categorical"}),
+}
+
+
+def resolve_design_method(space: Space, requested: str) -> tuple[str, str]:
+    if requested == "auto":
+        if any(parameter.kind == "categorical" for parameter in space.params):
+            return "sobol", "auto:nominal-categorical->sobol"
+        return "lhs_maximin", "auto:no-nominal-categorical->lhs_maximin"
+    compatible = compatible_design_methods(space)
+    if requested not in compatible:
+        raise EngineError(
+            ErrorCode.CONFIG_INVALID,
+            f"Design method {requested!r} is incompatible with this space",
+            details={"requested_method": requested, "compatible_methods": list(compatible)},
+        )
+    return requested, "explicit"
+
+
+@dataclass(frozen=True)
+class DesignDiagnostics:
+    requested_method: str
+    effective_method: str
+    selection_rule: str
+    seed: int
+    constraint_digest: str
+    knowledge_sources: tuple[str, ...]
+    factor_encodings: dict[str, str]
+    level_counts: dict[str, dict[str, int]]
+    minimum_model_distance: float | None
+    rejection_counts: dict[str, int]
+    candidate_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DesignBatch:
+    frame: pd.DataFrame
+    diagnostics: DesignDiagnostics
+```
+
+- [ ] **Step 5: Implement deterministic sampling and post-processing**
+
+```python
+def suggest_design(
+    space, n, method="auto", *, seed=42, parameter_constraints=(), knowledge_sources=(),
+    existing=None, pending=None, return_diagnostics=False,
+):
+    effective, rule = resolve_design_method(space, method)
+    design_space = space.with_constraints(*parameter_constraints)
+    avoided = concat_condition_frames(existing, pending, columns=space.param_names)
+    available = feasible_cardinality(design_space, excluding=avoided)
+    if available is not None and available < n:
+        raise space_infeasible_error(n, available, effective, seed, {"finite_cardinality": n - available})
+    pool, rejected = generate_feasible_pool(design_space, n=n, method=effective, seed=seed)
+    selected = select_unique_balanced_maximin(pool, design_space, n=n, avoided=avoided, seed=seed)
+    if len(selected) != n:
+        raise space_infeasible_error(n, available, effective, seed, rejected)
+    diagnostics = build_design_diagnostics(design_space, selected, method, effective, rule, seed, knowledge_sources, rejected)
+    batch = DesignBatch(selected.reset_index(drop=True), diagnostics)
+    return batch if return_diagnostics else batch.frame
+```
+
+`generate_feasible_pool()` uses a deterministic oversampling schedule derived from `(seed, attempt)` and rechecks bounds plus all constraints after physical decoding and snapping. `select_unique_balanced_maximin()` first removes avoided/duplicate physical keys, then selects rows by the largest categorical/ordinal level deficit and breaks ties by maximum nearest-neighbor distance followed by pool index. Level-count difference must be at most one when the feasible pool contains enough rows for that balance.
+
+Replace `_draw_d_optimal()` with deterministic greedy log-determinant selection from a feasible numeric candidate pool built from the declared intercept, main-effect, and quadratic columns. Remove the `pyDOE3` import and the LHS fallback. Keep `doe.generate()` as a compatibility wrapper around the same internal sampler without diagnostics.
+
+- [ ] **Step 6: Run focused and compatibility suites**
+
+Run: `cd expdoe-dk && pytest -q tests/doe/test_design_capabilities.py tests/doe/test_design_invariants.py tests/test_constrained_lhs.py tests/test_mixed_space.py tests/test_v04_compatibility.py`
+
+Expected: PASS; explicit methods never change silently, mixed designs are deterministic and balanced, and legacy DataFrame returns remain unchanged.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add expdoe-dk/src/expdoe_dk/doe expdoe-dk/src/expdoe_dk/__init__.py expdoe-dk/tests/doe expdoe-dk/tests/test_constrained_lhs.py expdoe-dk/tests/test_v04_compatibility.py
+git commit -m "feat: make initial designs safe and diagnostic"
+```
+
+## Task 7: Add Observation and Pending Batch Contracts
 
 **Files:**
 - Create: `expdoe-dk/src/expdoe_dk/domain/observation.py`
@@ -644,7 +813,7 @@ git add expdoe-dk/src/expdoe_dk/domain/observation.py expdoe-dk/src/expdoe_dk/do
 git commit -m "feat: add observation and pending batch contracts"
 ```
 
-## Task 7: Build the Registry Core and Declarative Specs
+## Task 8: Build the Registry Core and Declarative Specs
 
 **Files:**
 - Create: `expdoe-dk/src/expdoe_dk/knowledge/specs.py`
@@ -670,6 +839,7 @@ from expdoe_dk.knowledge.specs import Evidence, KnowledgePatternSpec, KnowledgeS
 
 def test_pattern_spec_round_trip_preserves_provenance():
     spec = KnowledgePatternSpec(
+        pattern_id="KP-monotone-time",
         pattern="monotone",
         version="1.0",
         parameters={"direction": "increasing"},
@@ -702,6 +872,7 @@ JSONValue = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
 
 @dataclass(frozen=True)
 class KnowledgePatternSpec:
+    pattern_id: str
     pattern: str
     version: str
     parameters: dict[str, JSONValue]
@@ -716,11 +887,28 @@ class KnowledgePatternSpec:
         json.dumps(self.to_dict(), allow_nan=False)
 ```
 
+Require unique `pattern_id` values when constructing `Knowledge`. Declarative callers provide IDs; fluent helpers call `pattern_id_for(normalized_spec_without_id)`, which returns `KP-` plus the first 12 hexadecimal characters of the canonical SHA-256 digest. `from_dict()` preserves an existing ID and deterministically derives one only for legacy payloads that predate this field.
+
+```python
+def make_pattern_spec(*, pattern, version, parameters, scope, confidence, evidence=(), enabled=True, pattern_id=None):
+    normalized = {
+        "pattern": pattern, "version": version, "parameters": parameters,
+        "scope": scope.to_dict(), "confidence": confidence,
+        "evidence": [item.to_dict() for item in evidence], "enabled": enabled,
+    }
+    return KnowledgePatternSpec(
+        pattern_id=pattern_id or pattern_id_for(normalized), pattern=pattern, version=version,
+        parameters=parameters, scope=scope, confidence=confidence,
+        evidence=tuple(evidence), enabled=enabled,
+    )
+```
+
 ```python
 @dataclass(frozen=True)
 class OptimizationArtifact:
     kind: str
     payload: dict[str, JSONValue]
+    source_pattern_id: str
     source_pattern: str
     source_version: str
 
@@ -742,10 +930,16 @@ class OptimizationArtifacts:
 ```python
 @dataclass(frozen=True)
 class KnowledgeValidationResult:
-    valid: bool
+    pattern_id: str
+    state: Literal["valid", "warning", "invalid", "insufficient_data"]
+    summary: str
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     effective_confidence: float | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.state in {"valid", "warning", "insufficient_data"}
 
 
 @dataclass(frozen=True)
@@ -767,7 +961,7 @@ class KnowledgePatternDefinition:
     compatibility: Callable[[KnowledgePatternSpec, Space], CompatibilityResult]
 ```
 
-In `tests/knowledge/conftest.py`, define `fake_definition`, `builtin_registry`, `numeric_space`, and `make_spec` using no-op compiler/renderer plus an always-valid `KnowledgeValidationResult`. Later pattern tests reuse these exact fixtures.
+In `tests/knowledge/conftest.py`, define `fake_definition`, `builtin_registry`, `numeric_space`, and `make_spec` using no-op compiler/renderer plus `KnowledgeValidationResult(pattern_id=spec.pattern_id, state="valid", summary="valid", effective_confidence=spec.confidence)`. Later pattern tests reuse these exact fixtures.
 
 - [ ] **Step 4: Implement exact registry resolution**
 
@@ -791,8 +985,11 @@ class PatternRegistry:
     def definitions(self) -> tuple[KnowledgePatternDefinition, ...]:
         return tuple(self._definitions[key] for key in sorted(self._definitions))
 
+    def validate(self, spec, space, observations=None) -> KnowledgeValidationResult:
+        return self.resolve(spec.pattern, spec.version).validator(spec, space, observations)
+
     def validate_many(self, specs, space, observations=None) -> tuple[KnowledgeValidationResult, ...]:
-        return tuple(self.resolve(spec.pattern, spec.version).validator(spec, space, observations) for spec in specs)
+        return tuple(self.validate(spec, space, observations) for spec in specs)
 
     def compile_many(self, specs, space, observations=None) -> OptimizationArtifacts:
         return merge_artifacts(
@@ -817,7 +1014,7 @@ git add expdoe-dk/src/expdoe_dk/knowledge/specs.py expdoe-dk/src/expdoe_dk/knowl
 git commit -m "feat: add knowledge pattern registry core"
 ```
 
-## Task 8: Migrate Existing Knowledge Helpers to the Registry
+## Task 9: Migrate Existing Knowledge Helpers to the Registry
 
 **Files:**
 - Create: `expdoe-dk/src/expdoe_dk/knowledge/patterns/prior.py`
@@ -863,7 +1060,7 @@ Expected: FAIL because `Knowledge.specs` is unavailable.
 def with_monotone(self, param: str, effect: PhysicalEffect, **options) -> "Knowledge":
     direction = "increasing" if effect == "increases_objective" else "decreasing"
     self._specs.append(
-        KnowledgePatternSpec(
+        make_pattern_spec(
             pattern="monotone",
             version="1.0",
             parameters={"direction": direction, **options},
@@ -902,7 +1099,7 @@ git add expdoe-dk/src/expdoe_dk/knowledge expdoe-dk/src/expdoe_dk/bo/gp.py expdo
 git commit -m "refactor: route legacy knowledge through registry"
 ```
 
-## Task 9: Add the Complete Built-in Pattern Taxonomy
+## Task 10: Add the Complete Built-in Pattern Taxonomy
 
 **Files:**
 - Create: `expdoe-dk/src/expdoe_dk/knowledge/patterns/__init__.py`
@@ -975,14 +1172,14 @@ def definition(pattern, family, schema, compiler, validator, renderer, compatibi
     )
 ```
 
-Each module defines explicit JSON-compatible schemas and returns provenance-bearing artifacts. Shape compilers use `mean_component` or `virtual_observation`; interaction compilers use kernel/mean components; categorical compilers emit similarity/ordering artifacts; safety compilers emit hard constraints; multi-objective compilers emit bounded acquisition preferences.
+Each module defines explicit JSON-compatible schemas and returns provenance-bearing artifacts with `source_pattern_id=spec.pattern_id`, `source_pattern=spec.pattern`, and `source_version=spec.version`. Shape compilers use `mean_component` or `virtual_observation`; interaction compilers use kernel/mean components; categorical compilers emit similarity/ordering artifacts; safety compilers emit hard constraints; multi-objective compilers emit bounded acquisition preferences.
 
 - [ ] **Step 5: Add typed convenience helpers**
 
 ```python
 def with_saturation(self, param: str, *, direction: str, half_response: float, confidence: float = 1.0) -> "Knowledge":
     return self.add_spec(
-        KnowledgePatternSpec(
+        make_pattern_spec(
             pattern="saturation", version="1.0",
             parameters={"direction": direction, "half_response": half_response},
             scope=KnowledgeScope(factors=(param,)), confidence=confidence,
@@ -994,7 +1191,7 @@ def with_interaction(self, first: str, second: str, *, kind: str, confidence: fl
     if kind not in {"synergy", "antagonism"}:
         raise ValueError("kind must be synergy or antagonism")
     return self.add_spec(
-        KnowledgePatternSpec(
+        make_pattern_spec(
             pattern=kind, version="1.0", parameters={},
             scope=KnowledgeScope(factors=(first, second)), confidence=confidence,
         )
@@ -1014,7 +1211,7 @@ git add expdoe-dk/src/expdoe_dk/knowledge/patterns expdoe-dk/src/expdoe_dk/knowl
 git commit -m "feat: add built-in domain knowledge patterns"
 ```
 
-## Task 10: Add Explicit Provider Loading, Serialization Versions, and Exports
+## Task 11: Add Explicit Provider Loading, Serialization Versions, and Exports
 
 **Files:**
 - Create: `expdoe-dk/src/expdoe_dk/knowledge/registry/providers.py`
