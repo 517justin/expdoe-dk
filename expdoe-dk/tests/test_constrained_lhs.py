@@ -4,9 +4,11 @@ Constrained + discrete DoE: feasibility and grid correctness across methods.
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from expdoe_dk import LinearConstraint, Parameter, Space, suggest_design
+from expdoe_dk.domain import CategoricalCombinationConstraint
 
 
 def _space_chem():
@@ -74,3 +76,28 @@ def test_discrete_step_that_does_not_divide_range_never_snaps_past_bounds():
 
     assert np.all(snapped <= 1.0)
     assert snapped.tolist() == [0.0, 0.6, 0.6, 0.6]
+
+
+def test_sobol_mixed_constraint_filtering_stays_in_physical_frame():
+    """Catches categorical constraint checks receiving model-space numeric codes."""
+    space = Space(
+        params=[
+            Parameter("temperature", bounds=(300.0, 400.0)),
+            Parameter("binder", kind="categorical", values=["A", "B"]),
+        ],
+        constraints=[
+            CategoricalCombinationConstraint(
+                "forbidden-binder", forbidden=({"binder": "B"},)
+            )
+        ],
+    )
+
+    design = suggest_design(space, n=4, method="sobol", seed=11)
+
+    assert design["binder"].tolist() == ["A"] * 4
+    assert bool(space.feasibility_mask(design).all())
+    pd.testing.assert_frame_equal(
+        design,
+        space.model_to_physical(space.physical_to_model(design)),
+        check_dtype=False,
+    )

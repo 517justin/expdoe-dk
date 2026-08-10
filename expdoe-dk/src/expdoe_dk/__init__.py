@@ -19,7 +19,14 @@ from .space import Parameter, LinearConstraint, Space
 from .knowledge import Knowledge
 from .bo import Campaign, Result
 from .doe import generate as suggest_design
-from .domain import Objective, normalize_objectives
+from .domain import (
+    CategoricalCombinationConstraint,
+    Constraint,
+    ExpressionConstraint,
+    Objective,
+    OutcomeConstraint,
+    normalize_objectives,
+)
 from .errors import EngineError, ErrorCode
 
 __all__ = [
@@ -31,6 +38,10 @@ __all__ = [
     "Result",
     "suggest_design",
     "Objective",
+    "Constraint",
+    "ExpressionConstraint",
+    "CategoricalCombinationConstraint",
+    "OutcomeConstraint",
     "normalize_objectives",
     "EngineError",
     "ErrorCode",

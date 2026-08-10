@@ -10,6 +10,7 @@ from .constraints import (
 )
 from .objective import Objective, normalize_objectives
 from .parameter import Parameter
+from .space import Space
 
 __all__ = [
     "CategoricalCombinationConstraint",
@@ -19,6 +20,7 @@ __all__ = [
     "Objective",
     "OutcomeConstraint",
     "Parameter",
+    "Space",
     "constraint_from_dict",
     "normalize_objectives",
 ]

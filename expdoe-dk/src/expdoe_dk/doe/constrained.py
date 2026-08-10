@@ -20,7 +20,7 @@ import torch
 from scipy.spatial.distance import pdist
 from scipy.stats import qmc
 
-from ..space import LinearConstraint, Space
+from ..space import Space
 from .lhs import latin_hypercube_sample, optimize_lhs_maximin
 
 
@@ -31,33 +31,27 @@ class InfeasibleDesignError(RuntimeError):
 # ----------------------------------------------------------------------- #
 # Internal helpers
 # ----------------------------------------------------------------------- #
-def _unit_to_physical_array(U: np.ndarray, space: Space) -> np.ndarray:
-    """[0,1]^d unit array → physical units, with discrete snap."""
-    lo = space.lower.cpu().numpy()
-    hi = space.upper.cpu().numpy()
-    X = lo + U * (hi - lo)
-    for j, p in enumerate(space.params):
-        if p.kind == "discrete":
-            X[:, j] = p.snap(X[:, j])
-    return X
+def _unit_to_physical_array(U: np.ndarray, space: Space) -> pd.DataFrame:
+    """Decode a numerical unit cube into an ordered physical DataFrame."""
+    unit = np.asarray(U, dtype=np.float64)
+    model_bounds = space.model_bounds_tensor.cpu().numpy()
+    model = model_bounds[0] + unit * (model_bounds[1] - model_bounds[0])
+    return space.model_to_physical(torch.as_tensor(model, dtype=torch.float64))
 
 
-def _physical_to_unit_array(X: np.ndarray, space: Space) -> np.ndarray:
-    lo = space.lower.cpu().numpy()
-    hi = space.upper.cpu().numpy()
-    return (X - lo) / (hi - lo)
+def _physical_to_unit_array(X: pd.DataFrame, space: Space) -> np.ndarray:
+    """Encode physical rows as numeric model coordinates for distance math."""
+    return space.physical_to_model(X).cpu().numpy()
 
 
-def _feasibility_mask(X_phys: np.ndarray, space: Space) -> np.ndarray:
-    if not space.constraints:
-        return np.ones(X_phys.shape[0], dtype=bool)
-    names = space.param_names
-    mask = np.ones(X_phys.shape[0], dtype=bool)
-    for c in space.constraints:
-        coeffs = np.array([c.coeffs.get(n, 0.0) for n in names], dtype=np.float64)
-        v = X_phys @ coeffs
-        mask &= (v >= c.lower - 1e-9) & (v <= c.upper + 1e-9)
-    return mask
+def _feasibility_mask(X_phys: pd.DataFrame, space: Space) -> np.ndarray:
+    return space.feasibility_mask(X_phys).cpu().numpy()
+
+
+def _model_column_weights(space: Space) -> np.ndarray:
+    bounds = space.model_bounds_tensor.cpu().numpy()
+    spans = bounds[1] - bounds[0]
+    return np.divide(1.0, spans, out=np.ones_like(spans), where=spans != 0)
 
 
 def _feasibility_diagnostic(space: Space, n: int) -> str:
@@ -247,20 +241,25 @@ def generate(
             )
 
         # SA maximin polish (preserves feasibility via rejection).
-        col_weights = 1.0 / (
-            space.upper.cpu().numpy() - space.lower.cpu().numpy()
-        )
+        model_design = _physical_to_unit_array(design_phys, space)
+        col_weights = _model_column_weights(space)
 
-        def feas_fn(design_arr: np.ndarray) -> np.ndarray:
-            return _feasibility_mask(design_arr, space)
+        def feas_fn(model_arr: np.ndarray) -> np.ndarray:
+            physical = space.model_to_physical(
+                torch.as_tensor(model_arr, dtype=torch.float64)
+            )
+            return _feasibility_mask(physical, space)
 
-        design_phys, _dist = _sa_maximin_physical(
-            design_phys,
+        model_design, _dist = _sa_maximin_physical(
+            model_design,
             space=space,
             n_iterations=n_iterations,
             column_weights=col_weights,
             feasibility_fn=feas_fn,
             seed=seed + 1000,
+        )
+        design_phys = space.model_to_physical(
+            torch.as_tensor(model_design, dtype=torch.float64)
         )
 
     elif method == "lhs_random":
@@ -287,13 +286,13 @@ def generate(
             "halton": _draw_halton,
             "random_uniform": _draw_random_uniform,
         }[method]
-        feasible = []
+        feasible: list[dict[str, object]] = []
         attempt_seed = seed
         for _ in range(max_resample):
             batch = draw(max(n * 4, 32), d, attempt_seed)
             phys = _unit_to_physical_array(batch, space)
             mask = _feasibility_mask(phys, space)
-            for row in phys[mask]:
+            for row in phys.loc[mask].to_dict(orient="records"):
                 feasible.append(row)
                 if len(feasible) >= n:
                     break
@@ -306,7 +305,7 @@ def generate(
                 f"{max_resample} accept-reject rounds. "
                 + _feasibility_diagnostic(space, n)
             )
-        design_phys = np.asarray(feasible[:n], dtype=np.float64)
+        design_phys = pd.DataFrame(feasible[:n], columns=space.param_names)
 
     elif method == "d_optimal":
         design_unit = _draw_d_optimal(n, space, seed=seed)
@@ -323,8 +322,7 @@ def generate(
             f"constraints={len(space.constraints)}"
         )
 
-    df = pd.DataFrame(design_phys, columns=space.param_names)
-    return df
+    return design_phys.reset_index(drop=True)
 
 
 # ----------------------------------------------------------------------- #
@@ -338,16 +336,16 @@ def _pool_greedy_maximin(
     pool_factor: int = 200,
     max_resample: int = 50,
     seed: int = 0,
-) -> np.ndarray:
+) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    pool: list[np.ndarray] = []
+    pool: list[dict[str, object]] = []
     attempt = 0
     target = max(pool_factor * n, 1000)
     while len(pool) < target and attempt < max_resample:
         batch_unit = rng.uniform(size=(target, space.n_dims))
         batch_phys = _unit_to_physical_array(batch_unit, space)
         mask = _feasibility_mask(batch_phys, space)
-        for row in batch_phys[mask]:
+        for row in batch_phys.loc[mask].to_dict(orient="records"):
             pool.append(row)
             if len(pool) >= target:
                 break
@@ -359,8 +357,9 @@ def _pool_greedy_maximin(
             + _feasibility_diagnostic(space, n)
         )
 
-    pool_arr = np.asarray(pool, dtype=np.float64)
-    col_weights = 1.0 / (space.upper.cpu().numpy() - space.lower.cpu().numpy())
+    pool_frame = pd.DataFrame(pool, columns=space.param_names)
+    pool_arr = _physical_to_unit_array(pool_frame, space)
+    col_weights = _model_column_weights(space)
 
     # Greedy maximin selection.
     chosen = [int(rng.integers(len(pool_arr)))]
@@ -373,7 +372,7 @@ def _pool_greedy_maximin(
         ).min(axis=1)
         dists[chosen] = -1.0
         chosen.append(int(np.argmax(dists)))
-    return pool_arr[chosen]
+    return pool_frame.iloc[chosen].reset_index(drop=True)
 
 
 # ----------------------------------------------------------------------- #
@@ -381,11 +380,11 @@ def _pool_greedy_maximin(
 # preserves grid validity; for continuous dims values are real numbers.
 # ----------------------------------------------------------------------- #
 def _repair_design_physical(
-    design_phys: np.ndarray,
+    design_phys: pd.DataFrame,
     space: Space,
     max_swaps: int = 3000,
     seed: int = 0,
-) -> np.ndarray:
+) -> pd.DataFrame:
     """Best-effort row-swap repair on physical (already snapped) design."""
     rng = np.random.default_rng(seed)
     n, d = design_phys.shape
@@ -406,7 +405,9 @@ def _repair_design_physical(
         if i == j:
             continue
         proposal = arr.copy()
-        proposal[i, dim], proposal[j, dim] = proposal[j, dim], proposal[i, dim]
+        left = proposal.iat[i, dim]
+        proposal.iat[i, dim] = proposal.iat[j, dim]
+        proposal.iat[j, dim] = left
         new_mask = _feasibility_mask(proposal, space)
         # Accept if feasibility count weakly improves.
         if new_mask.sum() > mask.sum() or (

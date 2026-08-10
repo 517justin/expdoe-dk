@@ -25,7 +25,7 @@ def _is_ulp_close(left: float, right: float) -> bool:
     return abs(left - right) <= tolerance
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Parameter:
     """A serializable experimental factor in physical units."""
 
@@ -37,6 +37,33 @@ class Parameter:
     values: tuple[object, ...] | list[object] | None = None
     transform: ParameterTransform = "linear"
     log_scale: bool = False
+
+    def __init__(
+        self,
+        name: str,
+        bounds: tuple[float, float] | None = None,
+        unit: str = "",
+        kind: ParameterKind = "continuous",
+        step: float | int | None = None,
+        log_scale: bool = False,
+        *,
+        values: tuple[object, ...] | list[object] | None = None,
+        transform: ParameterTransform = "linear",
+    ) -> None:
+        """Build a tagged parameter while preserving the v0.4 positional API.
+
+        The sixth positional argument remains ``log_scale``. New tagged-model
+        fields are keyword-only so older calls cannot be silently reinterpreted.
+        """
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "bounds", bounds)
+        object.__setattr__(self, "unit", unit)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "step", step)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "transform", transform)
+        object.__setattr__(self, "log_scale", log_scale)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if self.kind not in _KINDS:
@@ -123,6 +150,15 @@ class Parameter:
         if _is_ulp_close(ratio, float(round(ratio))):
             levels[-1] = high
         return tuple(levels)
+
+    @property
+    def levels(self) -> np.ndarray:
+        """Legacy NumPy view of integer or discrete physical levels."""
+        if self.kind not in {"integer", "discrete"}:
+            raise AttributeError(
+                f"Parameter {self.name} is not an integer or discrete parameter."
+            )
+        return np.asarray(self.numeric_levels)
 
     def encode(self, values: Sequence[object]) -> list[float]:
         """Map physical values into the parameter's model frame."""
