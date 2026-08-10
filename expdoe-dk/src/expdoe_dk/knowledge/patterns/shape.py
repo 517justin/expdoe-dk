@@ -387,7 +387,7 @@ def random_augment_definition() -> KnowledgePatternDefinition:
         schema={
             "type": "object",
             "properties": {
-                "n": {"type": "integer", "minimum": 1, "maximum": 4096}
+                "n": {"type": "integer", "minimum": 1}
             },
             "required": ["n"],
             "additionalProperties": False,

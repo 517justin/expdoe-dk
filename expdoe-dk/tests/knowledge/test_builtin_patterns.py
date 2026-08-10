@@ -362,7 +362,7 @@ def test_acquisition_preference_compiler_rejects_all_zero_weights(taxonomy_space
     assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
 
 
-@pytest.mark.parametrize("n", [-1, 0, True, 4097])
+@pytest.mark.parametrize("n", [-1, 0, True, 1.5])
 @pytest.mark.parametrize("operation", ["validate", "compile"])
 def test_random_augment_direct_specs_reject_invalid_campaign_sizes(
     numeric_space, make_spec, n, operation
@@ -379,8 +379,8 @@ def test_random_augment_direct_specs_reject_invalid_campaign_sizes(
     assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
 
 
-@pytest.mark.parametrize("n", [1, 20, 4096])
-def test_random_augment_campaign_size_boundaries_compile_literally(
+@pytest.mark.parametrize("n", [1, 20, 5000])
+def test_random_augment_positive_campaign_sizes_compile_literally(
     numeric_space, make_spec, n
 ):
     spec = make_spec("random_augment", factors=(), parameters={"n": n})
@@ -392,3 +392,19 @@ def test_random_augment_campaign_size_boundaries_compile_literally(
 
     assert result.state == "valid"
     assert artifact.to_dict()["payload"] == {"n": n}
+
+
+def test_legacy_random_augment_helper_preserves_large_positive_integer(
+    numeric_space,
+):
+    knowledge = Knowledge().with_random_augment(5000)
+    spec = knowledge.specs[0]
+
+    result = _builtin_registry().validate(spec, numeric_space)
+    artifact = _builtin_registry().compile_many(
+        (spec,), numeric_space
+    ).virtual_observations[0]
+
+    assert knowledge.to_dict()["items"] == [{"kind": "random_augment", "n": 5000}]
+    assert result.state == "valid"
+    assert artifact.to_dict()["payload"] == {"n": 5000}
