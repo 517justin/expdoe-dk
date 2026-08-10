@@ -2,22 +2,27 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import is_bool_dtype, is_numeric_dtype
+from pandas.api.types import is_bool_dtype, is_complex_dtype, is_numeric_dtype
 
 
 _OBSERVATION_STATUSES = frozenset({"success", "warning", "failed"})
 
 
-def _copy_frame(value: pd.DataFrame, name: str) -> pd.DataFrame:
+def _clone_frame(value: pd.DataFrame, name: str) -> pd.DataFrame:
+    """Return an index-reset frame detached through nested object cells."""
     if not isinstance(value, pd.DataFrame):
         raise ValueError(f"{name} must be a pandas DataFrame.")
     if not value.columns.is_unique:
         raise ValueError(f"{name} must not have duplicate columns.")
-    return value.copy(deep=True).reset_index(drop=True)
+    cloned = value.copy(deep=True).reset_index(drop=True)
+    for column in cloned.select_dtypes(include="object"):
+        cloned[column] = cloned[column].map(deepcopy)
+    return cloned
 
 
 def _copy_series(value: pd.Series, name: str) -> pd.Series:
@@ -48,7 +53,12 @@ def _validate_yvar(Yvar: pd.DataFrame, Y: pd.DataFrame) -> None:
         raise ValueError("Yvar row count must equal Y row count.")
     if not Yvar.columns.equals(Y.columns):
         raise ValueError("Yvar columns must exactly match Y columns.")
-    if any(not is_numeric_dtype(column) or is_bool_dtype(column) for _, column in Yvar.items()):
+    if any(
+        not is_numeric_dtype(column)
+        or is_bool_dtype(column)
+        or is_complex_dtype(column)
+        for _, column in Yvar.items()
+    ):
         raise ValueError("Yvar must be numeric, finite, and non-negative.")
     values = Yvar.to_numpy(dtype=float)
     if not np.all(np.isfinite(values)) or np.any(values < 0):
@@ -85,14 +95,14 @@ class ObservationBatch:
         status: pd.Series | None = None,
         ids: Sequence[str] = (),
     ) -> None:
-        copied_X = _copy_frame(X, "X")
-        copied_Y = _copy_frame(Y, "Y")
+        copied_X = _clone_frame(X, "X")
+        copied_Y = _clone_frame(Y, "Y")
         if len(copied_X) != len(copied_Y):
             raise ValueError("X and Y row counts must be equal.")
 
         copied_Yvar = None
         if Yvar is not None:
-            copied_Yvar = _copy_frame(Yvar, "Yvar")
+            copied_Yvar = _clone_frame(Yvar, "Yvar")
             _validate_yvar(copied_Yvar, copied_Y)
 
         copied_status = None
@@ -124,17 +134,17 @@ class ObservationBatch:
     @property
     def X(self) -> pd.DataFrame:
         """A detached, index-reset copy of observed physical conditions."""
-        return self._X.copy(deep=True)
+        return _clone_frame(self._X, "X")
 
     @property
     def Y(self) -> pd.DataFrame:
         """A detached, index-reset copy of observed outcomes."""
-        return self._Y.copy(deep=True)
+        return _clone_frame(self._Y, "Y")
 
     @property
     def Yvar(self) -> pd.DataFrame | None:
         """A detached copy of known outcome variances, when supplied."""
-        return None if self._Yvar is None else self._Yvar.copy(deep=True)
+        return None if self._Yvar is None else _clone_frame(self._Yvar, "Yvar")
 
     @property
     def status(self) -> pd.Series | None:
@@ -155,12 +165,12 @@ class ObservationBatch:
         )
         mask = status.eq("success").to_numpy()
         return ObservationBatch(
-            X=self._X.iloc[mask].reset_index(drop=True),
-            Y=self._Y.iloc[mask].reset_index(drop=True),
+            X=_clone_frame(self._X.iloc[mask], "X"),
+            Y=_clone_frame(self._Y.iloc[mask], "Y"),
             Yvar=(
                 None
                 if self._Yvar is None
-                else self._Yvar.iloc[mask].reset_index(drop=True)
+                else _clone_frame(self._Yvar.iloc[mask], "Yvar")
             ),
             status=status.iloc[mask].reset_index(drop=True),
             ids=()
@@ -177,7 +187,7 @@ class PendingBatch:
     _X: pd.DataFrame = field(repr=False)
 
     def __init__(self, ids: Sequence[str], X: pd.DataFrame) -> None:
-        copied_X = _copy_frame(X, "X")
+        copied_X = _clone_frame(X, "X")
         normalized_ids = _normalize_ids(ids, len(copied_X), "PendingBatch")
         object.__setattr__(self, "_ids", normalized_ids)
         object.__setattr__(self, "_X", copied_X)
@@ -190,4 +200,4 @@ class PendingBatch:
     @property
     def X(self) -> pd.DataFrame:
         """A detached, index-reset copy of pending physical conditions."""
-        return self._X.copy(deep=True)
+        return _clone_frame(self._X, "X")

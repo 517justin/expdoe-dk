@@ -1,3 +1,6 @@
+import warnings
+
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -93,6 +96,55 @@ def test_batches_detach_inputs_and_return_defensive_frame_copies():
     assert batch.X.loc[0, "x"] == 0.1
     assert batch.Y.loc[0, "yield"] == 1.0
     assert pending.X.loc[0, "x"] == 0.1
+
+
+def test_batches_deeply_detach_mutable_object_cells():
+    x_payload = {"levels": ["original-x"]}
+    y_payload = ["original-y"]
+    pending_payload = {"levels": ["original-pending"]}
+    X = pd.DataFrame({"payload": [x_payload]})
+    Y = pd.DataFrame({"payload": [y_payload]})
+    pending_X = pd.DataFrame({"payload": [pending_payload]})
+    batch = ObservationBatch(X=X, Y=Y, status=pd.Series(["failed"]))
+    pending = PendingBatch(ids=("p1",), X=pending_X)
+
+    x_payload["levels"].append("caller-change")
+    y_payload.append("caller-change")
+    pending_payload["levels"].append("caller-change")
+    batch_X = batch.X
+    batch_Y = batch.Y
+    returned_pending_X = pending.X
+    batch_X.loc[0, "payload"]["levels"].append("accessor-change")
+    batch_Y.loc[0, "payload"].append("accessor-change")
+    returned_pending_X.loc[0, "payload"]["levels"].append("accessor-change")
+
+    assert batch.X.loc[0, "payload"] == {"levels": ["original-x"]}
+    assert batch.Y.loc[0, "payload"] == ["original-y"]
+    assert pending.X.loc[0, "payload"] == {"levels": ["original-pending"]}
+
+
+def test_successful_batch_deeply_detaches_mutable_condition_cells():
+    batch = ObservationBatch(
+        X=pd.DataFrame({"payload": [["original"]]}),
+        Y=pd.DataFrame({"yield": [1.0]}),
+    )
+    successful = batch.successful()
+    successful_X = successful.X
+
+    successful_X.loc[0, "payload"].append("accessor-change")
+
+    assert successful.X.loc[0, "payload"] == ["original"]
+
+
+def test_yvar_rejects_complex_values_without_complex_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", np.exceptions.ComplexWarning)
+        with pytest.raises(ValueError, match="Yvar.*numeric"):
+            ObservationBatch(
+                X=pd.DataFrame({"x": [0.1]}),
+                Y=pd.DataFrame({"yield": [1.0]}),
+                Yvar=pd.DataFrame({"yield": [1 + 100j]}),
+            )
 
 
 @pytest.mark.parametrize(
