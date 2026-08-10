@@ -100,6 +100,7 @@ Objective(
 
 - `maximize` and `minimize` reject `target`.
 - `target` accepts a point or inclusive range and is transformed into a maximized internal utility: negative absolute distance for a point, or zero inside a range and negative distance to the nearest boundary outside it. The utility is scaled with the same outcome transform used for modeling, while reports retain physical meaning.
+- `priority` is a non-negative integer rank. Rank `0` is highest priority; equal ranks mean equal priority.
 - Objective order is stable and controls tensor columns.
 - Existing `Space(objectives="yield", maximize=True|False)` is translated to one explicit objective.
 
@@ -108,11 +109,11 @@ Objective(
 Four serializable constraint types are supported:
 
 1. `LinearConstraint`: weighted factor sum with `<=`, `>=`, or `==`.
-2. `ExpressionConstraint`: an allow-listed expression AST using arithmetic, comparisons, `abs`, `min`, `max`, `log`, and `exp` over declared factors.
+2. `ExpressionConstraint`: an allow-listed expression parsed from user text or constructed from a canonical JSON AST, using arithmetic, comparisons, `abs`, `min`, `max`, `log`, and `exp` over declared factors.
 3. `CategoricalCombinationConstraint`: allowed or forbidden partial category assignments.
 4. `OutcomeConstraint`: a bound on an observed or modeled objective.
 
-Each constraint declares `hard: bool`. A hard constraint defines feasibility. A soft constraint also declares its penalty form and finite weight, compiles to an explicit penalty or preference, and can never override a hard constraint. Serialized constraints contain no module paths, lambdas, or source code.
+Each constraint declares `hard: bool`. A hard constraint defines feasibility. A soft constraint also declares its penalty form and finite weight, compiles to an explicit penalty or preference, and can never override a hard constraint. `ExpressionConstraint` discards input source text after parsing and serializes only the canonical JSON AST; serialized constraints contain no callables, module paths, lambdas, or source code.
 
 Expression parsing rejects unknown names, calls outside the allow-list, attribute access, indexing, and non-finite constants. Registry extensions may add constraint kinds only through explicitly installed entry points and versioned schemas.
 
@@ -506,7 +507,7 @@ Serialized `Space`, knowledge, observations, candidates, model comparisons, and 
 
 ### 12.3 Extension security
 
-Python extensions register through a named entry-point group. The library never imports all installed providers by default. A caller supplies an allow-list of provider names. Provider name, distribution version, pattern versions, and schema digest are recorded in checkpoints.
+Python extensions register through a named entry-point group. The library never imports all installed providers by default. A caller supplies an allow-list of installed distribution names; every matching entry point from those distributions is loaded in deterministic name order. Distribution name/version, entry-point name, pattern versions, and schema digest are recorded in checkpoints.
 
 ## 13. Error Model
 

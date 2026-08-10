@@ -13,9 +13,9 @@
 - Target release is `expdoe-dk 0.5.0`.
 - Existing `Parameter`, `LinearConstraint`, `Space`, `Knowledge`, `Campaign`, and `Result` imports remain valid.
 - Version 0.4 checkpoint and result payloads remain readable.
-- Serialized constraints and knowledge contain no callable, module path, lambda, or source code.
+- Serialized constraints and knowledge contain no callable, module path, lambda, or source code; expression input text is discarded after parsing and only canonical JSON AST is persisted.
 - Built-in registry definitions load without Python entry-point discovery.
-- External registry providers load only from an explicit allow-list.
+- External registry providers load only from an explicit allow-list of installed distribution names; entry-point names are recorded separately as provenance.
 - Hard constraints and safety patterns are never silently relaxed.
 - Physical-to-model transforms must be reversible within declared snapping tolerance.
 - No test in this plan requires AI credentials, network access, or equipment.
@@ -228,6 +228,8 @@ def normalize_objectives(
     )
 ```
 
+`Objective.__post_init__()` requires `priority` to be a non-negative integer. Rank `0` is highest priority and equal ranks mean equal priority; booleans are rejected even though `bool` subclasses `int`.
+
 - [ ] **Step 4: Export the types and run focused tests**
 
 Run: `cd expdoe-dk && pytest -q tests/test_objectives.py`
@@ -384,6 +386,22 @@ def test_expression_constraint_evaluates_allowlisted_math():
     assert not constraint.satisfied({"a": 5.0, "b": 2.0})
 
 
+def test_expression_constraint_serializes_canonical_ast_not_source_text():
+    constraint = ExpressionConstraint("ratio", "a / b <= 2", hard=True)
+    payload = constraint.to_dict()
+    assert "expression" not in payload
+    assert payload["ast"] == {
+        "type": "compare", "op": "<=",
+        "left": {
+            "type": "binary", "op": "/",
+            "left": {"type": "name", "name": "a"},
+            "right": {"type": "name", "name": "b"},
+        },
+        "right": {"type": "constant", "value": 2},
+    }
+    assert constraint_from_dict(payload).satisfied({"a": 4.0, "b": 2.0})
+
+
 @pytest.mark.parametrize("expression", ["__import__('os')", "x.__class__", "x[0]"])
 def test_expression_constraint_rejects_executable_syntax(expression):
     with pytest.raises(ValueError, match="not allowed"):
@@ -404,7 +422,7 @@ Run: `cd expdoe-dk && pytest -q tests/test_constraints.py`
 
 Expected: FAIL with missing constraint classes.
 
-- [ ] **Step 3: Implement the allow-list visitor and constraints**
+- [ ] **Step 3: Implement the allow-list parser, canonical JSON AST, and constraints**
 
 ```python
 _ALLOWED_CALLS = {"abs": abs, "min": min, "max": max, "log": math.log, "exp": math.exp}
@@ -430,7 +448,19 @@ def _compile_expression(expression: str, allowed_names: set[str] | None = None) 
     return tree
 ```
 
-`ExpressionConstraint.satisfied()` evaluates the compiled AST with `{"__builtins__": {}}`, `_ALLOWED_CALLS`, and the row values. Soft constraints require `penalty` and finite positive `weight`; hard constraints reject penalty fields.
+Immediately convert the validated Python AST to an immutable canonical JSON-compatible tree and discard the input string. The exact serialized node forms are:
+
+```python
+{"type": "constant", "value": JSONScalar}
+{"type": "name", "name": "factor_name"}
+{"type": "unary", "op": "+|-", "operand": NODE}
+{"type": "binary", "op": "+|-|*|/|**", "left": NODE, "right": NODE}
+{"type": "compare", "op": "<|<=|>|>=|==|!=", "left": NODE, "right": NODE}
+{"type": "boolean", "op": "and|or", "values": [NODE, NODE, ...]}
+{"type": "call", "function": "abs|min|max|log|exp", "args": [NODE, ...]}
+```
+
+`ExpressionConstraint` stores this canonical tree, `to_dict()` writes it under `ast`, and `constraint_from_dict()` accepts only that structured form. `satisfied()` interprets the canonical nodes directly; it does not call `eval`, compile persisted text, or retain the original expression. Reject unknown keys, node types, operators, functions, factor names, non-finite constants, invalid arity, and trees deeper than 32 nodes with `EngineError(CONFIG_INVALID)`. Soft constraints require `penalty` and finite positive `weight`; hard constraints reject penalty fields.
 
 - [ ] **Step 4: Run constraint tests**
 
@@ -1232,9 +1262,10 @@ git commit -m "feat: add built-in domain knowledge patterns"
 def test_provider_loader_imports_only_allowed_distributions(monkeypatch, registry):
     loaded = []
     monkeypatch.setattr(providers, "entry_points", lambda group: fake_entry_points(loaded))
-    report = load_pattern_providers({"approved-patterns"}, registry)
-    assert loaded == ["approved-patterns"]
-    assert report.providers[0].name == "approved-patterns"
+    report = load_pattern_providers({"approved-distribution"}, registry)
+    assert loaded == ["approved-entry"]
+    assert report.providers[0].distribution_name == "approved-distribution"
+    assert report.providers[0].entry_point_name == "approved-entry"
 
 
 def test_provider_loader_rejects_unlisted_name(registry):
@@ -1243,7 +1274,7 @@ def test_provider_loader_rejects_unlisted_name(registry):
     assert caught.value.code is ErrorCode.EXTENSION_NOT_ALLOWED
 ```
 
-Define `fake_entry_points(loaded)` in this test module with one approved fake entry point and one unapproved fake entry point. Its `.load()` appends only the selected entry-point name to `loaded` before returning a provider factory, so the assertion proves that unlisted provider code never executes.
+Define `fake_entry_points(loaded)` with one entry whose `dist.name` is `approved-distribution` and `name` is `approved-entry`, plus an entry owned by `unapproved-distribution`. Its `.load()` appends the entry-point name to `loaded` before returning a provider factory, so the assertion proves that code from an unlisted distribution never executes.
 
 - [ ] **Step 2: Run the tests to verify failure**
 
@@ -1258,17 +1289,23 @@ ENTRY_POINT_GROUP = "expdoe_dk.knowledge_patterns"
 
 
 def load_pattern_providers(allowed: Collection[str], registry: PatternRegistry) -> ProviderLoadReport:
-    available = {entry.name: entry for entry in entry_points(group=ENTRY_POINT_GROUP)}
-    missing = sorted(set(allowed) - set(available))
+    entries = tuple(entry_points(group=ENTRY_POINT_GROUP))
+    available_distributions = {canonical_distribution_name(entry.dist.name) for entry in entries}
+    requested = {canonical_distribution_name(name) for name in allowed}
+    missing = sorted(requested - available_distributions)
     if missing:
-        raise EngineError(ErrorCode.EXTENSION_NOT_ALLOWED, "Pattern providers are not installed", details={"providers": missing})
+        raise EngineError(ErrorCode.EXTENSION_NOT_ALLOWED, "Pattern provider distributions are not installed", details={"distributions": missing})
     records = []
-    for name in sorted(allowed):
-        provider = available[name].load()
+    selected = sorted(
+        (entry for entry in entries if canonical_distribution_name(entry.dist.name) in requested),
+        key=lambda entry: (canonical_distribution_name(entry.dist.name), entry.name),
+    )
+    for entry in selected:
+        provider = entry.load()
         definitions = tuple(provider())
         for item in definitions:
             registry.register(item)
-        records.append(provider_record(name, available[name], definitions))
+        records.append(provider_record(entry.dist.name, entry.name, entry.dist.version, definitions))
     return ProviderLoadReport(tuple(records))
 ```
 
