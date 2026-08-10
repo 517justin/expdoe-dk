@@ -418,3 +418,17 @@ def test_non_tensor_snap_rejects_boolean_and_mixed_boolean_inputs(values):
 
     with pytest.raises(ValueError, match="boolean|numeric"):
         parameter.snap(values)
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        ed.Parameter("x", bounds=(0.0, 10.0)),
+        ed.Parameter("count", kind="integer", bounds=(1, 9), step=2),
+        ed.Parameter("dose", kind="discrete", values=[0.1, 0.5, 0.9]),
+    ],
+)
+def test_numpy_snap_rejects_empty_boolean_arrays(parameter):
+    """Catches empty bool ndarrays bypassing element-wise bool validation."""
+    with pytest.raises(ValueError, match="boolean|numeric"):
+        parameter.snap(np.empty((0, 2), dtype=bool))

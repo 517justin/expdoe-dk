@@ -298,6 +298,10 @@ class Parameter:
         array = values if isinstance(values, np.ndarray) else np.asarray(
             values, dtype=object
         )
+        if np.issubdtype(array.dtype, np.bool_):
+            raise ValueError(
+                f"Parameter {self.name}: boolean snap values are not numeric."
+            )
         flattened = array.reshape(-1).tolist()
         if any(isinstance(value, (bool, np.bool_)) for value in flattened):
             raise ValueError(
