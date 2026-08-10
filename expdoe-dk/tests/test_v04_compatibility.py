@@ -221,3 +221,46 @@ def test_integral_tensor_snap_rejects_unrepresentable_result(parameter, values):
     """Catches snapped levels wrapping when cast back to the input dtype."""
     with pytest.raises(ValueError, match="representable|dtype"):
         parameter.snap(values)
+
+
+def test_int64_tensor_snap_matches_numpy_across_full_signed_range():
+    """Catches subtracting INT64_MIN from an int64 tensor in fixed width."""
+    info = np.iinfo(np.int64)
+    parameter = ed.Parameter(
+        "count", kind="integer", bounds=(info.min, info.max), step=2
+    )
+    tensor_values = torch.tensor([0], dtype=torch.int64)
+    numpy_values = np.array([0], dtype=np.int64)
+
+    tensor_snapped = parameter.snap(tensor_values)
+    numpy_snapped = parameter.snap(numpy_values)
+
+    assert numpy_snapped.tolist() == [0]
+    assert tensor_snapped.tolist() == numpy_snapped.tolist()
+    assert tensor_snapped.dtype == tensor_values.dtype
+    assert tensor_snapped.device == tensor_values.device
+
+
+def test_int64_discrete_snap_uses_arbitrary_precision_distances():
+    """Catches abs(INT64_MIN) overflowing and appearing nearest to zero."""
+    parameter = ed.Parameter(
+        "dose", kind="discrete", values=[np.iinfo(np.int64).min, 2**62]
+    )
+    values = torch.tensor([0], dtype=torch.int64)
+
+    snapped = parameter.snap(values)
+
+    assert torch.equal(snapped, torch.tensor([2**62], dtype=torch.int64))
+    assert snapped.device == values.device
+
+
+def test_uint64_tensor_snap_preserves_unsigned_dtype_and_device():
+    """Catches representability checks comparing tensors to uint64 maxima."""
+    parameter = ed.Parameter("count", kind="integer", bounds=(0, 10), step=2)
+    values = torch.tensor([5], dtype=torch.uint64)
+
+    snapped = parameter.snap(values)
+
+    assert torch.equal(snapped, torch.tensor([6], dtype=torch.uint64))
+    assert snapped.dtype == values.dtype
+    assert snapped.device == values.device

@@ -328,35 +328,20 @@ class Parameter:
                 index = lower_index + ((position - lower_index) >= 0.5)
                 snapped = low + index.clamp(0, last_index) * step
                 return snapped.to(dtype=values.dtype)
-            else:
-                last_level = low + last_index * step
-                self._require_int64_values((low, step, last_level))
-                working = values.to(dtype=torch.int64)
-                offset = working - low
-                index = torch.div(offset, step, rounding_mode="floor")
-                remainder = torch.remainder(offset, step)
-                index = index + (remainder >= (step + 1) // 2)
-                snapped = low + index.clamp(0, last_index) * step
-                return self._restore_integral_tensor_dtype(snapped, values.dtype)
+            return self._snap_integral_tensor_to_integer_grid(
+                values, low, step, last_index
+            )
 
-        levels = self.numeric_levels
-        integral_levels = all(float(level).is_integer() for level in levels)
         if values.is_floating_point():
+            levels = self.numeric_levels
             output_dtype = values.dtype
-        elif integral_levels:
-            integer_levels = tuple(int(level) for level in levels)
-            self._require_int64_values(integer_levels)
-            working = values.to(dtype=torch.int64)
-            level_tensor = torch.tensor(
-                integer_levels, dtype=torch.int64, device=values.device
-            )
-            indices = torch.abs(
-                working.unsqueeze(-1) - level_tensor
-            ).argmin(dim=-1)
-            return self._restore_integral_tensor_dtype(
-                level_tensor[indices], values.dtype
-            )
         else:
+            integer_levels = self._integral_discrete_levels()
+            if integer_levels is not None:
+                return self._snap_integral_tensor_to_levels(
+                    values, integer_levels
+                )
+            levels = self.numeric_levels
             output_dtype = torch.float64
         working = values.to(dtype=output_dtype)
         level_tensor = torch.tensor(
@@ -365,26 +350,63 @@ class Parameter:
         indices = torch.abs(working.unsqueeze(-1) - level_tensor).argmin(dim=-1)
         return level_tensor[indices]
 
-    def _require_int64_values(self, values: Sequence[int]) -> None:
-        info = torch.iinfo(torch.int64)
-        if any(value < info.min or value > info.max for value in values):
-            raise ValueError(
-                f"Parameter {self.name}: snapped levels are not representable "
-                "in the supported signed working dtype torch.int64."
-            )
-
-    def _restore_integral_tensor_dtype(
-        self, snapped: Tensor, output_dtype: torch.dtype
+    def _snap_integral_tensor_to_integer_grid(
+        self, values: Tensor, low: int, step: int, last_index: int
     ) -> Tensor:
-        info = torch.iinfo(output_dtype)
-        if snapped.numel() and bool(
-            ((snapped < info.min) | (snapped > info.max)).any().item()
-        ):
+        last_level = low + last_index * step
+        snapped: list[int] = []
+        for value in self._tensor_python_integers(values):
+            if value <= low:
+                index = 0
+            elif value >= last_level:
+                index = last_index
+            else:
+                quotient, remainder = divmod(value - low, step)
+                index = quotient + int(2 * remainder >= step)
+            snapped.append(low + index * step)
+        return self._tensor_from_python_integers(snapped, values)
+
+    def _integral_discrete_levels(self) -> tuple[int, ...] | None:
+        raw_levels = self.values if self.values is not None else self.numeric_levels
+        integers: list[int] = []
+        for level in raw_levels:
+            if isinstance(level, Integral):
+                integers.append(int(level))
+                continue
+            numeric = float(level)
+            if not numeric.is_integer():
+                return None
+            integers.append(int(numeric))
+        return tuple(sorted(integers))
+
+    def _snap_integral_tensor_to_levels(
+        self, values: Tensor, levels: tuple[int, ...]
+    ) -> Tensor:
+        snapped = [
+            min(levels, key=lambda level: abs(value - level))
+            for value in self._tensor_python_integers(values)
+        ]
+        return self._tensor_from_python_integers(snapped, values)
+
+    @staticmethod
+    def _tensor_python_integers(values: Tensor) -> list[int]:
+        flattened = values.detach().cpu().reshape(-1).tolist()
+        return [int(value) for value in flattened]
+
+    def _tensor_from_python_integers(
+        self, snapped: Sequence[int], template: Tensor
+    ) -> Tensor:
+        info = torch.iinfo(template.dtype)
+        minimum = int(info.min)
+        maximum = int(info.max)
+        if any(value < minimum or value > maximum for value in snapped):
             raise ValueError(
                 f"Parameter {self.name}: snapped result is not representable "
-                f"in input dtype {output_dtype}."
+                f"in input dtype {template.dtype}."
             )
-        return snapped.to(dtype=output_dtype)
+        return torch.tensor(
+            snapped, dtype=template.dtype, device=template.device
+        ).reshape(template.shape)
 
     def _validate_continuous(self) -> None:
         self._validated_bounds()
