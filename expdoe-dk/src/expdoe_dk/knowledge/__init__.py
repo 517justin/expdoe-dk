@@ -83,8 +83,21 @@ def _gamma_mode(a: float, b: float) -> float:
     return max(0.01, (a - 1.0) / b) if a > 1 else 0.05
 
 
+_LEGACY_PATTERN_KEYS = frozenset(
+    {
+        ("arrhenius", "1.0"),
+        ("quadratic_peak", "1.0"),
+        ("monotone", "1.0"),
+        ("random_augment", "1.0"),
+        ("gp_prior", "1.0"),
+    }
+)
+
+
 def _legacy_item_from_spec(spec: KnowledgePatternSpec) -> Any | None:
     """Render one built-in declaration through the exact v0.4 item view."""
+    if (spec.pattern, spec.version) not in _LEGACY_PATTERN_KEYS:
+        return None
     parameters = spec.parameters
     if spec.pattern == "arrhenius":
         return _ArrheniusItem(
@@ -152,6 +165,28 @@ class Knowledge:
         self._specs.append(spec)
         return self
 
+    def _add_legacy_spec(self, spec: KnowledgePatternSpec) -> "Knowledge":
+        """Add a helper declaration with a stable occurrence-distinct ID."""
+        existing_ids = {item.pattern_id for item in self._specs}
+        base_id = spec.pattern_id
+        effective_id = base_id
+        occurrence = 1
+        while effective_id in existing_ids:
+            occurrence += 1
+            effective_id = f"{base_id}-{occurrence}"
+        if effective_id != base_id:
+            spec = make_pattern_spec(
+                pattern_id=effective_id,
+                pattern=spec.pattern,
+                version=spec.version,
+                parameters=spec.to_dict()["parameters"],
+                scope=spec.scope,
+                confidence=spec.confidence,
+                evidence=spec.evidence,
+                enabled=spec.enabled,
+            )
+        return self.add(spec)
+
     # ------------------------------------------------------------------ #
     # Composition (chainable)
     # ------------------------------------------------------------------ #
@@ -171,7 +206,7 @@ class Knowledge:
                 "a specific reason.",
                 stacklevel=2,
             )
-        return self.add(
+        return self._add_legacy_spec(
             make_pattern_spec(
                 pattern="arrhenius",
                 version="1.0",
@@ -203,7 +238,7 @@ class Knowledge:
             raise ValueError(
                 f"direction must be 'peak' or 'valley', got {direction!r}."
             )
-        return self.add(
+        return self._add_legacy_spec(
             make_pattern_spec(
                 pattern="quadratic_peak",
                 version="1.0",
@@ -232,7 +267,7 @@ class Knowledge:
                 f"'decreases_objective', got {effect!r}."
             )
         direction = "increasing" if effect == "increases_objective" else "decreasing"
-        return self.add(
+        return self._add_legacy_spec(
             make_pattern_spec(
                 pattern="monotone",
                 version="1.0",
@@ -248,7 +283,7 @@ class Knowledge:
         )
 
     def with_random_augment(self, n: int = 20) -> "Knowledge":
-        return self.add(
+        return self._add_legacy_spec(
             make_pattern_spec(
                 pattern="random_augment",
                 version="1.0",
@@ -266,7 +301,7 @@ class Knowledge:
             raise ValueError(
                 f"lengthscale preset must be one of {list(GP_PRIOR_PRESETS)}."
             )
-        return self.add(
+        return self._add_legacy_spec(
             make_pattern_spec(
                 pattern="gp_prior",
                 version="1.0",
@@ -302,11 +337,13 @@ class Knowledge:
 
     def drop(self, kind: str, param: str | None = None) -> "Knowledge":
         """Remove items of a given kind (and optionally a specific param)."""
+        legacy_kind = any(pattern == kind for pattern, _ in _LEGACY_PATTERN_KEYS)
         self._specs = [
             spec
             for spec in self._specs
             if not (
                 spec.pattern == kind
+                and (not legacy_kind or spec.version == "1.0")
                 and (param is None or param in spec.scope.factors)
             )
         ]
@@ -333,7 +370,7 @@ class Knowledge:
         return self._registry
 
     def has_kind(self, kind: str) -> bool:
-        return any(spec.pattern == kind for spec in self._specs)
+        return bool(self.items_of(kind))
 
     def items_of(self, kind: str) -> list[Any]:
         return [
@@ -455,7 +492,10 @@ class Knowledge:
     def compile(self, space, observations=None) -> OptimizationArtifacts:
         effective_specs: list[KnowledgePatternSpec] = []
         for spec in self._specs:
-            if spec.pattern != "monotone" or spec.parameters["epsilon"] != "auto":
+            if (
+                (spec.pattern, spec.version) != ("monotone", "1.0")
+                or spec.parameters["epsilon"] != "auto"
+            ):
                 effective_specs.append(spec)
                 continue
             parameters = spec.to_dict()["parameters"]

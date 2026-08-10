@@ -20,6 +20,26 @@ from expdoe_dk.knowledge.shape import (
 from expdoe_dk.knowledge.specs import KnowledgeScope, make_pattern_spec
 
 
+def _provider_definition(pattern, version, compiler):
+    def validator(spec, space, observations=None):
+        return KnowledgeValidationResult(
+            pattern_id=spec.pattern_id,
+            state="valid",
+            summary="valid",
+        )
+
+    return KnowledgePatternDefinition(
+        pattern=pattern,
+        version=version,
+        family="provider",
+        schema={},
+        compiler=compiler,
+        validator=validator,
+        renderer=lambda spec, space: f"{pattern}@{version}",
+        compatibility=lambda spec, space: CompatibilityResult(compatible=True),
+    )
+
+
 def test_legacy_helpers_emit_versioned_specs_and_old_payload():
     knowledge = Knowledge().with_arrhenius("temperature").with_monotone(
         "time", effect="increases_objective"
@@ -82,6 +102,122 @@ def test_specs_are_an_immutable_tuple_and_pattern_ids_are_unique():
         knowledge.specs.append(declaration)
     with pytest.raises(ValueError, match="pattern_id"):
         knowledge.add(declaration)
+
+
+def test_repeated_identical_helpers_get_stable_occurrence_distinct_ids():
+    first = Knowledge().with_arrhenius("temperature").with_arrhenius("temperature")
+    equivalent = (
+        Knowledge().with_arrhenius("temperature").with_arrhenius("temperature")
+    )
+
+    first_ids = [spec.pattern_id for spec in first.specs]
+    assert len(set(first_ids)) == 2
+    assert [spec.pattern_id for spec in equivalent.specs] == first_ids
+    assert [
+        spec.pattern_id for spec in Knowledge.from_dict(first.to_dict()).specs
+    ] == first_ids
+    assert first.to_dict()["items"] == [
+        {
+            "kind": "arrhenius",
+            "param": "temperature",
+            "frozen": True,
+            "activation_energy": 1.0,
+            "amplitude_init": -1.0,
+        },
+        {
+            "kind": "arrhenius",
+            "param": "temperature",
+            "frozen": True,
+            "activation_energy": 1.0,
+            "amplitude_init": -1.0,
+        },
+    ]
+
+
+def test_old_payload_with_repeated_identical_items_round_trips_with_stable_ids():
+    payload = {
+        "strict": False,
+        "items": [
+            {"kind": "random_augment", "n": 20},
+            {"kind": "random_augment", "n": 20},
+        ],
+    }
+
+    first = Knowledge.from_dict(payload)
+    equivalent = Knowledge.from_dict(payload)
+
+    assert first.to_dict() == payload
+    first_ids = [spec.pattern_id for spec in first.specs]
+    assert len(set(first_ids)) == 2
+    assert [spec.pattern_id for spec in equivalent.specs] == first_ids
+
+
+def test_provider_arrhenius_v2_stays_out_of_legacy_payload():
+    registry = PatternRegistry()
+    registry.register(
+        _provider_definition(
+            "arrhenius",
+            "2.0",
+            lambda spec, space, observations=None: OptimizationArtifacts(),
+        )
+    )
+    knowledge = Knowledge(registry=registry).add(
+        make_pattern_spec(
+            pattern="arrhenius",
+            version="2.0",
+            parameters={"provider_model": "custom"},
+            scope=KnowledgeScope(factors=("temperature",)),
+            confidence=1.0,
+        )
+    )
+
+    assert knowledge.items == []
+    assert not knowledge.has_kind("arrhenius")
+    assert knowledge.to_dict() == {"strict": False, "items": []}
+    assert knowledge.to_specs_dict()["specs"][0]["version"] == "2.0"
+    knowledge.drop("arrhenius")
+    assert len(knowledge.specs) == 1
+
+
+def test_provider_monotone_v2_compiles_without_builtin_auto_epsilon_handling():
+    def compiler(spec, space, observations=None):
+        return OptimizationArtifacts(
+            diagnostics=(
+                OptimizationArtifact(
+                    kind="provider_monotone",
+                    payload={"compiled": True},
+                    source_pattern_id=spec.pattern_id,
+                    source_pattern=spec.pattern,
+                    source_version=spec.version,
+                ),
+            )
+        )
+
+    registry = PatternRegistry()
+    registry.register(_provider_definition("monotone", "2.0", compiler))
+    knowledge = Knowledge(registry=registry).add(
+        make_pattern_spec(
+            pattern="monotone",
+            version="2.0",
+            parameters={"provider_direction": "custom"},
+            scope=KnowledgeScope(factors=("time",)),
+            confidence=1.0,
+        )
+    )
+    space = Space([Parameter("time", bounds=(0.0, 1.0))])
+
+    assert knowledge.validate(auto_rescue=True) is knowledge
+    artifacts = knowledge.compile(space)
+
+    assert artifacts.diagnostics[0].to_dict() == {
+        "kind": "provider_monotone",
+        "payload": {"compiled": True},
+        "source_pattern_id": knowledge.specs[0].pattern_id,
+        "source_pattern": "monotone",
+        "source_version": "2.0",
+    }
+    assert not knowledge.has_kind("monotone")
+    assert knowledge.to_dict() == {"strict": False, "items": []}
 
 
 def test_all_legacy_helpers_serialize_separately_as_versioned_specs():
