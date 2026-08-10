@@ -1,6 +1,5 @@
 import warnings
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -138,7 +137,7 @@ def test_successful_batch_deeply_detaches_mutable_condition_cells():
 
 def test_yvar_rejects_complex_values_without_complex_warning():
     with warnings.catch_warnings():
-        warnings.simplefilter("error", np.exceptions.ComplexWarning)
+        warnings.simplefilter("error")
         with pytest.raises(ValueError, match="Yvar.*numeric"):
             ObservationBatch(
                 X=pd.DataFrame({"x": [0.1]}),
