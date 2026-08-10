@@ -313,3 +313,108 @@ def test_integral_numpy_snap_uses_lossless_object_when_dtype_cannot_hold_result(
     assert snapped.dtype == object
     assert snapped.tolist() == [300]
     assert type(snapped.tolist()[0]) is int
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        np.array([2**64 + 1], dtype=object),
+        [2**64 + 1],
+        (2**64 + 1,),
+    ],
+)
+def test_arbitrary_precision_object_and_sequence_snap_stays_exact(values):
+    """Catches object/list/tuple inputs taking a lossy float64 distance path."""
+    base = 2**64
+    parameter = ed.Parameter(
+        "dose", kind="discrete", values=[base - 4096, base + 4096]
+    )
+
+    snapped = parameter.snap(values)
+
+    assert isinstance(snapped, np.ndarray)
+    assert snapped.dtype == object
+    assert snapped.tolist() == [base + 4096]
+    assert type(snapped.tolist()[0]) is int
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        np.array([2**53 + 1], dtype=object),
+        [2**53 + 1],
+        (2**53 + 1,),
+    ],
+)
+def test_object_and_sequence_snap_match_above_float_precision(values):
+    """Catches exact sequence parity regressing below the uint64 boundary."""
+    base = 2**53
+    parameter = ed.Parameter(
+        "dose", kind="discrete", values=[base - 100, base + 100]
+    )
+
+    snapped = parameter.snap(values)
+
+    assert snapped.tolist() == [base + 100]
+    assert all(type(value) is int for value in snapped.reshape(-1).tolist())
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (
+            np.array(2**64 + 1, dtype=object),
+            np.array(2**64 + 4096, dtype=object),
+        ),
+        (
+            np.empty((0, 2), dtype=object),
+            np.empty((0, 2), dtype=object),
+        ),
+        (
+            np.array(
+                [
+                    [2**64 - 5000, 2**64 + 1],
+                    [2**64 + 5000, 2**64],
+                ],
+                dtype=object,
+            ),
+            np.array(
+                [
+                    [2**64 - 4096, 2**64 + 4096],
+                    [2**64 + 4096, 2**64 - 4096],
+                ],
+                dtype=object,
+            ),
+        ),
+    ],
+)
+def test_integral_object_array_snap_preserves_shape(values, expected):
+    """Catches scalar, empty, or multidimensional object arrays losing shape."""
+    base = 2**64
+    parameter = ed.Parameter(
+        "dose", kind="discrete", values=[base - 4096, base + 4096]
+    )
+
+    snapped = parameter.snap(values)
+
+    assert snapped.dtype == object
+    assert snapped.shape == values.shape
+    np.testing.assert_array_equal(snapped, expected)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        [True, False],
+        [1, True],
+        (np.int64(1), np.bool_(False)),
+        np.array([True, False], dtype=bool),
+        np.array([1, True], dtype=object),
+    ],
+)
+def test_non_tensor_snap_rejects_boolean_and_mixed_boolean_inputs(values):
+    """Catches booleans being silently interpreted as exact integers."""
+    parameter = ed.Parameter("dose", kind="discrete", values=[0, 2])
+
+    with pytest.raises(ValueError, match="boolean|numeric"):
+        parameter.snap(values)

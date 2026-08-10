@@ -294,15 +294,26 @@ class Parameter:
         """Snap numeric values to the nearest declared finite level."""
         if isinstance(values, Tensor):
             return self._snap_tensor(values)
-        if isinstance(values, np.ndarray) and np.issubdtype(
-            values.dtype, np.integer
-        ):
-            exact = self._snap_integral_numpy(values)
+
+        array = values if isinstance(values, np.ndarray) else np.asarray(
+            values, dtype=object
+        )
+        flattened = array.reshape(-1).tolist()
+        if any(isinstance(value, (bool, np.bool_)) for value in flattened):
+            raise ValueError(
+                f"Parameter {self.name}: boolean snap values are not numeric."
+            )
+        exact_integral = np.issubdtype(array.dtype, np.integer) or (
+            array.dtype == object
+            and all(isinstance(value, Integral) for value in flattened)
+        )
+        if exact_integral:
+            exact = self._snap_integral_numpy(array)
             if exact is not None:
                 return exact
         if self.kind == "integer":
-            return self._snap_integer_values(values)
-        numeric = np.asarray(values, dtype=np.float64)
+            return self._snap_integer_values(array)
+        numeric = np.asarray(array, dtype=np.float64)
         if not np.all(np.isfinite(numeric)):
             raise ValueError(f"Parameter {self.name}: snap values must be finite.")
         if self.kind == "continuous":
@@ -451,6 +462,8 @@ class Parameter:
     def _numpy_from_python_integers(
         snapped: Sequence[int], template: np.ndarray
     ) -> np.ndarray:
+        if template.dtype == object:
+            return np.asarray(snapped, dtype=object).reshape(template.shape)
         info = np.iinfo(template.dtype)
         minimum = int(info.min)
         maximum = int(info.max)
@@ -728,7 +741,7 @@ class Parameter:
 
     def _snap_integer_values(self, values: np.ndarray) -> np.ndarray:
         """Snap integer-factor inputs with exact integer/index arithmetic."""
-        raw = np.asarray(values, dtype=object)
+        raw = values
         low, step, last_index = self._integer_grid()
         high = low + last_index * step
         snapped: list[int] = []
