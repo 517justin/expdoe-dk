@@ -53,18 +53,23 @@ def test_legacy_helpers_emit_versioned_specs_and_old_payload():
     assert restored.to_dict() == knowledge.to_dict()
 
 
-def test_default_registry_is_fresh_and_contains_exactly_five_builtins():
+def test_default_registry_is_fresh_and_retains_all_five_legacy_builtins():
     first = Knowledge()
     second = Knowledge()
 
     assert first.registry is not second.registry
-    assert [(item.pattern, item.version) for item in first.registry.definitions()] == [
+    legacy_keys = {
         ("arrhenius", "1.0"),
         ("gp_prior", "1.0"),
         ("monotone", "1.0"),
         ("quadratic_peak", "1.0"),
         ("random_augment", "1.0"),
-    ]
+    }
+    registered_keys = {
+        (item.pattern, item.version) for item in first.registry.definitions()
+    }
+    assert legacy_keys <= registered_keys
+    assert all(first.registry.resolve(*key) is not None for key in legacy_keys)
 
 
 def test_builtin_schemas_accept_every_helper_generated_parameter_payload():

@@ -15,9 +15,13 @@ Lessons from DOEGP Plan 2 hard-coded as safer defaults:
 """
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from expdoe_dk.domain import ExpressionConstraint
+from expdoe_dk.errors import EngineError
 
 from ._frame import PhysicalEffect, flip_for_minimize, InternalDirection
 from .artifacts import OptimizationArtifacts
@@ -165,6 +169,10 @@ class Knowledge:
         self._specs.append(spec)
         return self
 
+    def add_spec(self, spec: KnowledgePatternSpec) -> "Knowledge":
+        """Add a registry-backed spec through the strict public add boundary."""
+        return self.add(spec)
+
     def _add_legacy_spec(self, spec: KnowledgePatternSpec) -> "Knowledge":
         """Add a helper declaration with a stable occurrence-distinct ID."""
         existing_ids = {item.pattern_id for item in self._specs}
@@ -190,6 +198,157 @@ class Knowledge:
     # ------------------------------------------------------------------ #
     # Composition (chainable)
     # ------------------------------------------------------------------ #
+    def with_saturation(
+        self,
+        param: str,
+        *,
+        direction: str,
+        half_response: float,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare a one-factor saturation response at ``half_response``."""
+        self._require_name(param, "param")
+        if direction not in {"increasing", "decreasing"}:
+            raise ValueError("direction must be increasing or decreasing")
+        self._require_finite(half_response, "half_response")
+        return self.add_spec(
+            make_pattern_spec(
+                pattern="saturation",
+                version="1.0",
+                parameters={"direction": direction, "half_response": half_response},
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=confidence,
+            )
+        )
+
+    def with_threshold(
+        self,
+        param: str,
+        *,
+        threshold: float,
+        below_behavior: str,
+        above_behavior: str,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare keyword-only below/above response behavior at a threshold."""
+        self._require_name(param, "param")
+        self._require_finite(threshold, "threshold")
+        allowed = {"increasing", "decreasing", "flat"}
+        if below_behavior not in allowed:
+            raise ValueError("below_behavior must be increasing, decreasing, or flat")
+        if above_behavior not in allowed:
+            raise ValueError("above_behavior must be increasing, decreasing, or flat")
+        return self.add_spec(
+            make_pattern_spec(
+                pattern="threshold",
+                version="1.0",
+                parameters={
+                    "threshold": threshold,
+                    "below_behavior": below_behavior,
+                    "above_behavior": above_behavior,
+                },
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=confidence,
+            )
+        )
+
+    def with_interaction(
+        self,
+        first: str,
+        second: str,
+        *,
+        kind: str,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare a synergy or antagonism between two distinct factors."""
+        self._require_name(first, "first")
+        self._require_name(second, "second")
+        if first == second:
+            raise ValueError("interaction factors must be distinct")
+        if kind not in {"synergy", "antagonism"}:
+            raise ValueError("kind must be synergy or antagonism")
+        return self.add_spec(
+            make_pattern_spec(
+                pattern=kind,
+                version="1.0",
+                parameters={},
+                scope=KnowledgeScope(factors=(first, second)),
+                confidence=confidence,
+            )
+        )
+
+    def with_safe_region(
+        self,
+        *,
+        expression: str,
+        factors: tuple[str, ...] = (),
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare a hard safe region using a keyword-only expression."""
+        if type(expression) is not str or not expression.strip():
+            raise ValueError("expression must be a non-empty string")
+        if type(factors) is not tuple:
+            raise TypeError("factors must be a tuple of factor names")
+        for factor in factors:
+            self._require_name(factor, "factors")
+        try:
+            ExpressionConstraint(
+                "knowledge-helper-validation",
+                expression,
+                allowed_names=factors or None,
+            )
+        except EngineError as error:
+            raise ValueError(str(error)) from error
+        return self.add_spec(
+            make_pattern_spec(
+                pattern="safe_region",
+                version="1.0",
+                parameters={"expression": expression},
+                scope=KnowledgeScope(factors=factors),
+                confidence=confidence,
+            )
+        )
+
+    def with_tradeoff(
+        self,
+        first_objective: str,
+        second_objective: str,
+        *,
+        first_weight: float,
+        second_weight: float,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare keyword-only nonnegative weights for two objectives."""
+        self._require_name(first_objective, "first_objective")
+        self._require_name(second_objective, "second_objective")
+        if first_objective == second_objective:
+            raise ValueError("tradeoff objectives must be distinct")
+        first = self._require_finite(first_weight, "first_weight")
+        second = self._require_finite(second_weight, "second_weight")
+        if first < 0 or second < 0 or first + second <= 0:
+            raise ValueError("tradeoff weights must be nonnegative with a positive sum")
+        return self.add_spec(
+            make_pattern_spec(
+                pattern="tradeoff",
+                version="1.0",
+                parameters={"weights": [first, second]},
+                scope=KnowledgeScope(objectives=(first_objective, second_objective)),
+                confidence=confidence,
+            )
+        )
+
+    @staticmethod
+    def _require_name(value: object, context: str) -> str:
+        if type(value) is not str or not value:
+            raise TypeError(f"{context} must be a non-empty string")
+        return value
+
+    @staticmethod
+    def _require_finite(value: object, context: str) -> float:
+        if type(value) not in (int, float) or not math.isfinite(float(value)):
+            raise TypeError(f"{context} must be a finite non-boolean real number")
+        return float(value)
+
     def with_arrhenius(
         self,
         param: str,

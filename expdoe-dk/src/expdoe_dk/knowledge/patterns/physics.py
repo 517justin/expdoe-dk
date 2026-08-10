@@ -63,14 +63,26 @@ def _compile_monotone(spec, space, observations=None) -> OptimizationArtifacts:
     )
 
 
-def _validate(spec, space, observations=None) -> KnowledgeValidationResult:
-    factor = spec.scope.factors[0]
-    exists = factor in space.param_names
+def _validate_factor(spec, space, observations=None) -> KnowledgeValidationResult:
+    errors: list[str] = []
+    if len(spec.scope.factors) != 1:
+        errors.append(f"{spec.pattern} requires exactly one scoped factor")
+        factor = None
+    else:
+        factor = spec.scope.factors[0]
+        if factor not in space.param_names:
+            errors.append(f"Unknown factor {factor!r}")
+        elif space.param_by_name(factor).kind not in {
+            "continuous",
+            "integer",
+            "discrete",
+        }:
+            errors.append(f"Factor {factor!r} must be numeric")
     return KnowledgeValidationResult(
         pattern_id=spec.pattern_id,
-        state="valid" if exists else "invalid",
-        summary=(f"Factor {factor!r} is available" if exists else f"Unknown factor {factor!r}"),
-        errors=() if exists else (f"Unknown factor {factor!r}",),
+        state="invalid" if errors else "valid",
+        summary=(f"Invalid {spec.pattern} declaration" if errors else f"Factor {factor!r} is available"),
+        errors=tuple(errors),
         effective_confidence=spec.confidence,
     )
 
@@ -79,13 +91,68 @@ def _render(spec, space) -> str:
     return f"{spec.pattern} on {spec.scope.factors[0]}"
 
 
-def _compatible(spec, space) -> CompatibilityResult:
-    factor = spec.scope.factors[0]
-    compatible = factor in space.param_names
-    return CompatibilityResult(
-        compatible=compatible,
-        reasons=() if compatible else (f"Unknown factor {factor!r}",),
+def _compatible_factor(spec, space) -> CompatibilityResult:
+    result = _validate_factor(spec, space)
+    return CompatibilityResult(compatible=result.state != "invalid", reasons=result.errors)
+
+
+_TEMPERATURE_UNITS = frozenset({"", "K", "kelvin", "C", "°C", "celsius", "F", "°F", "fahrenheit"})
+
+
+def _arrhenius_errors(spec, space) -> tuple[str, ...]:
+    if len(spec.scope.factors) != 1:
+        return ("arrhenius requires exactly one temperature factor",)
+    factor_name = spec.scope.factors[0]
+    if factor_name not in space.param_names:
+        return (f"Unknown factor {factor_name!r}",)
+    factor = space.param_by_name(factor_name)
+    errors: list[str] = []
+    if factor.kind not in {"continuous", "integer", "discrete"}:
+        errors.append(f"Temperature factor {factor_name!r} must be numeric")
+    name_is_temperature = "temp" in factor_name.lower() or "temperature" in factor_name.lower()
+    unit_is_temperature = factor.unit in _TEMPERATURE_UNITS and factor.unit != ""
+    if not name_is_temperature and not unit_is_temperature:
+        errors.append(f"Factor {factor_name!r} is not temperature-compatible")
+    if factor.unit not in _TEMPERATURE_UNITS:
+        errors.append(f"Unrecognized temperature unit {factor.unit!r}")
+    if not errors:
+        if factor.bounds is not None:
+            low = float(factor.bounds[0])
+        else:
+            low = float(min(factor.numeric_levels))
+        if factor.unit in {"C", "°C", "celsius"}:
+            absolute_low = low + 273.15
+        elif factor.unit in {"F", "°F", "fahrenheit"}:
+            absolute_low = (low - 32.0) * 5.0 / 9.0 + 273.15
+        else:
+            absolute_low = low
+        if absolute_low <= 0:
+            errors.append("Arrhenius temperature must be positive in Kelvin")
+    return tuple(errors)
+
+
+def _validate_arrhenius(spec, space, observations=None) -> KnowledgeValidationResult:
+    errors = _arrhenius_errors(spec, space)
+    return KnowledgeValidationResult(
+        pattern_id=spec.pattern_id,
+        state="invalid" if errors else ("insufficient_data" if observations is None else "valid"),
+        summary=(
+            "Invalid arrhenius declaration"
+            if errors
+            else (
+                "arrhenius is structurally valid; empirical data was not provided"
+                if observations is None
+                else "arrhenius is valid"
+            )
+        ),
+        errors=errors,
+        effective_confidence=spec.confidence,
     )
+
+
+def _compatible_arrhenius(spec, space) -> CompatibilityResult:
+    errors = _arrhenius_errors(spec, space)
+    return CompatibilityResult(compatible=not errors, reasons=errors)
 
 
 def arrhenius_definition() -> KnowledgePatternDefinition:
@@ -104,9 +171,9 @@ def arrhenius_definition() -> KnowledgePatternDefinition:
             "additionalProperties": False,
         },
         compiler=_compile_arrhenius,
-        validator=_validate,
+        validator=_validate_arrhenius,
         renderer=_render,
-        compatibility=_compatible,
+        compatibility=_compatible_arrhenius,
     )
 
 
@@ -114,7 +181,7 @@ def monotone_definition() -> KnowledgePatternDefinition:
     return KnowledgePatternDefinition(
         pattern="monotone",
         version="1.0",
-        family="physics",
+        family="shape",
         schema={
             "type": "object",
             "properties": {
@@ -137,9 +204,9 @@ def monotone_definition() -> KnowledgePatternDefinition:
             "additionalProperties": False,
         },
         compiler=_compile_monotone,
-        validator=_validate,
+        validator=_validate_factor,
         renderer=_render,
-        compatibility=_compatible,
+        compatibility=_compatible_factor,
     )
 
 

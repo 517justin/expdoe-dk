@@ -6,6 +6,9 @@ from ..guard import CompatibilityResult, KnowledgeValidationResult
 from ..registry import KnowledgePatternDefinition
 
 
+_NUMERIC_KINDS = frozenset({"continuous", "integer", "discrete"})
+
+
 def _artifact(spec, kind: str, payload: dict) -> OptimizationArtifact:
     return OptimizationArtifact(
         kind=kind,
@@ -54,13 +57,31 @@ def _compile_random_augment(spec, space, observations=None) -> OptimizationArtif
 
 
 def _validate_factor(spec, space, observations=None) -> KnowledgeValidationResult:
-    factor = spec.scope.factors[0]
-    exists = factor in space.param_names
+    errors: list[str] = []
+    if len(spec.scope.factors) != 1:
+        errors.append(f"{spec.pattern} requires exactly one scoped factor")
+        factor = None
+    else:
+        factor = spec.scope.factors[0]
+        if factor not in space.param_names:
+            errors.append(f"Unknown factor {factor!r}")
+        else:
+            parameter = space.param_by_name(factor)
+            if parameter.kind not in _NUMERIC_KINDS:
+                errors.append(f"Factor {factor!r} must be numeric")
+            elif spec.pattern == "quadratic_peak":
+                if parameter.bounds is not None:
+                    lo, hi = map(float, parameter.bounds)
+                else:
+                    levels = tuple(float(value) for value in parameter.numeric_levels)
+                    lo, hi = min(levels), max(levels)
+                if not lo <= float(spec.parameters["center"]) <= hi:
+                    errors.append("center must lie within factor bounds")
     return KnowledgeValidationResult(
         pattern_id=spec.pattern_id,
-        state="valid" if exists else "invalid",
-        summary=(f"Factor {factor!r} is available" if exists else f"Unknown factor {factor!r}"),
-        errors=() if exists else (f"Unknown factor {factor!r}",),
+        state="invalid" if errors else "valid",
+        summary=(f"Invalid {spec.pattern} declaration" if errors else f"Factor {factor!r} is available"),
+        errors=tuple(errors),
         effective_confidence=spec.confidence,
     )
 
@@ -81,16 +102,207 @@ def _render(spec, space) -> str:
 
 
 def _compatible_factor(spec, space) -> CompatibilityResult:
-    factor = spec.scope.factors[0]
-    compatible = factor in space.param_names
-    return CompatibilityResult(
-        compatible=compatible,
-        reasons=() if compatible else (f"Unknown factor {factor!r}",),
-    )
+    result = _validate_factor(spec, space)
+    return CompatibilityResult(compatible=result.state != "invalid", reasons=result.errors)
 
 
 def _compatible(spec, space) -> CompatibilityResult:
     return CompatibilityResult(compatible=True)
+
+
+def _new_shape_validation(spec, space, observations=None) -> KnowledgeValidationResult:
+    errors: list[str] = []
+    if len(spec.scope.factors) != 1:
+        errors.append(f"{spec.pattern} requires exactly one scoped factor")
+    elif spec.scope.factors[0] not in space.param_names:
+        errors.append(f"Unknown factor {spec.scope.factors[0]!r}")
+    else:
+        factor = space.param_by_name(spec.scope.factors[0])
+        if factor.kind not in _NUMERIC_KINDS:
+            errors.append(f"Factor {factor.name!r} must be numeric")
+        else:
+            if factor.bounds is not None:
+                lo, hi = (float(value) for value in factor.bounds)
+            else:
+                levels = tuple(float(value) for value in factor.numeric_levels)
+                lo, hi = min(levels), max(levels)
+            parameters = spec.parameters
+            if spec.pattern in {"saturation", "threshold"}:
+                location_name = (
+                    "half_response" if spec.pattern == "saturation" else "threshold"
+                )
+                location = float(parameters[location_name])
+                if not lo <= location <= hi:
+                    errors.append(f"{location_name} must lie within factor bounds")
+            elif spec.pattern == "quadratic_valley":
+                if not lo <= float(parameters["center"]) <= hi:
+                    errors.append("center must lie within factor bounds")
+                if float(parameters["width"]) <= 0:
+                    errors.append("width must be positive")
+                elif float(parameters["width"]) > hi - lo:
+                    errors.append("width must not exceed the factor range")
+            elif spec.pattern == "optimum_range":
+                lower = float(parameters["lower"])
+                upper = float(parameters["upper"])
+                if not lo <= lower < upper <= hi:
+                    errors.append("optimum range must be ordered within factor bounds")
+            elif spec.pattern == "power_law" and lo <= 0:
+                errors.append("power_law requires a positive factor domain")
+            elif spec.pattern == "periodic":
+                if float(parameters["period"]) <= 0:
+                    errors.append("period must be positive")
+                if hi - lo <= 0:
+                    errors.append("factor range must be positive")
+    if errors:
+        return KnowledgeValidationResult(
+            pattern_id=spec.pattern_id,
+            state="invalid",
+            summary=f"Invalid {spec.pattern} declaration",
+            errors=tuple(errors),
+            effective_confidence=spec.confidence,
+        )
+    empirically_supported = observations is not None
+    if observations is not None and spec.pattern == "periodic":
+        factor_name = spec.scope.factors[0]
+        successful = observations.successful().X
+        empirically_supported = (
+            factor_name in successful
+            and len(successful) >= 2
+            and float(successful[factor_name].max() - successful[factor_name].min())
+            >= float(spec.parameters["period"])
+        )
+    state = "valid" if empirically_supported else "insufficient_data"
+    return KnowledgeValidationResult(
+        pattern_id=spec.pattern_id,
+        state=state,
+        summary=(
+            f"{spec.pattern} is structurally valid; empirical coverage is insufficient"
+            if not empirically_supported
+            else f"{spec.pattern} is valid"
+        ),
+        effective_confidence=spec.confidence,
+    )
+
+
+def _new_shape_compatibility(spec, space) -> CompatibilityResult:
+    reasons: list[str] = []
+    if len(spec.scope.factors) != 1:
+        reasons.append(f"{spec.pattern} requires exactly one scoped factor")
+    elif spec.scope.factors[0] not in space.param_names:
+        reasons.append(f"Unknown factor {spec.scope.factors[0]!r}")
+    elif space.param_by_name(spec.scope.factors[0]).kind not in _NUMERIC_KINDS:
+        reasons.append(f"Factor {spec.scope.factors[0]!r} must be numeric")
+    return CompatibilityResult(compatible=not reasons, reasons=tuple(reasons))
+
+
+def _compile_shape_descriptor(spec, space, observations=None) -> OptimizationArtifacts:
+    factor = spec.scope.factors[0]
+    payload = {
+        "factor": factor,
+        "dimension": space.param_names.index(factor),
+        "parameters": spec.to_dict()["parameters"],
+        "confidence": spec.confidence,
+    }
+    artifact = _artifact(spec, f"{spec.pattern}_descriptor", payload)
+    if spec.pattern == "optimum_range":
+        return OptimizationArtifacts(virtual_observations=(artifact,))
+    return OptimizationArtifacts(mean_components=(artifact,))
+
+
+def _new_shape_renderer(spec, space) -> str:
+    return (
+        f"{spec.pattern} response on {spec.scope.factors[0]} "
+        f"with {spec.to_dict()['parameters']}"
+    )
+
+
+def _number_schema(*, exclusive_minimum=None):
+    schema = {"type": "number"}
+    if exclusive_minimum is not None:
+        schema["exclusiveMinimum"] = exclusive_minimum
+    return schema
+
+
+def _shape_definition(pattern: str, properties: dict, required: list[str]):
+    return KnowledgePatternDefinition(
+        pattern=pattern,
+        version="1.0",
+        family="shape",
+        schema={
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": False,
+        },
+        compiler=_compile_shape_descriptor,
+        validator=_new_shape_validation,
+        renderer=_new_shape_renderer,
+        compatibility=_new_shape_compatibility,
+    )
+
+
+def saturation_definition() -> KnowledgePatternDefinition:
+    return _shape_definition(
+        "saturation",
+        {
+            "direction": {"enum": ["increasing", "decreasing"]},
+            "half_response": {"type": "number"},
+        },
+        ["direction", "half_response"],
+    )
+
+
+def threshold_definition() -> KnowledgePatternDefinition:
+    behavior = {"enum": ["increasing", "decreasing", "flat"]}
+    return _shape_definition(
+        "threshold",
+        {
+            "threshold": {"type": "number"},
+            "below_behavior": behavior,
+            "above_behavior": behavior,
+        },
+        ["threshold", "below_behavior", "above_behavior"],
+    )
+
+
+def quadratic_valley_definition() -> KnowledgePatternDefinition:
+    return _shape_definition(
+        "quadratic_valley",
+        {"center": {"type": "number"}, "width": _number_schema(exclusive_minimum=0)},
+        ["center", "width"],
+    )
+
+
+def optimum_range_definition() -> KnowledgePatternDefinition:
+    return _shape_definition(
+        "optimum_range",
+        {"lower": {"type": "number"}, "upper": {"type": "number"}},
+        ["lower", "upper"],
+    )
+
+
+def power_law_definition() -> KnowledgePatternDefinition:
+    return _shape_definition(
+        "power_law",
+        {"exponent": {"type": "number"}, "scale": _number_schema(exclusive_minimum=0)},
+        ["exponent", "scale"],
+    )
+
+
+def exponential_definition() -> KnowledgePatternDefinition:
+    return _shape_definition(
+        "exponential",
+        {"rate": {"type": "number"}, "amplitude": _number_schema(exclusive_minimum=0)},
+        ["rate", "amplitude"],
+    )
+
+
+def periodic_definition() -> KnowledgePatternDefinition:
+    return _shape_definition(
+        "periodic",
+        {"period": _number_schema(exclusive_minimum=0), "phase": {"type": "number"}},
+        ["period", "phase"],
+    )
 
 
 def quadratic_peak_definition() -> KnowledgePatternDefinition:
@@ -119,7 +331,7 @@ def random_augment_definition() -> KnowledgePatternDefinition:
     return KnowledgePatternDefinition(
         pattern="random_augment",
         version="1.0",
-        family="augmentation",
+        family="experimental",
         schema={
             "type": "object",
             "properties": {"n": {"type": "integer"}},
@@ -133,4 +345,14 @@ def random_augment_definition() -> KnowledgePatternDefinition:
     )
 
 
-__all__ = ["quadratic_peak_definition", "random_augment_definition"]
+__all__ = [
+    "exponential_definition",
+    "optimum_range_definition",
+    "periodic_definition",
+    "power_law_definition",
+    "quadratic_peak_definition",
+    "quadratic_valley_definition",
+    "random_augment_definition",
+    "saturation_definition",
+    "threshold_definition",
+]
