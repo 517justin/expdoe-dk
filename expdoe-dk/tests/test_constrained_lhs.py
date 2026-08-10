@@ -9,6 +9,7 @@ import pytest
 
 from expdoe_dk import LinearConstraint, Parameter, Space, suggest_design
 from expdoe_dk.domain import CategoricalCombinationConstraint
+from expdoe_dk.doe.constrained import _pool_greedy_maximin
 
 
 def _space_chem():
@@ -127,3 +128,46 @@ def test_all_current_methods_return_one_deterministic_row(method):
     assert len(first) == 1
     assert first["x"].between(0.0, 1.0).all()
     assert bool(space.feasibility_mask(first).all())
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "lhs_maximin",
+        "lhs_random",
+        "sobol",
+        "halton",
+        "d_optimal",
+        "random_uniform",
+    ],
+)
+def test_all_current_methods_preserve_heterogeneous_ordinal_scalars(method):
+    """Catches accepted record reconstruction converting None into NaN."""
+    space = Space([Parameter("grade", kind="ordinal", values=[1, None])])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        design = suggest_design(
+            space, n=8, method=method, seed=19, n_iterations=20
+        )
+
+    values = design["grade"].tolist()
+    assert design["grade"].dtype == object
+    assert any(value is None for value in values)
+    assert any(type(value) is int and value == 1 for value in values)
+    assert all(value is None or (type(value) is int and value == 1) for value in values)
+    assert bool(space.feasibility_mask(design).all())
+    space.physical_to_model(design)
+
+
+def test_candidate_pool_preserves_heterogeneous_ordinal_scalars():
+    """Catches the maximin fallback rebuilding mixed records through inference."""
+    space = Space([Parameter("grade", kind="ordinal", values=[1, None])])
+
+    design = _pool_greedy_maximin(
+        space, n=8, pool_factor=4, max_resample=2, seed=23
+    )
+
+    assert design["grade"].dtype == object
+    assert bool(space.feasibility_mask(design).all())
+    space.physical_to_model(design)

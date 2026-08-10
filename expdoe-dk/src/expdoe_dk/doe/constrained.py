@@ -48,6 +48,21 @@ def _feasibility_mask(X_phys: pd.DataFrame, space: Space) -> np.ndarray:
     return space.feasibility_mask(X_phys).cpu().numpy()
 
 
+def _physical_frame_from_records(
+    records: list[dict[str, object]], space: Space
+) -> pd.DataFrame:
+    """Build physical rows without pandas coercing heterogeneous levels."""
+    data: dict[str, object] = {}
+    for parameter in space.params:
+        values = [record[parameter.name] for record in records]
+        data[parameter.name] = (
+            pd.Series(values, dtype=object)
+            if parameter.kind in {"categorical", "ordinal"}
+            else values
+        )
+    return pd.DataFrame(data, columns=space.param_names)
+
+
 def _model_column_weights(space: Space) -> np.ndarray:
     bounds = space.model_bounds_tensor.cpu().numpy()
     spans = bounds[1] - bounds[0]
@@ -305,7 +320,7 @@ def generate(
                 f"{max_resample} accept-reject rounds. "
                 + _feasibility_diagnostic(space, n)
             )
-        design_phys = pd.DataFrame(feasible[:n], columns=space.param_names)
+        design_phys = _physical_frame_from_records(feasible[:n], space)
 
     elif method == "d_optimal":
         design_unit = _draw_d_optimal(n, space, seed=seed)
@@ -322,7 +337,12 @@ def generate(
             f"constraints={len(space.constraints)}"
         )
 
-    return design_phys.reset_index(drop=True)
+    design_phys = design_phys.reset_index(drop=True)
+    if not _feasibility_mask(design_phys, space).all():
+        raise InfeasibleDesignError(
+            f"{method}: final reconstructed design contains infeasible rows."
+        )
+    return design_phys
 
 
 # ----------------------------------------------------------------------- #
@@ -357,7 +377,7 @@ def _pool_greedy_maximin(
             + _feasibility_diagnostic(space, n)
         )
 
-    pool_frame = pd.DataFrame(pool, columns=space.param_names)
+    pool_frame = _physical_frame_from_records(pool, space)
     pool_arr = _physical_to_unit_array(pool_frame, space)
     col_weights = _model_column_weights(space)
 

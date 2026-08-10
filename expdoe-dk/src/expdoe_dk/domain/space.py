@@ -66,10 +66,10 @@ def _require_list(value: object, context: str) -> list[object]:
 
 
 def _require_string(value: object, context: str, *, nonempty: bool = False) -> str:
-    if type(value) is not str or (nonempty and not value):
+    if not isinstance(value, (str, np.str_)) or (nonempty and not value):
         qualifier = "non-empty " if nonempty else ""
         raise _config_invalid(f"{context} must be a {qualifier}string")
-    return value
+    return str(value)
 
 
 def _normalize_number(value: object, context: str) -> int | float:
@@ -84,8 +84,10 @@ def _normalize_number(value: object, context: str) -> int | float:
 
 
 def _normalize_json_scalar(value: object, context: str) -> object:
-    if value is None or type(value) is str:
+    if value is None:
         return value
+    if isinstance(value, (str, np.str_)):
+        return str(value)
     if isinstance(value, (bool, np.bool_)):
         return bool(value)
     if isinstance(value, Real):
@@ -98,9 +100,9 @@ def _json_compatible(value: object, context: str) -> object:
     if isinstance(value, Mapping):
         normalized: dict[str, object] = {}
         for key, item in value.items():
-            if type(key) is not str:
+            if not isinstance(key, (str, np.str_)):
                 raise _config_invalid(f"{context} keys must be strings")
-            normalized[key] = _json_compatible(item, f"{context}.{key}")
+            normalized[str(key)] = _json_compatible(item, f"{context}.{key}")
         return normalized
     if isinstance(value, (list, tuple)):
         return [
@@ -282,7 +284,25 @@ class Space:
                 f"Space: parameter names must be unique; duplicate names {duplicates}."
             )
 
-        objective_specs = normalize_objectives(objectives, maximize)
+        objective_specs = tuple(
+            Objective(
+                str(objective.name)
+                if isinstance(objective.name, np.str_)
+                else objective.name,
+                objective.direction,
+                target=objective.target,
+                unit=(
+                    str(objective.unit)
+                    if isinstance(objective.unit, np.str_)
+                    else objective.unit
+                ),
+                priority=objective.priority,
+            )
+            if isinstance(objective.name, np.str_)
+            or isinstance(objective.unit, np.str_)
+            else objective
+            for objective in normalize_objectives(objectives, maximize)
+        )
         if not objective_specs:
             raise _config_invalid("Space requires at least one objective")
         objective_names = [objective.name for objective in objective_specs]
@@ -567,6 +587,11 @@ class Space:
         raw_constraints = _require_list(state["constraints"], "Space constraints")
         for index, raw in enumerate(raw_constraints):
             item = _require_mapping(raw, f"Space constraints[{index}]")
+            normalized_item = _json_compatible(
+                item, f"Space constraints[{index}]"
+            )
+            assert isinstance(normalized_item, dict)
+            item = normalized_item
             if item.get("kind") == "legacy_linear":
                 constraints.append(cls._legacy_constraint_from_payload(item, index))
             else:
@@ -580,6 +605,11 @@ class Space:
         )
         for index, raw in enumerate(raw_outcomes):
             item = _require_mapping(raw, f"Space outcome_constraints[{index}]")
+            normalized_item = _json_compatible(
+                item, f"Space outcome_constraints[{index}]"
+            )
+            assert isinstance(normalized_item, dict)
+            item = normalized_item
             constraint = constraint_from_dict(
                 item,
                 allowed_names=parameter_names,
@@ -590,12 +620,17 @@ class Space:
                     f"Space outcome_constraints[{index}] must be an OutcomeConstraint"
                 )
             outcome_constraints.append(constraint)
-        return cls(
-            params=params,
-            constraints=constraints,
-            objectives=objectives,
-            outcome_constraints=outcome_constraints,
-        )
+        try:
+            return cls(
+                params=params,
+                constraints=constraints,
+                objectives=objectives,
+                outcome_constraints=outcome_constraints,
+            )
+        except EngineError:
+            raise
+        except (KeyError, OverflowError, TypeError, ValueError) as error:
+            raise _config_invalid(f"Current Space payload is invalid: {error}") from error
 
     @classmethod
     def _from_v04_dict(cls, payload: Mapping[str, object]) -> "Space":

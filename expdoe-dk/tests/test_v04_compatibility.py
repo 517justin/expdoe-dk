@@ -150,10 +150,74 @@ def test_v04_integer_tensor_snap_stays_exact_above_float_precision():
     """Catches an int64 tensor taking a lossy float64 snapping detour."""
     low = 2**53
     parameter = ed.Parameter(
-        "count", kind="integer", bounds=(low, low + 4), step=2
+        "count", kind="integer", bounds=(low, low + 9), step=3
     )
-    values = torch.tensor([low + 3], dtype=torch.int64)
+    values = torch.tensor([low + 5], dtype=torch.int64)
 
     snapped = parameter.snap(values)
 
-    assert torch.equal(snapped, torch.tensor([low + 2], dtype=torch.int64))
+    assert torch.equal(snapped, torch.tensor([low + 6], dtype=torch.int64))
+
+
+@pytest.mark.parametrize(
+    ("parameter", "dtype", "values", "expected"),
+    [
+        (
+            ed.Parameter("count", kind="integer", bounds=(10, 20), step=2),
+            torch.uint8,
+            [0, 9],
+            [10, 10],
+        ),
+        (
+            ed.Parameter("count", kind="integer", bounds=(-100, 100), step=10),
+            torch.int8,
+            [95, 100, 127],
+            [100, 100, 100],
+        ),
+        (
+            ed.Parameter("dose", kind="discrete", values=[10, 12, 20]),
+            torch.uint8,
+            [0, 9],
+            [10, 10],
+        ),
+        (
+            ed.Parameter("dose", kind="discrete", values=[-100, 0, 100]),
+            torch.int8,
+            [95, 100, 127],
+            [100, 100, 100],
+        ),
+    ],
+)
+def test_integral_tensor_snap_widens_before_arithmetic_and_matches_numpy(
+    parameter, dtype, values, expected
+):
+    """Catches uint8/int8 subtraction and distances wrapping before snap."""
+    torch_values = torch.tensor(values, dtype=dtype)
+    numpy_values = np.asarray(values, dtype=str(dtype).removeprefix("torch."))
+
+    tensor_snapped = parameter.snap(torch_values)
+    numpy_snapped = parameter.snap(numpy_values)
+
+    assert tensor_snapped.dtype == dtype
+    assert tensor_snapped.device == torch_values.device
+    assert tensor_snapped.tolist() == expected
+    assert numpy_snapped.tolist() == expected
+
+
+@pytest.mark.parametrize(
+    ("parameter", "values"),
+    [
+        (
+            ed.Parameter("count", kind="integer", bounds=(100, 200), step=10),
+            torch.tensor([127], dtype=torch.int8),
+        ),
+        (
+            ed.Parameter("dose", kind="discrete", values=[0, 300]),
+            torch.tensor([255], dtype=torch.uint8),
+        ),
+    ],
+)
+def test_integral_tensor_snap_rejects_unrepresentable_result(parameter, values):
+    """Catches snapped levels wrapping when cast back to the input dtype."""
+    with pytest.raises(ValueError, match="representable|dtype"):
+        parameter.snap(values)

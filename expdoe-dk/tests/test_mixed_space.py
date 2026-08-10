@@ -413,6 +413,56 @@ def test_current_space_payload_is_strict_json_with_numpy_numeric_configuration()
     assert payload["constraints"][0]["coeffs"] == {"count": 1.0}
 
 
+def test_numpy_strings_are_canonicalized_across_current_space_round_trip():
+    """Catches np.str_ values being rejected or treated as distinct strings."""
+    parameter = Parameter(
+        np.str_("binder"),
+        kind="categorical",
+        values=[np.str_("A"), "B"],
+        unit=np.str_("grade"),
+    )
+    space = Space(
+        [parameter],
+        objectives=[Objective(np.str_("yield"), "maximize", unit=np.str_("kg"))],
+        constraints=[
+            CategoricalCombinationConstraint(
+                "blocked", forbidden=({"binder": "A"},)
+            )
+        ],
+    )
+    payload = space.to_dict()
+    payload["params"][0]["name"] = np.str_("binder")
+    payload["params"][0]["unit"] = np.str_("grade")
+    payload["params"][0]["values"][0] = np.str_("A")
+    payload["objectives"][0]["name"] = np.str_("yield")
+    payload["objectives"][0]["unit"] = np.str_("kg")
+    payload["constraints"][0]["name"] = np.str_("blocked")
+    payload["constraints"][0]["forbidden"] = [
+        {np.str_("binder"): np.str_("A")}
+    ]
+
+    restored = Space.from_dict(payload)
+    serialized = restored.to_dict()
+
+    json.dumps(serialized, allow_nan=False)
+    assert type(restored.params[0].name) is str
+    assert type(restored.params[0].unit) is str
+    assert all(type(value) is str for value in restored.params[0].values)
+    assert type(restored.objective_specs[0].name) is str
+    assert type(restored.objective_specs[0].unit) is str
+    assert restored.physical_to_model(pd.DataFrame({"binder": ["B"]})).tolist() == [
+        [1.0]
+    ]
+
+
+def test_numpy_and_python_strings_are_not_distinct_parameter_levels():
+    """Catches equal string levels escaping duplicate validation by scalar type."""
+    with pytest.raises(ValueError, match="unique"):
+        Parameter(
+            "binder", kind="categorical", values=[np.str_("A"), "A"]
+        )
+
+
 def _malformed_current_payload(case):
     payload = Space(
         [Parameter("x", bounds=(0.0, 1.0))],
@@ -458,6 +508,18 @@ def _malformed_current_payload(case):
         payload["constraints"][0]["coeffs"] = {"x": float("nan")}
     elif case == "legacy-bound":
         payload["constraints"][0]["upper"] = "one"
+    elif case == "empty-params":
+        payload["params"] = []
+        payload["constraints"] = []
+    elif case == "duplicate-param":
+        payload["params"].append(copy.deepcopy(payload["params"][0]))
+    elif case == "duplicate-objective":
+        payload["objectives"].append(copy.deepcopy(payload["objectives"][0]))
+    elif case == "duplicate-constraint":
+        payload["constraints"][0]["name"] = "limit"
+        payload["constraints"].append(copy.deepcopy(payload["constraints"][0]))
+    elif case == "unknown-legacy-factor":
+        payload["constraints"][0]["coeffs"] = {"typo": 1.0}
     else:  # pragma: no cover - protects the test matrix itself
         raise AssertionError(case)
     return payload
@@ -483,6 +545,11 @@ def _malformed_current_payload(case):
         "objective-priority",
         "legacy-coefficient",
         "legacy-bound",
+        "empty-params",
+        "duplicate-param",
+        "duplicate-objective",
+        "duplicate-constraint",
+        "unknown-legacy-factor",
     ],
 )
 def test_current_space_restoration_rejects_malformed_nested_payloads(case):

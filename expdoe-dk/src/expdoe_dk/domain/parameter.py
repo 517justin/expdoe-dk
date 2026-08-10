@@ -29,6 +29,10 @@ def _is_ulp_close(left: float, right: float) -> bool:
 
 def _json_scalars_equal(left: object, right: object) -> bool:
     """Compare JSON-like scalars without treating booleans as numbers."""
+    left_string = isinstance(left, (str, np.str_))
+    right_string = isinstance(right, (str, np.str_))
+    if left_string or right_string:
+        return left_string and right_string and str(left) == str(right)
     left_boolean = isinstance(left, (bool, np.bool_))
     right_boolean = isinstance(right, (bool, np.bool_))
     if left_boolean or right_boolean:
@@ -84,9 +88,13 @@ class Parameter:
         The sixth positional argument remains ``log_scale``. New tagged-model
         fields are keyword-only so older calls cannot be silently reinterpreted.
         """
-        object.__setattr__(self, "name", name)
+        object.__setattr__(
+            self, "name", str(name) if isinstance(name, np.str_) else name
+        )
         object.__setattr__(self, "bounds", bounds)
-        object.__setattr__(self, "unit", unit)
+        object.__setattr__(
+            self, "unit", str(unit) if isinstance(unit, np.str_) else unit
+        )
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "step", step)
         object.__setattr__(self, "values", values)
@@ -112,7 +120,10 @@ class Parameter:
                     f"Parameter {self.name}: values must be an ordered sequence."
                 )
             try:
-                normalized_values = tuple(self.values)
+                normalized_values = tuple(
+                    str(value) if isinstance(value, np.str_) else value
+                    for value in self.values
+                )
             except TypeError as error:
                 raise ValueError(
                     f"Parameter {self.name}: values must be a sequence."
@@ -314,26 +325,66 @@ class Parameter:
             if values.is_floating_point():
                 position = (values - low) / step
                 lower_index = torch.floor(position)
-                index = lower_index + ((position - lower_index) > 0.5)
+                index = lower_index + ((position - lower_index) >= 0.5)
+                snapped = low + index.clamp(0, last_index) * step
+                return snapped.to(dtype=values.dtype)
             else:
-                offset = values - low
+                last_level = low + last_index * step
+                self._require_int64_values((low, step, last_level))
+                working = values.to(dtype=torch.int64)
+                offset = working - low
                 index = torch.div(offset, step, rounding_mode="floor")
                 remainder = torch.remainder(offset, step)
-                index = index + (remainder > step // 2)
-            snapped = low + index.clamp(0, last_index) * step
-            return snapped.to(dtype=values.dtype)
+                index = index + (remainder >= (step + 1) // 2)
+                snapped = low + index.clamp(0, last_index) * step
+                return self._restore_integral_tensor_dtype(snapped, values.dtype)
 
         levels = self.numeric_levels
-        preserve_dtype = values.is_floating_point() or all(
-            float(level).is_integer() for level in levels
-        )
-        output_dtype = values.dtype if preserve_dtype else torch.float64
+        integral_levels = all(float(level).is_integer() for level in levels)
+        if values.is_floating_point():
+            output_dtype = values.dtype
+        elif integral_levels:
+            integer_levels = tuple(int(level) for level in levels)
+            self._require_int64_values(integer_levels)
+            working = values.to(dtype=torch.int64)
+            level_tensor = torch.tensor(
+                integer_levels, dtype=torch.int64, device=values.device
+            )
+            indices = torch.abs(
+                working.unsqueeze(-1) - level_tensor
+            ).argmin(dim=-1)
+            return self._restore_integral_tensor_dtype(
+                level_tensor[indices], values.dtype
+            )
+        else:
+            output_dtype = torch.float64
         working = values.to(dtype=output_dtype)
         level_tensor = torch.tensor(
             levels, dtype=output_dtype, device=values.device
         )
         indices = torch.abs(working.unsqueeze(-1) - level_tensor).argmin(dim=-1)
         return level_tensor[indices]
+
+    def _require_int64_values(self, values: Sequence[int]) -> None:
+        info = torch.iinfo(torch.int64)
+        if any(value < info.min or value > info.max for value in values):
+            raise ValueError(
+                f"Parameter {self.name}: snapped levels are not representable "
+                "in the supported signed working dtype torch.int64."
+            )
+
+    def _restore_integral_tensor_dtype(
+        self, snapped: Tensor, output_dtype: torch.dtype
+    ) -> Tensor:
+        info = torch.iinfo(output_dtype)
+        if snapped.numel() and bool(
+            ((snapped < info.min) | (snapped > info.max)).any().item()
+        ):
+            raise ValueError(
+                f"Parameter {self.name}: snapped result is not representable "
+                f"in input dtype {output_dtype}."
+            )
+        return snapped.to(dtype=output_dtype)
 
     def _validate_continuous(self) -> None:
         self._validated_bounds()
@@ -616,7 +667,7 @@ class Parameter:
                     index = last_index
                 else:
                     quotient, remainder = divmod(int(value) - low, step)
-                    index = quotient + int(2 * remainder > step)
+                    index = quotient + int(2 * remainder >= step)
             else:
                 floating = float(value)
                 if not math.isfinite(floating):
@@ -624,7 +675,7 @@ class Parameter:
                 numerator, denominator = floating.as_integer_ratio()
                 offset = numerator - low * denominator
                 quotient, remainder = divmod(offset, step * denominator)
-                index = quotient + int(2 * remainder > step * denominator)
+                index = quotient + int(2 * remainder >= step * denominator)
                 index = min(max(index, 0), last_index)
             snapped.append(low + index * step)
 
