@@ -7,6 +7,7 @@ def test_v04_public_imports_and_checkpoint_remain_readable():
     assert ed.Parameter.__name__ == "Parameter"
     assert ed.LinearConstraint.__name__ == "LinearConstraint"
     assert ed.Space.__name__ == "Space"
+    assert ed.Result.__name__ == "Result"
     checkpoint = Path(__file__).parent / "fixtures" / "v04_checkpoint.json"
     campaign = ed.Campaign.load_checkpoint(checkpoint)
     assert campaign.space.objectives == ["yield"]
