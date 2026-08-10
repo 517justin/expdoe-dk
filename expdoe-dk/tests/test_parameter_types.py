@@ -247,6 +247,28 @@ def test_fine_integer_grid_above_int64_keeps_adjacent_python_int_exact():
     assert type(snapped.tolist()[0]) is int
 
 
+def test_integer_log_transform_uses_physical_log_coordinates_before_snapping():
+    """Catches integer encoding bypassing its declared physical log transform."""
+    parameter = Parameter(
+        "count", kind="integer", bounds=(1, 9), step=2, transform="log"
+    )
+
+    encoded = parameter.encode([1, 3, 5, 7, 9])
+
+    assert encoded == pytest.approx(
+        [0.0, 0.5, np.log(5) / np.log(9), np.log(7) / np.log(9), 1.0]
+    )
+    assert parameter.decode([0.5]) == [3]
+
+
+def test_nondividing_integer_grid_uses_declared_linear_physical_bounds():
+    """Catches integer encoding normalizing against its last reachable level."""
+    parameter = Parameter("count", kind="integer", bounds=(1, 8), step=2)
+
+    assert parameter.encode([7]) == [6 / 7]
+    assert parameter.decode([0.0, 6 / 7, 1.0]) == [1, 7, 7]
+
+
 def test_integer_snap_and_decode_return_integer_types():
     """Catches integer factors returning float experiment settings."""
     parameter = Parameter("count", kind="integer", bounds=(1, 9), step=2)

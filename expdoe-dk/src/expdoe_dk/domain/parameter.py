@@ -136,8 +136,14 @@ class Parameter:
                 ) from error
         if self.kind == "integer":
             integers = self._validated_integer_values(tuple(values))
-            low, step, last_index = self._integer_grid()
-            encoded = [((value - low) // step) / last_index for value in integers]
+            low, _, _ = self._integer_grid()
+            assert self.bounds is not None
+            span = int(self.bounds[1]) - low
+            if self._uses_log_transform:
+                log_span = math.log1p(span / low)
+                encoded = [math.log1p((value - low) / low) / log_span for value in integers]
+            else:
+                encoded = [(value - low) / span for value in integers]
             if not all(math.isfinite(value) for value in encoded):
                 raise ValueError(f"Parameter {self.name}: encoded values must be finite.")
             return encoded
@@ -172,11 +178,7 @@ class Parameter:
             levels = list(self.values or ())
             return [levels[int(round(value))] for value in model.tolist()]
         if self.kind == "integer":
-            low, step, last_index = self._integer_grid()
-            return [
-                low + self._nearest_grid_index(value, last_index) * step
-                for value in model.tolist()
-            ]
+            return self._decode_integer_values(model.tolist())
 
         low, high = self._physical_limits()
         if self._uses_log_transform:
@@ -446,13 +448,43 @@ class Parameter:
         return low, step, self._bounded_level_count() - 1
 
     @staticmethod
-    def _nearest_grid_index(model_value: float, last_index: int) -> int:
-        """Map a finite model coordinate to its nearest exact integer index."""
-        numerator, denominator = float(model_value).as_integer_ratio()
-        quotient, remainder = divmod(numerator * last_index, denominator)
+    def _nearest_grid_index(
+        numerator: int, denominator: int, last_index: int
+    ) -> int:
+        """Round a rational grid position to its nearest bounded index."""
+        quotient, remainder = divmod(numerator, denominator)
         if 2 * remainder > denominator:
             quotient += 1
         return min(max(quotient, 0), last_index)
+
+    def _decode_integer_values(self, model_values: Sequence[float]) -> list[int]:
+        """Decode model coordinates through physical bounds, then snap exactly."""
+        low, step, last_index = self._integer_grid()
+        assert self.bounds is not None
+        span = int(self.bounds[1]) - low
+        decoded: list[int] = []
+        if self._uses_log_transform:
+            log_span = math.log1p(span / low)
+            for model_value in model_values:
+                offset = low * math.expm1(float(model_value) * log_span)
+                if not math.isfinite(offset):
+                    raise ValueError(
+                        f"Parameter {self.name}: decoded values must be finite."
+                    )
+                numerator, denominator = offset.as_integer_ratio()
+                index = self._nearest_grid_index(
+                    numerator, denominator * step, last_index
+                )
+                decoded.append(low + index * step)
+            return decoded
+
+        for model_value in model_values:
+            numerator, denominator = float(model_value).as_integer_ratio()
+            index = self._nearest_grid_index(
+                numerator * span, denominator * step, last_index
+            )
+            decoded.append(low + index * step)
+        return decoded
 
     def _snap_integer_values(self, values: np.ndarray) -> np.ndarray:
         """Snap integer-factor inputs with exact integer/index arithmetic."""
