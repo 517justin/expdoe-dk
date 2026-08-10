@@ -20,6 +20,22 @@ def test_v04_public_imports_and_checkpoint_remain_readable():
     assert campaign.history_df()["y"].tolist() == [1.5]
 
 
+def test_legacy_doe_generate_remains_a_dataframe_wrapper():
+    from expdoe_dk.doe import generate
+
+    frame = generate(
+        ed.Space([ed.Parameter("x", bounds=(0.0, 1.0))]),
+        3,
+        method="lhs_maximin",
+        seed=13,
+        n_iterations=20,
+    )
+
+    assert frame.__class__.__name__ == "DataFrame"
+    assert list(frame.columns) == ["x"]
+    assert len(frame) == 3
+
+
 def test_v04_knowledge_payload_round_trips():
     payload = {
         "strict": False,

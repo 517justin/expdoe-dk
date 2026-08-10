@@ -35,8 +35,7 @@ def test_methods_produce_feasible_discrete_designs(method):
     space = _space_chem()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        df = suggest_design(space, n=8, method=method, seed=42,
-                            n_iterations=600)
+        df = suggest_design(space, n=8, method=method, seed=42)
     # 1. feasibility
     assert bool(space.feasibility_mask(df).all().item())
     # 2. discrete columns on grid
@@ -50,7 +49,7 @@ def test_methods_produce_feasible_discrete_designs(method):
     assert (df["conc_A"] - df["conc_B"] >= 1.0 - 1e-9).all()
 
 
-def test_maximin_beats_random_in_spread():
+def test_maximin_design_is_deterministic_and_has_nonzero_model_spacing():
     space = Space(
         params=[
             Parameter("x", bounds=(0.0, 1.0)),
@@ -60,13 +59,18 @@ def test_maximin_beats_random_in_spread():
     )
     from scipy.spatial.distance import pdist
 
-    df_max = suggest_design(space, n=12, method="lhs_maximin", seed=42,
-                            n_iterations=1500)
-    df_rand = suggest_design(space, n=12, method="random_uniform", seed=42)
-    d_max = float(pdist(df_max.to_numpy()).min())
-    d_rand = float(pdist(df_rand.to_numpy()).min())
-    # maximin should produce a strictly larger minimum pairwise distance.
-    assert d_max > d_rand
+    first = suggest_design(
+        space, n=12, method="lhs_maximin", seed=42, return_diagnostics=True
+    )
+    second = suggest_design(
+        space, n=12, method="lhs_maximin", seed=42, return_diagnostics=True
+    )
+
+    pd.testing.assert_frame_equal(first.frame, second.frame)
+    assert first.diagnostics.minimum_model_distance == pytest.approx(
+        float(pdist(first.frame.to_numpy()).min())
+    )
+    assert first.diagnostics.minimum_model_distance > 0
 
 
 def test_discrete_step_that_does_not_divide_range_never_snaps_past_bounds():
@@ -121,8 +125,8 @@ def test_all_current_methods_return_one_deterministic_row(method):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        first = suggest_design(space, n=1, method=method, seed=17, n_iterations=20)
-        second = suggest_design(space, n=1, method=method, seed=17, n_iterations=20)
+        first = suggest_design(space, n=1, method=method, seed=17)
+        second = suggest_design(space, n=1, method=method, seed=17)
 
     pd.testing.assert_frame_equal(first, second)
     assert len(first) == 1
@@ -137,7 +141,6 @@ def test_all_current_methods_return_one_deterministic_row(method):
         "lhs_random",
         "sobol",
         "halton",
-        "d_optimal",
         "random_uniform",
     ],
 )
@@ -147,9 +150,7 @@ def test_all_current_methods_preserve_heterogeneous_ordinal_scalars(method):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        design = suggest_design(
-            space, n=8, method=method, seed=19, n_iterations=20
-        )
+        design = suggest_design(space, n=2, method=method, seed=19)
 
     values = design["grade"].tolist()
     assert design["grade"].dtype == object

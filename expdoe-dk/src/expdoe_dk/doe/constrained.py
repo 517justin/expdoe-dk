@@ -109,24 +109,9 @@ def _draw_random_uniform(n: int, d: int, seed: int) -> np.ndarray:
 
 
 def _draw_d_optimal(n: int, space: Space, seed: int) -> np.ndarray:
-    """
-    D-Optimal via pyDOE3's coordinate exchange (linear model). Falls back to
-    LHS maximin if pyDOE3 is unavailable or feasibility too tight.
-    """
-    try:
-        from pyDOE3 import doe_optimal  # noqa: F401
-    except Exception:
-        warnings.warn(
-            "pyDOE3 not available for d_optimal; falling back to lhs_maximin.",
-            stacklevel=2,
-        )
-        design, _ = optimize_lhs_maximin(n, space.n_dims, seed=seed)
-        return design
-
-    # pyDOE3 expects candidate set in [-1, 1]; we sample feasible candidates
-    # in unit space, transform, run exchange.
+    """Select a deterministic D-optimal design from feasible numeric candidates."""
     rng = np.random.default_rng(seed)
-    candidates_unit = rng.uniform(size=(max(200, 50 * n), space.n_dims))
+    candidates_unit = rng.uniform(size=(max(256, 64 * n), space.n_dims))
     cand_phys = _unit_to_physical_array(candidates_unit, space)
     mask = _feasibility_mask(cand_phys, space)
     if mask.sum() < n:
@@ -136,19 +121,26 @@ def _draw_d_optimal(n: int, space: Space, seed: int) -> np.ndarray:
             + _feasibility_diagnostic(space, n)
         )
     feasible_unit = candidates_unit[mask]
-    # Pick the n most spread-out feasible candidates via simple greedy maximin
-    # (lightweight surrogate for full D-optimal exchange; acceptable for v0.1)
-    chosen_idx = [int(rng.integers(feasible_unit.shape[0]))]
-    for _ in range(n - 1):
-        dists = np.min(
-            np.linalg.norm(
-                feasible_unit[:, None, :] - feasible_unit[chosen_idx][None, :, :],
-                axis=-1,
-            ),
-            axis=1,
-        )
-        chosen_idx.append(int(np.argmax(dists)))
-    return feasible_unit[chosen_idx]
+    matrix = np.column_stack(
+        (np.ones(len(feasible_unit)), feasible_unit, feasible_unit**2)
+    )
+    information = np.eye(matrix.shape[1], dtype=np.float64) * 1e-12
+    selected: list[int] = []
+    remaining = np.ones(len(matrix), dtype=bool)
+    for _ in range(n):
+        best, best_score = -1, -np.inf
+        for index in np.flatnonzero(remaining):
+            sign, score = np.linalg.slogdet(
+                information + np.outer(matrix[index], matrix[index])
+            )
+            if sign > 0 and score > best_score:
+                best, best_score = int(index), float(score)
+        if best < 0:
+            raise InfeasibleDesignError("d_optimal: no positive determinant candidate")
+        selected.append(best)
+        information += np.outer(matrix[best], matrix[best])
+        remaining[best] = False
+    return feasible_unit[selected]
 
 
 # ----------------------------------------------------------------------- #
@@ -164,7 +156,7 @@ MethodLiteral = Literal[
 ]
 
 
-def generate(
+def _legacy_generate(
     space: Space,
     n: int,
     method: MethodLiteral = "lhs_maximin",
@@ -343,6 +335,30 @@ def generate(
             f"{method}: final reconstructed design contains infeasible rows."
         )
     return design_phys
+
+
+def generate(
+    space: Space,
+    n: int,
+    method: MethodLiteral = "lhs_maximin",
+    *,
+    n_iterations: int = 2000,
+    n_restarts: int = 10,
+    seed: int = 42,
+    max_resample: int = 50,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """Compatibility wrapper over the diagnostic initial-design engine.
+
+    Historical tuning arguments are accepted so existing callers continue to
+    run; the v0.5 deterministic selector intentionally does not vary by them.
+    """
+    del n_iterations, n_restarts, max_resample, verbose
+    from .design import suggest_design
+
+    result = suggest_design(space, n, method=method, seed=seed)
+    assert isinstance(result, pd.DataFrame)
+    return result
 
 
 # ----------------------------------------------------------------------- #

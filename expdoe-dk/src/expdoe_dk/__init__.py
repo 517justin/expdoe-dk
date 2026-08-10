@@ -18,7 +18,12 @@ Quick start:
 from .space import Parameter, LinearConstraint, Space
 from .knowledge import Knowledge
 from .bo import Campaign, Result
-from .doe import generate as suggest_design
+from .doe import (
+    DesignBatch,
+    DesignDiagnostics,
+    compatible_design_methods,
+    suggest_design,
+)
 from .domain import (
     CategoricalCombinationConstraint,
     Constraint,
@@ -37,6 +42,9 @@ __all__ = [
     "Campaign",
     "Result",
     "suggest_design",
+    "DesignBatch",
+    "DesignDiagnostics",
+    "compatible_design_methods",
     "Objective",
     "Constraint",
     "ExpressionConstraint",
