@@ -179,7 +179,7 @@ def _legacy_generate(
     | lhs_random     | Standard LHS, no optimization.                            |
     | sobol          | Sobol low-discrepancy quasi-random.                       |
     | halton         | Halton low-discrepancy quasi-random.                      |
-    | d_optimal      | Greedy maximin over feasible candidate pool (pyDOE3 stub).|
+    | d_optimal      | Deterministic greedy maximin over a feasible candidate pool.|
     | random_uniform | Pure random uniform (baseline only).                      |
 
     Returns

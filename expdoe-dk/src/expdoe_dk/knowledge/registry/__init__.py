@@ -8,6 +8,14 @@ from .definition import (
     KnowledgeValidator,
 )
 from .registry import PatternRegistry
+from .providers import (
+    ENTRY_POINT_GROUP,
+    ProviderDefinitionRecord,
+    ProviderLoadReport,
+    ProviderRecord,
+    canonical_distribution_name,
+    load_pattern_providers,
+)
 
 __all__ = [
     "CompatibilityRule",
@@ -16,4 +24,10 @@ __all__ = [
     "KnowledgeRenderer",
     "KnowledgeValidator",
     "PatternRegistry",
+    "ENTRY_POINT_GROUP",
+    "ProviderDefinitionRecord",
+    "ProviderLoadReport",
+    "ProviderRecord",
+    "canonical_distribution_name",
+    "load_pattern_providers",
 ]

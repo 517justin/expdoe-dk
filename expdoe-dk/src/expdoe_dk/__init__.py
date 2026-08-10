@@ -32,9 +32,29 @@ from .domain import (
     ObservationBatch,
     OutcomeConstraint,
     PendingBatch,
+    constraint_from_dict,
     normalize_objectives,
 )
+from .domain.space import ENGINE_VERSION, SPACE_SCHEMA_VERSION
 from .errors import EngineError, ErrorCode
+from .knowledge.registry import (
+    ENTRY_POINT_GROUP,
+    KnowledgePatternDefinition,
+    PatternRegistry,
+    ProviderDefinitionRecord,
+    ProviderLoadReport,
+    ProviderRecord,
+    canonical_distribution_name,
+    load_pattern_providers,
+)
+from .knowledge.artifacts import OptimizationArtifact, OptimizationArtifacts
+from .knowledge.guard import CompatibilityResult, KnowledgeValidationResult
+from .knowledge.specs import (
+    Evidence,
+    KnowledgePatternSpec,
+    KnowledgeScope,
+    make_pattern_spec,
+)
 
 __all__ = [
     "Parameter",
@@ -54,9 +74,28 @@ __all__ = [
     "CategoricalCombinationConstraint",
     "OutcomeConstraint",
     "PendingBatch",
+    "constraint_from_dict",
     "normalize_objectives",
     "EngineError",
     "ErrorCode",
+    "ENGINE_VERSION",
+    "SPACE_SCHEMA_VERSION",
+    "Evidence",
+    "KnowledgePatternSpec",
+    "KnowledgeScope",
+    "make_pattern_spec",
+    "OptimizationArtifact",
+    "OptimizationArtifacts",
+    "CompatibilityResult",
+    "KnowledgeValidationResult",
+    "KnowledgePatternDefinition",
+    "PatternRegistry",
+    "ENTRY_POINT_GROUP",
+    "ProviderDefinitionRecord",
+    "ProviderLoadReport",
+    "ProviderRecord",
+    "canonical_distribution_name",
+    "load_pattern_providers",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
