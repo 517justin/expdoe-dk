@@ -264,3 +264,52 @@ def test_uint64_tensor_snap_preserves_unsigned_dtype_and_device():
     assert torch.equal(snapped, torch.tensor([6], dtype=torch.uint64))
     assert snapped.dtype == values.dtype
     assert snapped.device == values.device
+
+
+def test_integral_numpy_and_tensor_discrete_snap_match_above_float_precision():
+    """Catches NumPy integral input taking a lossy float64 distance path."""
+    low = 2**53 - 100
+    high = 2**53 + 100
+    parameter = ed.Parameter("dose", kind="discrete", values=[low, high])
+    numpy_values = np.array([2**53 + 1], dtype=np.int64)
+    tensor_values = torch.tensor([2**53 + 1], dtype=torch.int64)
+
+    numpy_snapped = parameter.snap(numpy_values)
+    tensor_snapped = parameter.snap(tensor_values)
+
+    assert numpy_snapped.tolist() == [high]
+    assert tensor_snapped.tolist() == numpy_snapped.tolist()
+    assert numpy_snapped.dtype == numpy_values.dtype
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (np.array(15, dtype=np.uint8), 16),
+        (np.empty((0, 2), dtype=np.int16), np.empty((0, 2), dtype=np.int16)),
+        (
+            np.array([[0, 9], [11, 20]], dtype=np.uint8),
+            np.array([[10, 10], [12, 20]], dtype=np.uint8),
+        ),
+    ],
+)
+def test_integral_numpy_snap_preserves_dtype_and_shape(values, expected):
+    """Catches exact ndarray snapping flattening or widening representable data."""
+    parameter = ed.Parameter("count", kind="integer", bounds=(10, 20), step=2)
+
+    snapped = parameter.snap(values)
+
+    assert snapped.dtype == values.dtype
+    assert snapped.shape == values.shape
+    np.testing.assert_array_equal(snapped, expected)
+
+
+def test_integral_numpy_snap_uses_lossless_object_when_dtype_cannot_hold_result():
+    """Catches unrepresentable exact levels wrapping back into a narrow ndarray."""
+    parameter = ed.Parameter("dose", kind="discrete", values=[0, 300])
+
+    snapped = parameter.snap(np.array([255], dtype=np.uint8))
+
+    assert snapped.dtype == object
+    assert snapped.tolist() == [300]
+    assert type(snapped.tolist()[0]) is int

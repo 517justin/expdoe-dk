@@ -294,6 +294,12 @@ class Parameter:
         """Snap numeric values to the nearest declared finite level."""
         if isinstance(values, Tensor):
             return self._snap_tensor(values)
+        if isinstance(values, np.ndarray) and np.issubdtype(
+            values.dtype, np.integer
+        ):
+            exact = self._snap_integral_numpy(values)
+            if exact is not None:
+                return exact
         if self.kind == "integer":
             return self._snap_integer_values(values)
         numeric = np.asarray(values, dtype=np.float64)
@@ -353,9 +359,34 @@ class Parameter:
     def _snap_integral_tensor_to_integer_grid(
         self, values: Tensor, low: int, step: int, last_index: int
     ) -> Tensor:
+        snapped = self._snap_python_integers_to_integer_grid(
+            self._tensor_python_integers(values), low, step, last_index
+        )
+        return self._tensor_from_python_integers(snapped, values)
+
+    def _snap_integral_numpy(self, values: np.ndarray) -> np.ndarray | None:
+        integers = [int(value) for value in values.reshape(-1).tolist()]
+        if self.kind == "integer":
+            low, step, last_index = self._integer_grid()
+            snapped = self._snap_python_integers_to_integer_grid(
+                integers, low, step, last_index
+            )
+        elif self.kind == "discrete":
+            levels = self._integral_discrete_levels()
+            if levels is None:
+                return None
+            snapped = self._snap_python_integers_to_levels(integers, levels)
+        else:
+            return None
+        return self._numpy_from_python_integers(snapped, values)
+
+    @staticmethod
+    def _snap_python_integers_to_integer_grid(
+        values: Sequence[int], low: int, step: int, last_index: int
+    ) -> list[int]:
         last_level = low + last_index * step
         snapped: list[int] = []
-        for value in self._tensor_python_integers(values):
+        for value in values:
             if value <= low:
                 index = 0
             elif value >= last_level:
@@ -364,7 +395,7 @@ class Parameter:
                 quotient, remainder = divmod(value - low, step)
                 index = quotient + int(2 * remainder >= step)
             snapped.append(low + index * step)
-        return self._tensor_from_python_integers(snapped, values)
+        return snapped
 
     def _integral_discrete_levels(self) -> tuple[int, ...] | None:
         raw_levels = self.values if self.values is not None else self.numeric_levels
@@ -382,11 +413,19 @@ class Parameter:
     def _snap_integral_tensor_to_levels(
         self, values: Tensor, levels: tuple[int, ...]
     ) -> Tensor:
-        snapped = [
-            min(levels, key=lambda level: abs(value - level))
-            for value in self._tensor_python_integers(values)
-        ]
+        snapped = self._snap_python_integers_to_levels(
+            self._tensor_python_integers(values), levels
+        )
         return self._tensor_from_python_integers(snapped, values)
+
+    @staticmethod
+    def _snap_python_integers_to_levels(
+        values: Sequence[int], levels: tuple[int, ...]
+    ) -> list[int]:
+        return [
+            min(levels, key=lambda level: abs(value - level))
+            for value in values
+        ]
 
     @staticmethod
     def _tensor_python_integers(values: Tensor) -> list[int]:
@@ -407,6 +446,20 @@ class Parameter:
         return torch.tensor(
             snapped, dtype=template.dtype, device=template.device
         ).reshape(template.shape)
+
+    @staticmethod
+    def _numpy_from_python_integers(
+        snapped: Sequence[int], template: np.ndarray
+    ) -> np.ndarray:
+        info = np.iinfo(template.dtype)
+        minimum = int(info.min)
+        maximum = int(info.max)
+        output_dtype = (
+            template.dtype
+            if all(minimum <= value <= maximum for value in snapped)
+            else object
+        )
+        return np.asarray(snapped, dtype=output_dtype).reshape(template.shape)
 
     def _validate_continuous(self) -> None:
         self._validated_bounds()
