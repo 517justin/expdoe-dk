@@ -13,7 +13,12 @@ from typing import ClassVar, Protocol, runtime_checkable
 from expdoe_dk.errors import EngineError, ErrorCode
 
 JSONScalar = str | int | float | bool | None
+_MAX_EXPRESSION_SOURCE_LENGTH = 4096
+_MAX_AST_NODES = 256
 _MAX_AST_DEPTH = 32
+_MAX_AST_CHILDREN = 64
+_MAX_INTEGER_BITS = 256
+_MAX_POWER_EXPONENT_MAGNITUDE = 64
 _COMPARISON_OPERATORS = {"<=", ">=", "=="}
 _AST_COMPARISONS = {
     "<": operator.lt,
@@ -71,9 +76,9 @@ def _invalid(message: str, *, details: dict | None = None) -> EngineError:
 
 
 def _is_json_scalar(value: object) -> bool:
-    if not isinstance(value, (str, int, float, bool, type(None))):
+    if type(value) not in (str, int, float, bool, type(None)):
         return False
-    return not isinstance(value, float) or math.isfinite(value)
+    return type(value) is not float or math.isfinite(value)
 
 
 def _validate_json_scalar(value: object, context: str) -> JSONScalar:
@@ -82,10 +87,57 @@ def _validate_json_scalar(value: object, context: str) -> JSONScalar:
     return value  # type: ignore[return-value]
 
 
+def _runtime_scalar(value: object, context: str) -> JSONScalar:
+    """Normalize an evaluation value without invoking user-defined methods."""
+    return _validate_json_scalar(value, context)
+
+
+def _runtime_number(value: object, context: str) -> int | float:
+    """Require one finite non-boolean built-in JSON number."""
+    if type(value) not in (int, float):
+        raise _invalid(f"{context} must be a finite non-boolean number")
+    if type(value) is float and not math.isfinite(value):
+        raise _invalid(f"{context} must be a finite non-boolean number")
+    if type(value) is int and value.bit_length() > _MAX_INTEGER_BITS:
+        raise _invalid(
+            f"{context} integer exceeds {_MAX_INTEGER_BITS} bits"
+        )
+    return value  # type: ignore[return-value]
+
+
+def _json_scalars_equal(left: object, right: object) -> bool:
+    """Compare JSON scalars without treating booleans as numeric values."""
+    left_scalar = _runtime_scalar(left, "Equality left operand")
+    right_scalar = _runtime_scalar(right, "Equality right operand")
+    left_is_number = type(left_scalar) in (int, float)
+    right_is_number = type(right_scalar) in (int, float)
+    if left_is_number or right_is_number:
+        return left_is_number and right_is_number and left_scalar == right_scalar
+    if type(left_scalar) is not type(right_scalar):
+        return False
+    return left_scalar == right_scalar
+
+
 def _validate_name(value: object, context: str) -> str:
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or not value:
         raise _invalid(f"{context} must be a non-empty string")
     return value
+
+
+def _validate_operator(
+    value: object,
+    allowed: Collection[str],
+    context: str,
+) -> str:
+    if type(value) is not str or value not in allowed:
+        choices = ", ".join(repr(choice) for choice in sorted(allowed))
+        raise _invalid(f"{context} must be one of {choices}")
+    return value
+
+
+def _validate_mapping_keys(mapping: Mapping[object, object], context: str) -> None:
+    if any(type(key) is not str for key in mapping):
+        raise _invalid(f"{context} keys must all be strings")
 
 
 def _validate_finite_number(value: object, context: str) -> float:
@@ -111,7 +163,7 @@ def _normalize_allowed_names(allowed_names: Collection[str] | None) -> frozenset
         names = frozenset(allowed_names)
     except TypeError as error:
         raise _invalid("allowed_names must contain non-empty strings") from error
-    if any(not isinstance(name, str) or not name for name in names):
+    if any(type(name) is not str or not name for name in names):
         raise _invalid("allowed_names must contain non-empty strings")
     return names
 
@@ -121,6 +173,16 @@ def _validate_factor_name(name: object, allowed_names: frozenset[str] | None) ->
     if allowed_names is not None and factor_name not in allowed_names:
         raise _invalid(f"Name {factor_name!r} is not allowed")
     return factor_name
+
+
+def _validate_objective_name(
+    name: object,
+    allowed_names: frozenset[str] | None,
+) -> str:
+    objective_name = _validate_name(name, "Objective name")
+    if allowed_names is not None and objective_name not in allowed_names:
+        raise _invalid(f"Objective name {objective_name!r} is not allowed")
+    return objective_name
 
 
 def _validate_common(
@@ -212,16 +274,18 @@ class LinearConstraint:
             coefficients[factor_name] = _validate_finite_number(
                 coefficient, f"LinearConstraint coefficient {factor_name!r}"
             )
-        if self.operator not in _COMPARISON_OPERATORS:
-            raise _invalid(
-                "LinearConstraint operator must be one of '<=', '>=', or '=='"
-            )
+        operator_name = _validate_operator(
+            self.operator,
+            _COMPARISON_OPERATORS,
+            "LinearConstraint operator",
+        )
         object.__setattr__(self, "name", name)
         object.__setattr__(
             self,
             "coefficients",
             MappingProxyType(dict(sorted(coefficients.items()))),
         )
+        object.__setattr__(self, "operator", operator_name)
         object.__setattr__(
             self,
             "bound",
@@ -275,12 +339,32 @@ class _CanonicalNode:
         return payload
 
 
+@dataclass
+class _AstBudget:
+    nodes: int = 0
+
+    def consume(self, count: int = 1) -> None:
+        self.nodes += count
+        if self.nodes > _MAX_AST_NODES:
+            raise _invalid(
+                f"Expression AST exceeds maximum node count {_MAX_AST_NODES}"
+            )
+
+
 def _check_depth(depth: int) -> None:
     if depth > _MAX_AST_DEPTH:
         raise _invalid(f"Expression AST exceeds maximum depth {_MAX_AST_DEPTH}")
 
 
+def _check_children(context: str, count: int) -> None:
+    if count > _MAX_AST_CHILDREN:
+        raise _invalid(
+            f"{context} exceeds maximum children {_MAX_AST_CHILDREN}"
+        )
+
+
 def _check_call_arity(function: str, count: int) -> None:
+    _check_children(f"Call {function!r}", count)
     minimum, maximum = _CALL_ARITY[function]
     if count < minimum or (maximum is not None and count > maximum):
         if minimum == maximum:
@@ -292,14 +376,52 @@ def _check_call_arity(function: str, count: int) -> None:
         raise _invalid(f"Call {function!r} requires {expected} argument(s)")
 
 
+def _validate_expression_constant(value: object) -> JSONScalar:
+    constant = _validate_json_scalar(value, "Expression constant")
+    if type(constant) is int and constant.bit_length() > _MAX_INTEGER_BITS:
+        raise _invalid(
+            f"Expression integer constant exceeds {_MAX_INTEGER_BITS} bits"
+        )
+    return constant
+
+
+def _static_numeric_value(node: _CanonicalNode) -> int | float | None:
+    if node.node_type == "constant":
+        value = node.get("value")
+        return value if type(value) in (int, float) else None
+    if node.node_type != "unary":
+        return None
+    operator_name = node.get("op")
+    operand = node.get("operand")
+    if not isinstance(operator_name, str) or not isinstance(operand, _CanonicalNode):
+        return None
+    value = _static_numeric_value(operand)
+    if value is None:
+        return None
+    return value if operator_name == "+" else -value
+
+
+def _check_static_power_exponent(operator_name: str, right: _CanonicalNode) -> None:
+    if operator_name != "**":
+        return
+    exponent = _static_numeric_value(right)
+    if exponent is not None and abs(exponent) > _MAX_POWER_EXPONENT_MAGNITUDE:
+        raise _invalid(
+            "Expression power exponent magnitude exceeds "
+            f"{_MAX_POWER_EXPONENT_MAGNITUDE}"
+        )
+
+
 def _python_node(
     node: python_ast.AST,
     allowed_names: frozenset[str] | None,
     depth: int,
+    budget: _AstBudget,
 ) -> _CanonicalNode:
     _check_depth(depth)
+    budget.consume()
     if isinstance(node, python_ast.Constant):
-        value = _validate_json_scalar(node.value, "Expression constant")
+        value = _validate_expression_constant(node.value)
         return _CanonicalNode("constant", (("value", value),))
     if isinstance(node, python_ast.Name):
         name = _validate_factor_name(node.id, allowed_names)
@@ -308,20 +430,24 @@ def _python_node(
         operator_name = _PYTHON_UNARY.get(type(node.op))
         if operator_name is None:
             raise _invalid(f"Expression operator {type(node.op).__name__} is not allowed")
-        operand = _python_node(node.operand, allowed_names, depth + 1)
+        operand = _python_node(node.operand, allowed_names, depth + 1, budget)
         return _CanonicalNode("unary", (("op", operator_name), ("operand", operand)))
     if isinstance(node, python_ast.BinOp):
         operator_name = _PYTHON_BINARY.get(type(node.op))
         if operator_name is None:
             raise _invalid(f"Expression operator {type(node.op).__name__} is not allowed")
-        left = _python_node(node.left, allowed_names, depth + 1)
-        right = _python_node(node.right, allowed_names, depth + 1)
+        left = _python_node(node.left, allowed_names, depth + 1, budget)
+        right = _python_node(node.right, allowed_names, depth + 1, budget)
+        _check_static_power_exponent(operator_name, right)
         return _CanonicalNode(
             "binary", (("op", operator_name), ("left", left), ("right", right))
         )
     if isinstance(node, python_ast.Compare):
         comparison_nodes: list[_CanonicalNode] = []
         operands = (node.left, *node.comparators)
+        if len(node.ops) > 1:
+            _check_children("Chained comparison", len(node.ops))
+            budget.consume(len(node.ops))
         child_depth = depth if len(node.ops) == 1 else depth + 1
         for index, comparison in enumerate(node.ops):
             operator_name = _PYTHON_COMPARISONS.get(type(comparison))
@@ -329,8 +455,12 @@ def _python_node(
                 raise _invalid(
                     f"Expression operator {type(comparison).__name__} is not allowed"
                 )
-            left = _python_node(operands[index], allowed_names, child_depth + 1)
-            right = _python_node(operands[index + 1], allowed_names, child_depth + 1)
+            left = _python_node(
+                operands[index], allowed_names, child_depth + 1, budget
+            )
+            right = _python_node(
+                operands[index + 1], allowed_names, child_depth + 1, budget
+            )
             comparison_nodes.append(
                 _CanonicalNode(
                     "compare",
@@ -349,8 +479,10 @@ def _python_node(
             operator_name = "or"
         else:  # pragma: no cover - all current Python BoolOp variants are covered.
             raise _invalid(f"Expression operator {type(node.op).__name__} is not allowed")
+        _check_children("Expression boolean node", len(node.values))
         values = tuple(
-            _python_node(value, allowed_names, depth + 1) for value in node.values
+            _python_node(value, allowed_names, depth + 1, budget)
+            for value in node.values
         )
         return _CanonicalNode("boolean", (("op", operator_name), ("values", values)))
     if isinstance(node, python_ast.Call):
@@ -362,7 +494,10 @@ def _python_node(
         if node.keywords:
             raise _invalid("Call keyword arguments are not allowed")
         _check_call_arity(function, len(node.args))
-        args = tuple(_python_node(arg, allowed_names, depth + 1) for arg in node.args)
+        args = tuple(
+            _python_node(arg, allowed_names, depth + 1, budget)
+            for arg in node.args
+        )
         return _CanonicalNode("call", (("function", function), ("args", args)))
     raise _invalid(f"Expression node {type(node).__name__} is not allowed")
 
@@ -373,15 +508,21 @@ def _parse_expression(
 ) -> _CanonicalNode:
     if not isinstance(expression, str) or not expression.strip():
         raise _invalid("Expression input must be a non-empty string")
+    if len(expression) > _MAX_EXPRESSION_SOURCE_LENGTH:
+        raise _invalid(
+            "Expression source length exceeds "
+            f"{_MAX_EXPRESSION_SOURCE_LENGTH} characters"
+        )
     names = _normalize_allowed_names(allowed_names)
     try:
         tree = python_ast.parse(expression, mode="eval")
     except (SyntaxError, TypeError, ValueError) as error:
         raise _invalid("Expression syntax is not allowed") from error
-    return _python_node(tree.body, names, 1)
+    return _python_node(tree.body, names, 1, _AstBudget())
 
 
 def _exact_node_keys(node: Mapping[str, object], expected: set[str], node_type: str) -> None:
+    _validate_mapping_keys(node, f"Expression {node_type!r} node")
     actual = set(node)
     missing = expected - actual
     unknown = actual - expected
@@ -395,8 +536,10 @@ def _canonical_node(
     raw_node: object,
     allowed_names: frozenset[str] | None,
     depth: int,
+    budget: _AstBudget,
 ) -> _CanonicalNode:
     _check_depth(depth)
+    budget.consume()
     if not isinstance(raw_node, Mapping):
         raise _invalid("Expression AST node must be an object")
     node_type = raw_node.get("type")
@@ -404,7 +547,7 @@ def _canonical_node(
         raise _invalid("Expression AST node type must be a string")
     if node_type == "constant":
         _exact_node_keys(raw_node, {"type", "value"}, node_type)
-        value = _validate_json_scalar(raw_node["value"], "Expression constant")
+        value = _validate_expression_constant(raw_node["value"])
         return _CanonicalNode(node_type, (("value", value),))
     if node_type == "name":
         _exact_node_keys(raw_node, {"type", "name"}, node_type)
@@ -412,79 +555,112 @@ def _canonical_node(
         return _CanonicalNode(node_type, (("name", name),))
     if node_type == "unary":
         _exact_node_keys(raw_node, {"type", "op", "operand"}, node_type)
-        operator_name = raw_node["op"]
-        if operator_name not in _AST_UNARY:
-            raise _invalid(f"Expression unary operator {operator_name!r} is not allowed")
-        operand = _canonical_node(raw_node["operand"], allowed_names, depth + 1)
+        operator_name = _validate_operator(
+            raw_node["op"], _AST_UNARY, "Expression unary operator"
+        )
+        operand = _canonical_node(
+            raw_node["operand"], allowed_names, depth + 1, budget
+        )
         return _CanonicalNode(node_type, (("op", operator_name), ("operand", operand)))
     if node_type == "binary":
         _exact_node_keys(raw_node, {"type", "op", "left", "right"}, node_type)
-        operator_name = raw_node["op"]
-        if operator_name not in _AST_BINARY:
-            raise _invalid(f"Expression binary operator {operator_name!r} is not allowed")
-        left = _canonical_node(raw_node["left"], allowed_names, depth + 1)
-        right = _canonical_node(raw_node["right"], allowed_names, depth + 1)
+        operator_name = _validate_operator(
+            raw_node["op"], _AST_BINARY, "Expression binary operator"
+        )
+        left = _canonical_node(raw_node["left"], allowed_names, depth + 1, budget)
+        right = _canonical_node(
+            raw_node["right"], allowed_names, depth + 1, budget
+        )
+        _check_static_power_exponent(operator_name, right)
         return _CanonicalNode(
             node_type, (("op", operator_name), ("left", left), ("right", right))
         )
     if node_type == "compare":
         _exact_node_keys(raw_node, {"type", "op", "left", "right"}, node_type)
-        operator_name = raw_node["op"]
-        if operator_name not in _AST_COMPARISONS:
-            raise _invalid(f"Expression comparison {operator_name!r} is not allowed")
-        left = _canonical_node(raw_node["left"], allowed_names, depth + 1)
-        right = _canonical_node(raw_node["right"], allowed_names, depth + 1)
+        operator_name = _validate_operator(
+            raw_node["op"], _AST_COMPARISONS, "Expression comparison operator"
+        )
+        left = _canonical_node(raw_node["left"], allowed_names, depth + 1, budget)
+        right = _canonical_node(
+            raw_node["right"], allowed_names, depth + 1, budget
+        )
         return _CanonicalNode(
             node_type, (("op", operator_name), ("left", left), ("right", right))
         )
     if node_type == "boolean":
         _exact_node_keys(raw_node, {"type", "op", "values"}, node_type)
-        operator_name = raw_node["op"]
-        if operator_name not in {"and", "or"}:
-            raise _invalid(f"Expression boolean operator {operator_name!r} is not allowed")
+        operator_name = _validate_operator(
+            raw_node["op"], {"and", "or"}, "Expression boolean operator"
+        )
         raw_values = raw_node["values"]
         if not isinstance(raw_values, list) or len(raw_values) < 2:
             raise _invalid("Expression boolean node requires at least 2 values")
+        _check_children("Expression boolean node", len(raw_values))
         values = tuple(
-            _canonical_node(value, allowed_names, depth + 1) for value in raw_values
+            _canonical_node(value, allowed_names, depth + 1, budget)
+            for value in raw_values
         )
         return _CanonicalNode(node_type, (("op", operator_name), ("values", values)))
     if node_type == "call":
         _exact_node_keys(raw_node, {"type", "function", "args"}, node_type)
         function = raw_node["function"]
-        if not isinstance(function, str) or function not in _ALLOWED_CALLS:
+        if type(function) is not str or function not in _ALLOWED_CALLS:
             raise _invalid(f"Call {function!r} is not allowed")
         raw_args = raw_node["args"]
         if not isinstance(raw_args, list):
             raise _invalid("Expression call args must be an array")
         _check_call_arity(function, len(raw_args))
-        args = tuple(_canonical_node(arg, allowed_names, depth + 1) for arg in raw_args)
+        args = tuple(
+            _canonical_node(arg, allowed_names, depth + 1, budget)
+            for arg in raw_args
+        )
         return _CanonicalNode(node_type, (("function", function), ("args", args)))
     raise _invalid(f"Expression node type {node_type!r} is not allowed")
 
 
 def _evaluate_node(node: _CanonicalNode, values: Mapping[str, object]) -> object:
     if node.node_type == "constant":
-        return node.get("value")
+        return _runtime_scalar(node.get("value"), "Expression constant")
     if node.node_type == "name":
         name = node.get("name")
         assert isinstance(name, str)
         if name not in values:
             raise _invalid(f"Expression requires factor {name!r}")
-        return values[name]
+        return _runtime_scalar(values[name], f"Expression factor {name!r}")
     if node.node_type == "unary":
         operator_name = node.get("op")
         operand = node.get("operand")
         assert isinstance(operator_name, str) and isinstance(operand, _CanonicalNode)
-        return _AST_UNARY[operator_name](_evaluate_node(operand, values))
+        numeric_operand = _runtime_number(
+            _evaluate_node(operand, values), "Expression unary operand"
+        )
+        return _runtime_number(
+            _AST_UNARY[operator_name](numeric_operand),
+            "Expression unary result",
+        )
     if node.node_type == "binary":
         operator_name = node.get("op")
         left = node.get("left")
         right = node.get("right")
         assert isinstance(operator_name, str)
         assert isinstance(left, _CanonicalNode) and isinstance(right, _CanonicalNode)
-        return _AST_BINARY[operator_name](
-            _evaluate_node(left, values), _evaluate_node(right, values)
+        left_value = _runtime_number(
+            _evaluate_node(left, values), "Expression binary left operand"
+        )
+        right_value = _runtime_number(
+            _evaluate_node(right, values), "Expression binary right operand"
+        )
+        if (
+            operator_name == "**"
+            and abs(right_value) > _MAX_POWER_EXPONENT_MAGNITUDE
+        ):
+            raise _invalid(
+                "Expression power exponent magnitude exceeds "
+                f"{_MAX_POWER_EXPONENT_MAGNITUDE}"
+            )
+        return _runtime_number(
+            _AST_BINARY[operator_name](left_value, right_value),
+            "Expression binary result",
         )
     if node.node_type == "compare":
         operator_name = node.get("op")
@@ -492,20 +668,48 @@ def _evaluate_node(node: _CanonicalNode, values: Mapping[str, object]) -> object
         right = node.get("right")
         assert isinstance(operator_name, str)
         assert isinstance(left, _CanonicalNode) and isinstance(right, _CanonicalNode)
-        return _AST_COMPARISONS[operator_name](
-            _evaluate_node(left, values), _evaluate_node(right, values)
+        left_value = _evaluate_node(left, values)
+        right_value = _evaluate_node(right, values)
+        if operator_name in {"==", "!="}:
+            equal = _json_scalars_equal(left_value, right_value)
+            return equal if operator_name == "==" else not equal
+        numeric_left = _runtime_number(left_value, "Expression comparison left operand")
+        numeric_right = _runtime_number(
+            right_value, "Expression comparison right operand"
         )
+        return bool(_AST_COMPARISONS[operator_name](numeric_left, numeric_right))
     if node.node_type == "boolean":
         operator_name = node.get("op")
         nodes = node.get("values")
         assert isinstance(operator_name, str) and isinstance(nodes, tuple)
         if operator_name == "and":
-            return all(bool(_evaluate_node(value, values)) for value in nodes)
-        return any(bool(_evaluate_node(value, values)) for value in nodes)
+            for value in nodes:
+                result = _evaluate_node(value, values)
+                if type(result) is not bool:
+                    raise _invalid("Expression boolean operand must be a boolean")
+                if not result:
+                    return False
+            return True
+        for value in nodes:
+            result = _evaluate_node(value, values)
+            if type(result) is not bool:
+                raise _invalid("Expression boolean operand must be a boolean")
+            if result:
+                return True
+        return False
     function = node.get("function")
     args = node.get("args")
     assert isinstance(function, str) and isinstance(args, tuple)
-    return _ALLOWED_CALLS[function](*(_evaluate_node(arg, values) for arg in args))
+    numeric_args = tuple(
+        _runtime_number(
+            _evaluate_node(arg, values), f"Expression call {function!r} argument"
+        )
+        for arg in args
+    )
+    return _runtime_number(
+        _ALLOWED_CALLS[function](*numeric_args),
+        f"Expression call {function!r} result",
+    )
 
 
 @dataclass(frozen=True, init=False)
@@ -549,7 +753,12 @@ class ExpressionConstraint:
         allowed_names: Collection[str] | None,
     ) -> "ExpressionConstraint":
         normalized = _validate_common(name, hard, penalty, weight)
-        canonical_ast = _canonical_node(raw_ast, _normalize_allowed_names(allowed_names), 1)
+        canonical_ast = _canonical_node(
+            raw_ast,
+            _normalize_allowed_names(allowed_names),
+            1,
+            _AstBudget(),
+        )
         instance = object.__new__(cls)
         object.__setattr__(instance, "name", normalized[0])
         object.__setattr__(instance, "_ast", canonical_ast)
@@ -573,11 +782,9 @@ class ExpressionConstraint:
                 f"ExpressionConstraint {self.name!r} could not be evaluated",
                 details={"error": type(error).__name__},
             ) from error
-        if self._ast.node_type not in {"compare", "boolean"} and not isinstance(
-            result, bool
-        ):
+        if type(result) is not bool:
             raise _invalid(f"ExpressionConstraint {self.name!r} must evaluate to a boolean")
-        return bool(result)
+        return result
 
     def to_dict(self) -> dict[str, object]:
         payload = _base_payload(self.kind, self.name, self.hard, self.penalty, self.weight)
@@ -642,10 +849,10 @@ class CategoricalCombinationConstraint:
 
     @staticmethod
     def _matches(pattern: Mapping[str, JSONScalar], values: Mapping[str, object]) -> bool:
-        return all(
-            factor in values and values[factor] == value
-            for factor, value in pattern.items()
-        )
+        for factor, value in pattern.items():
+            if factor not in values or not _json_scalars_equal(values[factor], value):
+                return False
+        return True
 
     def satisfied(self, values: Mapping[str, object]) -> bool:
         if self.allowed is not None:
@@ -682,10 +889,11 @@ class OutcomeConstraint:
             self.name, self.hard, self.penalty, self.weight
         )
         objective = _validate_name(self.objective, "OutcomeConstraint objective")
-        if self.operator not in _COMPARISON_OPERATORS:
-            raise _invalid(
-                "OutcomeConstraint operator must be one of '<=', '>=', or '=='"
-            )
+        operator_name = _validate_operator(
+            self.operator,
+            _COMPARISON_OPERATORS,
+            "OutcomeConstraint operator",
+        )
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "objective", objective)
         object.__setattr__(
@@ -693,6 +901,7 @@ class OutcomeConstraint:
             "bound",
             _validate_finite_number(self.bound, "OutcomeConstraint bound"),
         )
+        object.__setattr__(self, "operator", operator_name)
         object.__setattr__(self, "hard", hard)
         object.__setattr__(self, "penalty", penalty)
         object.__setattr__(self, "weight", weight)
@@ -712,6 +921,7 @@ class OutcomeConstraint:
 def _exact_constraint_keys(
     payload: Mapping[str, object], expected: set[str], kind: str
 ) -> None:
+    _validate_mapping_keys(payload, f"Constraint kind {kind!r}")
     actual = set(payload)
     missing = expected - actual
     unknown = actual - expected
@@ -735,6 +945,7 @@ def constraint_from_dict(
     payload: Mapping[str, object],
     *,
     allowed_names: Collection[str] | None = None,
+    allowed_objective_names: Collection[str] | None = None,
 ) -> Constraint:
     """Build a constraint from a strict declarative payload.
 
@@ -754,6 +965,7 @@ def constraint_from_dict(
     }:
         raise _invalid(f"Unknown constraint kind {kind!r}")
     names = _normalize_allowed_names(allowed_names)
+    objective_names = _normalize_allowed_names(allowed_objective_names)
     common_keys, hard = _factory_common(payload, kind)
     penalty = payload.get("penalty")
     weight = payload.get("weight")
@@ -807,7 +1019,7 @@ def constraint_from_dict(
     _exact_constraint_keys(
         payload, common_keys | {"objective", "operator", "bound"}, kind
     )
-    objective = _validate_factor_name(payload["objective"], names)
+    objective = _validate_objective_name(payload["objective"], objective_names)
     return OutcomeConstraint(
         payload["name"],  # type: ignore[arg-type]
         objective,
