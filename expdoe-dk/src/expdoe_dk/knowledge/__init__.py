@@ -542,7 +542,7 @@ class Knowledge:
 
     @property
     def provider_records(self) -> tuple[ProviderRecord, ...]:
-        """Return deterministic detached provider declarations for audit/reload."""
+        """Return detached records, keeping restored expectations authoritative."""
         current = tuple(
             item
             for item in self._registry.provider_records
@@ -553,9 +553,9 @@ class Knowledge:
                 item.canonical_distribution_name,
                 item.entry_point_name,
             ): item
-            for item in self._restored_provider_records
+            for item in current
         }
-        for item in current:
+        for item in self._restored_provider_records:
             keyed[(item.canonical_distribution_name, item.entry_point_name)] = item
         return tuple(keyed[key] for key in sorted(keyed))
 

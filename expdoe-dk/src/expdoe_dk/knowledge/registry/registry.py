@@ -38,7 +38,7 @@ class PatternRegistry:
 
     def __init__(self) -> None:
         self._definitions: dict[tuple[str, str], KnowledgePatternDefinition] = {}
-        self._provider_records: tuple[object, ...] = ()
+        self._provider_records: dict[tuple[str, str], object] = {}
         self._lock = RLock()
 
     def register(self, definition: KnowledgePatternDefinition) -> None:
@@ -113,22 +113,72 @@ class PatternRegistry:
     def provider_records(self) -> tuple[object, ...]:
         """Return detached immutable provenance for explicitly loaded providers."""
         with self._lock:
-            return tuple(self._provider_records)
-
-    def _record_provider_records(self, records: Iterable[object]) -> None:
-        """Attach provider declarations after their definitions commit atomically."""
-        incoming = tuple(records)
-        with self._lock:
-            combined = self._provider_records + incoming
-            self._provider_records = tuple(
-                sorted(
-                    combined,
-                    key=lambda item: (
-                        item.canonical_distribution_name,
-                        item.entry_point_name,
-                    ),
-                )
+            return tuple(
+                self._provider_records[key] for key in sorted(self._provider_records)
             )
+
+    def _publish_provider_transaction(
+        self,
+        definitions: Iterable[KnowledgePatternDefinition],
+        records: Iterable[object],
+    ) -> None:
+        """Publish provider definitions and provenance as one rollback-safe state."""
+        if isinstance(definitions, (str, bytes)) or not isinstance(
+            definitions, Iterable
+        ):
+            raise TypeError("definitions must be an iterable of definitions")
+        if isinstance(records, (str, bytes)) or not isinstance(records, Iterable):
+            raise TypeError("records must be an iterable of provider records")
+        incoming_definitions = tuple(definitions)
+        incoming_records = tuple(records)
+
+        with self._lock:
+            from .providers import ProviderRecord
+
+            for definition in incoming_definitions:
+                self._validate_definition(definition)
+            if not all(isinstance(record, ProviderRecord) for record in incoming_records):
+                raise TypeError("records must contain ProviderRecord values")
+
+            original_definitions = self._definitions
+            original_records = self._provider_records
+            replacement_definitions = dict(original_definitions)
+            replacement_records = dict(original_records)
+
+            incoming_definition_keys: list[tuple[str, str]] = []
+            for definition in incoming_definitions:
+                key = (definition.pattern, definition.version)
+                if key in replacement_definitions:
+                    raise ValueError(f"Pattern {key} already registered")
+                replacement_definitions[key] = definition
+                incoming_definition_keys.append(key)
+
+            recorded_definition_keys: list[tuple[str, str]] = []
+            for record in incoming_records:
+                key = (
+                    record.canonical_distribution_name,
+                    record.entry_point_name,
+                )
+                if key in replacement_records:
+                    raise ValueError(f"Provider {key} already registered")
+                replacement_records[key] = record
+                recorded_definition_keys.extend(
+                    (definition.pattern, definition.version)
+                    for definition in record.definitions
+                )
+
+            if sorted(recorded_definition_keys) != sorted(incoming_definition_keys):
+                raise ValueError(
+                    "Provider records must describe exactly the published definitions"
+                )
+
+            try:
+                self._definitions = replacement_definitions
+                self._provider_records = replacement_records
+            except BaseException:
+                object.__setattr__(self, "_definitions", original_definitions)
+                object.__setattr__(self, "_provider_records", original_records)
+                raise
 
     @staticmethod
     def _require_spec(spec: object) -> KnowledgePatternSpec:

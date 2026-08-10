@@ -518,7 +518,7 @@ def load_pattern_providers(
         for definition in definitions
     )
     try:
-        registry.register_many(definitions_to_register)
+        registry._publish_provider_transaction(definitions_to_register, records)
     except Exception as error:
         raise _knowledge_error(
             "Pattern provider definitions could not be committed",
@@ -540,7 +540,6 @@ def load_pattern_providers(
                 for item in definitions_to_register
             ],
         ) from None
-    registry._record_provider_records(records)
     return ProviderLoadReport(records)
 
 

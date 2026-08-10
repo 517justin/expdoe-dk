@@ -286,3 +286,101 @@ Fields are package `__version__`, installed distribution version, engine version
 
 - `4dda5f8673eed41863e31024a533f78a098ddd15` — `fix: close v0.5 final review findings`
 - Report commit — the commit containing this file; its hash is included in the final handoff because a Git commit cannot embed its own final hash.
+
+## Exception Wave — Authoritative provider provenance and atomic publication
+
+Date: 2026-08-11
+
+This user-authorized exception wave addressed only the two re-review blockers. It did not change the SDD progress ledger or take on any deferred Minor work.
+
+### 1. Restored provenance remains authoritative
+
+RED independently reproduced the same-entry replacement counterexample with literal, distinct provider v1/v2 distribution versions and schema digests. Before the fix, serializing a restored v1 envelope against a registry containing v2 emitted v2 before compilation, silently rewriting the checkpoint's expected provenance.
+
+GREEN changes the audit merge precedence so restored provider records remain the authoritative expected state. Full-record verification still compares original and canonical distribution names, distribution version, entry-point name, exact pattern/version declarations, and canonical-schema SHA-256 digests. A missing or mismatched explicitly loaded provider raises typed `EXTENSION_NOT_ALLOWED` without mutating the expected records. Focused tests also prove input/output detachment, repeated serialize/restore stability before and after a failed compile, exact-match compilation, and fresh `Knowledge` snapshots when no restored expectation exists.
+
+```text
+../.venv/bin/python -m pytest -q tests/knowledge/test_envelope.py
+13 passed, 2 warnings
+```
+
+### 2. Provider definitions and records publish atomically
+
+RED introduced real-state transaction regressions. Against the pre-fix loader they produced `3 failed, 1 passed`: a post-provenance-assignment exception escaped raw after leaving definitions installed, the loader made zero transaction calls, and a coordinated reader observed definitions before provenance. The already-atomic definitions-assignment case was the single pass.
+
+GREEN adds one registry transaction that, while holding the same registry lock used by `resolve()`, `definitions()`, and provider-record snapshots, validates both inputs, builds both replacement mappings, and publishes definitions plus provenance together. If either assignment mutates and then raises, base-level rollback restores the exact original mapping objects for both collections before the loader sanitizes the failure as deterministic `KNOWLEDGE_INVALID` commit provenance. The loader invokes exactly one transaction after preflight. Existing `register()` and `register_many()` behavior is unchanged.
+
+Focused tests cover failure immediately after definitions assignment and after provenance assignment, pre-populated state preservation, exact private mapping identity restoration, deterministic multi-provider publication, a coordinated concurrent reader, sanitized error details, and legacy registry behavior.
+
+```text
+new atomic transaction regressions (GREEN)
+4 passed, 2 warnings in 0.22s
+
+../.venv/bin/python -m pytest -q tests/knowledge/test_provider_loading.py tests/knowledge/test_registry.py
+58 passed, 2 warnings in 0.28s
+
+../.venv/bin/python -m pytest -q tests/knowledge/test_envelope.py tests/knowledge/test_provider_loading.py tests/knowledge/test_registry.py
+71 passed, 2 warnings in 0.42s
+```
+
+### Exception-wave verification
+
+```text
+../.venv/bin/python -m pytest -q tests/knowledge
+274 passed, 2 warnings in 2.62s
+
+../.venv/bin/python -m pytest -q tests/test_v04_compatibility.py tests/test_campaign_smoke.py tests/test_mixed_space.py
+101 passed, 2 skipped, 2 warnings in 10.89s
+
+../.venv/bin/python -m pytest -q
+689 passed, 4 skipped, 2 warnings in 39.55s
+
+../.venv/bin/python -m compileall -q src
+exit 0; no output
+
+git diff --check
+exit 0; no output
+
+git diff --name-only | rg 'progress\.md$'
+exit 1; no matches (ledger untouched)
+
+git grep -n -i -E 'MI-6|pyDOE3' -- ':!docs/superpowers/**' ':!.superpowers/**'
+exit 1; no shipped-source/dependency-input matches
+```
+
+The final source state was rebuilt offline through the declared setuptools backend, without build isolation:
+
+```text
+../.venv/bin/python -c 'from setuptools.build_meta import build_sdist, build_wheel; print(build_wheel("dist")); print(build_sdist("dist"))'
+expdoe_dk-0.5.0-py3-none-any.whl
+expdoe_dk-0.5.0.tar.gz
+exit 0
+
+../.venv/bin/python -m pytest -q --run-slow tests/test_release_artifacts.py
+2 passed in 0.27s
+```
+
+Final exception-wave artifact SHA-256 values:
+
+```text
+1e076eb92c77fe8b605a39d1aab2a364ce48bda5335d008adc63887884e34af9  expdoe_dk-0.5.0-py3-none-any.whl
+23016284fb57e88bf96733c237fdc2bca09401a39462297fb0240c689a700989  expdoe_dk-0.5.0.tar.gz
+```
+
+The archive gate rechecked wheel/sdist contents, metadata, NOTICE, requirements, expected files, and prohibited/stale text. The rebuilt wheel was then installed with `--no-deps --no-index` into a fresh target. Provider entry-point enumeration was replaced by an assertion-raising sentinel before constructing `Knowledge()` and `PatternRegistry()`:
+
+```text
+0.5.0 0.5.0 0.5.0 1.0 2.0 /private/tmp/expdoe-exception-wheel.tH1eYm/expdoe_dk/__init__.py
+```
+
+The sentinel was never called. The values are package version, installed distribution version, engine version, knowledge schema version, and checkpoint schema version.
+
+### Exception-wave files and self-review
+
+- Authoritative audit state: `knowledge/__init__.py`, `tests/knowledge/test_envelope.py`
+- Atomic registry publication: `knowledge/registry/registry.py`, `knowledge/registry/providers.py`, `tests/knowledge/test_provider_loading.py`
+- Evidence: this report only; the progress ledger remains untouched
+
+Self-review confirmed that restored provenance never accepts current registry replacement; failed verification is non-mutating; fresh knowledge retains the explicit-load snapshot behavior; transaction validation and both mapping builds precede publication; all readers use the publication lock; rollback bypasses hostile assignment hooks and restores both original object identities; loader errors remain sanitized and deterministic; and legacy registry APIs retain their previous semantics. No known concerns remain.
+
+Exception-wave commit — the commit containing this section; its hash is included in the final handoff.

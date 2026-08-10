@@ -221,19 +221,102 @@ def test_changed_loaded_provider_is_rejected_against_restored_provenance(
     ]
 
 
-def test_current_loaded_provider_record_replaces_stale_restored_audit_record(
+def test_restored_provider_record_stays_authoritative_when_same_entry_changes(
     monkeypatch, fake_definition
 ):
-    envelope = _loaded_provider_envelope(monkeypatch, fake_definition)
+    expected_provider = {
+        "distribution_name": "Acme.Patterns",
+        "canonical_distribution_name": "acme-patterns",
+        "entry_point_name": "acme-patterns",
+        "distribution_version": "1.0.0",
+        "definitions": [
+            {
+                "pattern": "acme_shape",
+                "version": "3.0",
+                "schema_digest": (
+                    "27043154881f68665c7ab61be7a1959f3dbf60965684896a32a68bec66e1dd83"
+                ),
+            }
+        ],
+    }
+    source_envelope = Knowledge().add(_provider_spec()).to_envelope()
+    source_envelope["providers"] = [expected_provider]
+    restore_payload = json.loads(json.dumps(source_envelope))
     changed_registry, changed_record = _load_acme_provider(
         monkeypatch,
         fake_definition,
-        distribution_version="2.4.2",
+        distribution_version="2.0.0",
+        schema={
+            "type": "object",
+            "properties": {"strength": {"type": "integer"}},
+            "required": ["strength"],
+            "additionalProperties": False,
+        },
     )
+    knowledge = Knowledge.from_envelope(
+        restore_payload,
+        registry=changed_registry,
+    )
+    space = Space([Parameter("x", bounds=(0.0, 1.0))], objectives="yield")
 
-    knowledge = Knowledge.from_envelope(envelope, registry=changed_registry)
+    restore_payload["providers"][0]["distribution_version"] = "tampered-input"
+    before_compile = knowledge.to_envelope()
 
-    assert knowledge.provider_records == (changed_record,)
+    assert before_compile["providers"] == [expected_provider]
+    before_compile["providers"][0]["distribution_version"] = "tampered-output"
+    assert knowledge.to_envelope()["providers"] == [expected_provider]
+    stable_envelope = knowledge.to_envelope()
+
+    with pytest.raises(EngineError) as caught:
+        knowledge.compile(space)
+
+    assert caught.value.code is ErrorCode.EXTENSION_NOT_ALLOWED
+    assert caught.value.details["mismatched_provider_records"] == [
+        {"expected": expected_provider, "actual": changed_record.to_dict()}
+    ]
+    assert knowledge.to_envelope() == stable_envelope
+    assert Knowledge.from_envelope(
+        knowledge.to_envelope(),
+        registry=changed_registry,
+    ).to_envelope() == stable_envelope
+
+
+def test_new_knowledge_snapshots_current_loaded_provider_record(
+    monkeypatch, fake_definition
+):
+    expected_provider = {
+        "distribution_name": "Acme.Patterns",
+        "canonical_distribution_name": "acme-patterns",
+        "entry_point_name": "acme-patterns",
+        "distribution_version": "2.0.0",
+        "definitions": [
+            {
+                "pattern": "acme_shape",
+                "version": "3.0",
+                "schema_digest": (
+                    "f944b026f5f001c6e32b3e01e708c1a7e7e0a94111433489c0fcccdadc8e07fd"
+                ),
+            }
+        ],
+    }
+    registry, _ = _load_acme_provider(
+        monkeypatch,
+        fake_definition,
+        distribution_version="2.0.0",
+        schema={
+            "type": "object",
+            "properties": {"strength": {"type": "integer"}},
+            "required": ["strength"],
+            "additionalProperties": False,
+        },
+    )
+    knowledge = Knowledge(registry=registry).add(_provider_spec())
+
+    envelope = knowledge.to_envelope()
+
+    assert envelope["providers"] == [expected_provider]
+    envelope["providers"][0]["distribution_version"] = "tampered-output"
+    assert knowledge.to_envelope()["providers"] == [expected_provider]
 
 
 def test_exact_explicitly_loaded_provider_satisfies_restored_provenance(

@@ -4,7 +4,7 @@ import importlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
 
@@ -649,6 +649,167 @@ def test_provider_commit_failure_is_typed_and_preserves_registry_state(
     assert "sensitive injected commit failure" not in str(caught.value)
     assert registry.definitions() == before
     assert registry.resolve("existing", "1.0") is existing
+
+
+@pytest.mark.parametrize("failure_field", ["_definitions", "_provider_records"])
+def test_provider_transaction_failure_restores_both_original_mapping_identities(
+    monkeypatch, fake_definition, failure_field
+):
+    providers = _providers_module()
+
+    class HostileRegistry(PatternRegistry):
+        failure_field = None
+
+        def __setattr__(self, name, value):
+            if name == self.failure_field:
+                super().__setattr__(name, value)
+                raise RuntimeError(f"post-assignment failure for {name}")
+            super().__setattr__(name, value)
+
+    def entry(distribution, entry_name, version, pattern):
+        return FakeEntryPoint(
+            name=entry_name,
+            value=f"{distribution}.patterns:{entry_name}",
+            group="expdoe_dk.knowledge_patterns",
+            dist=FakeDistribution(distribution, version),
+            factory=lambda: lambda: (_definition(fake_definition, pattern),),
+        )
+
+    registry = HostileRegistry()
+    seed = entry("seed-provider", "seed-entry", "1.0", "seed-pattern")
+    monkeypatch.setattr(providers, "entry_points", lambda *, group: (seed,))
+    providers.load_pattern_providers({"seed-provider"}, registry)
+    original_definitions = registry._definitions
+    original_records = registry._provider_records
+    original_definition_snapshot = registry.definitions()
+    original_record_snapshot = registry.provider_records
+
+    incoming = entry("new-provider", "new-entry", "2.0", "new-pattern")
+    monkeypatch.setattr(providers, "entry_points", lambda *, group: (incoming,))
+    registry.failure_field = failure_field
+
+    with pytest.raises(EngineError) as caught:
+        providers.load_pattern_providers({"new-provider"}, registry)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+    assert caught.value.details["stage"] == "commit"
+    assert caught.value.details["error_type"] == "RuntimeError"
+    assert registry._definitions is original_definitions
+    assert registry._provider_records is original_records
+    assert registry.definitions() == original_definition_snapshot
+    assert registry.provider_records == original_record_snapshot
+
+
+def test_provider_loader_publishes_multi_provider_state_in_one_transaction(
+    monkeypatch, fake_definition
+):
+    providers = _providers_module()
+
+    class TransactionCountingRegistry(PatternRegistry):
+        transaction_count = 0
+
+        def _publish_provider_transaction(self, definitions, records):
+            self.transaction_count += 1
+            return super()._publish_provider_transaction(definitions, records)
+
+    def entry(distribution, entry_name, version, pattern):
+        return FakeEntryPoint(
+            name=entry_name,
+            value=f"{distribution}.patterns:{entry_name}",
+            group="expdoe_dk.knowledge_patterns",
+            dist=FakeDistribution(distribution, version),
+            factory=lambda: lambda: (_definition(fake_definition, pattern),),
+        )
+
+    entries = (
+        entry("Zed.Provider", "z-entry", "2.0", "zeta-pattern"),
+        entry("Alpha_Provider", "a-entry", "1.0", "alpha-pattern"),
+    )
+    monkeypatch.setattr(providers, "entry_points", lambda *, group: entries)
+    registry = TransactionCountingRegistry()
+
+    report = providers.load_pattern_providers(
+        {"zed-provider", "alpha-provider"}, registry
+    )
+
+    assert registry.transaction_count == 1
+    assert [(item.pattern, item.version) for item in registry.definitions()] == [
+        ("alpha-pattern", "1.0"),
+        ("zeta-pattern", "1.0"),
+    ]
+    assert registry.provider_records == report.providers
+    assert [item.entry_point_name for item in registry.provider_records] == [
+        "a-entry",
+        "z-entry",
+    ]
+
+
+def test_concurrent_reader_cannot_observe_definitions_without_provider_records(
+    monkeypatch, fake_definition
+):
+    providers = _providers_module()
+
+    class CoordinatedRegistry(PatternRegistry):
+        coordinate = False
+
+        def __init__(self):
+            super().__init__()
+            self.between_assignments = Event()
+            self.allow_completion = Event()
+
+        def register_many(self, definitions):
+            result = super().register_many(definitions)
+            if self.coordinate:
+                self.between_assignments.set()
+                assert self.allow_completion.wait(timeout=5)
+            return result
+
+        def __setattr__(self, name, value):
+            if name == "_provider_records" and getattr(self, "coordinate", False):
+                self.between_assignments.set()
+                assert self.allow_completion.wait(timeout=5)
+            super().__setattr__(name, value)
+
+    entry = FakeEntryPoint(
+        name="atomic-entry",
+        value="atomic_provider.patterns:provide",
+        group="expdoe_dk.knowledge_patterns",
+        dist=FakeDistribution("atomic-provider", "3.0"),
+        factory=lambda: lambda: (
+            _definition(fake_definition, "atomic-pattern"),
+        ),
+    )
+    monkeypatch.setattr(providers, "entry_points", lambda *, group: (entry,))
+    registry = CoordinatedRegistry()
+    registry.coordinate = True
+    reader_started = Event()
+    reader_completed = Event()
+
+    def load():
+        return providers.load_pattern_providers({"atomic-provider"}, registry)
+
+    def snapshot():
+        reader_started.set()
+        try:
+            return registry.definitions(), registry.provider_records
+        finally:
+            reader_completed.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        loader = executor.submit(load)
+        assert registry.between_assignments.wait(timeout=5)
+        reader = executor.submit(snapshot)
+        assert reader_started.wait(timeout=5)
+        reader_completed_during_publication = reader_completed.wait(timeout=0.2)
+        registry.allow_completion.set()
+        report = loader.result(timeout=5)
+        definitions, records = reader.result(timeout=5)
+
+    assert not reader_completed_during_publication
+    assert [(item.pattern, item.version) for item in definitions] == [
+        ("atomic-pattern", "1.0")
+    ]
+    assert records == report.providers
 
 
 def test_report_is_deterministic_immutable_detached_and_json_serializable(
