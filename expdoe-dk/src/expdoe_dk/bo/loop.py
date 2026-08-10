@@ -258,10 +258,17 @@ class Campaign:
 
         # Augment with virtual points if knowledge has monotone.
         iter_idx = iteration if iteration is not None else len(self._y_internal)
+        virtual_artifacts = self.knowledge.compile(
+            space=self.space, observations=None
+        ).virtual_observations
         model, augmenter = build_gp(self.space, self.knowledge, X_unit, y_norm)
         if augmenter is not None:
             n_pairs = max(
-                (m.n_pairs_per_dim for m in self.knowledge.items_of("monotone")),
+                (
+                    artifact.payload["n_pairs_per_dim"]
+                    for artifact in virtual_artifacts
+                    if artifact.kind == "monotone"
+                ),
                 default=5,
             )
             X_aug, Y_aug = augmenter.augment(
@@ -274,9 +281,13 @@ class Campaign:
             model, _ = build_gp(self.space, self.knowledge, X_aug, Y_aug)
 
         # Random augment (Cat ②): append zero-Y_norm anchor points.
-        ra_items = self.knowledge.items_of("random_augment")
-        if ra_items:
-            n_ra = ra_items[-1].n
+        random_artifacts = [
+            artifact
+            for artifact in virtual_artifacts
+            if artifact.kind == "random_augment"
+        ]
+        if random_artifacts:
+            n_ra = random_artifacts[-1].payload["n"]
             torch.manual_seed(self.seed * 10000 + iter_idx)
             X_ra = torch.rand(n_ra, self.space.n_dims, dtype=torch.float64)
             Y_ra = torch.full((n_ra, 1), float(y_norm.mean()), dtype=torch.float64)

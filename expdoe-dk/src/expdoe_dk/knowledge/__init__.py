@@ -16,11 +16,15 @@ Lessons from DOEGP Plan 2 hard-coded as safer defaults:
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from ._frame import PhysicalEffect, flip_for_minimize, InternalDirection
+from .artifacts import OptimizationArtifacts
 from .monotone import epsilon_from_prior
+from .patterns import GP_PRIOR_PRESETS, builtin_pattern_definitions
+from .registry import PatternRegistry
+from .specs import KnowledgePatternSpec, KnowledgeScope, make_pattern_spec
 from .validators import (
     MonotoneCheckResult,
     MonotoneViolationWarning,
@@ -75,17 +79,45 @@ class _GPPriorItem:
     lengthscale: Literal["weak", "medium", "strong"] = "medium"
 
 
-# Map of lengthscale prior strength → (Gamma(a, b) parameters, mode).
-# Modes ((a-1)/b) used by `epsilon=auto` resolution.
-GP_PRIOR_PRESETS: dict[str, dict[str, Any]] = {
-    "weak":   {"ls": (1.5, 0.5),  "os": (2.0, 0.5), "noise": (1.0, 50.0)},
-    "medium": {"ls": (3.0, 6.0),  "os": (3.0, 1.5), "noise": (2.0, 200.0)},
-    "strong": {"ls": (6.0, 15.0), "os": (3.0, 1.5), "noise": (3.0, 500.0)},
-}
-
-
 def _gamma_mode(a: float, b: float) -> float:
     return max(0.01, (a - 1.0) / b) if a > 1 else 0.05
+
+
+def _legacy_item_from_spec(spec: KnowledgePatternSpec) -> Any | None:
+    """Render one built-in declaration through the exact v0.4 item view."""
+    parameters = spec.parameters
+    if spec.pattern == "arrhenius":
+        return _ArrheniusItem(
+            param=spec.scope.factors[0],
+            frozen=parameters["frozen"],
+            activation_energy=parameters["activation_energy"],
+            amplitude_init=parameters["amplitude_init"],
+        )
+    if spec.pattern == "quadratic_peak":
+        return _QuadraticPeakItem(
+            param=spec.scope.factors[0],
+            center=parameters["center"],
+            direction=parameters["direction"],
+            frozen=parameters["frozen"],
+        )
+    if spec.pattern == "monotone":
+        effect: PhysicalEffect = (
+            "increases_objective"
+            if parameters["direction"] == "increasing"
+            else "decreases_objective"
+        )
+        return _MonotoneItem(
+            param=spec.scope.factors[0],
+            effect=effect,
+            n_pairs_per_dim=parameters["n_pairs_per_dim"],
+            epsilon=parameters["epsilon"],
+            delta_norm=parameters["delta_norm"],
+        )
+    if spec.pattern == "random_augment":
+        return _RandomAugmentItem(n=parameters["n"])
+    if spec.pattern == "gp_prior":
+        return _GPPriorItem(lengthscale=parameters["lengthscale"])
+    return None
 
 
 # --------------------------------------------------------------------- #
@@ -102,9 +134,23 @@ class Knowledge:
     resolves them at fit time, applying frame translation and ε auto-tune.
     """
 
-    def __init__(self) -> None:
-        self._items: list[Any] = []
+    def __init__(self, registry: PatternRegistry | None = None) -> None:
+        if registry is None:
+            registry = PatternRegistry()
+            for definition in builtin_pattern_definitions():
+                registry.register(definition)
+        self._registry = registry
+        self._specs: list[KnowledgePatternSpec] = []
         self._strict = False  # legacy flag; no longer affects Campaign behaviour
+
+    def add(self, spec: KnowledgePatternSpec) -> "Knowledge":
+        """Add one immutable declaration, rejecting ambiguous provenance IDs."""
+        if not isinstance(spec, KnowledgePatternSpec):
+            raise TypeError("spec must be a KnowledgePatternSpec")
+        if any(existing.pattern_id == spec.pattern_id for existing in self._specs):
+            raise ValueError(f"Duplicate knowledge pattern_id {spec.pattern_id!r}")
+        self._specs.append(spec)
+        return self
 
     # ------------------------------------------------------------------ #
     # Composition (chainable)
@@ -125,15 +171,19 @@ class Knowledge:
                 "a specific reason.",
                 stacklevel=2,
             )
-        self._items.append(
-            _ArrheniusItem(
-                param=param,
-                frozen=frozen,
-                activation_energy=activation_energy,
-                amplitude_init=amplitude_init,
+        return self.add(
+            make_pattern_spec(
+                pattern="arrhenius",
+                version="1.0",
+                parameters={
+                    "frozen": frozen,
+                    "activation_energy": activation_energy,
+                    "amplitude_init": amplitude_init,
+                },
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=1.0,
             )
         )
-        return self
 
     def with_quadratic_peak(
         self,
@@ -153,13 +203,19 @@ class Knowledge:
             raise ValueError(
                 f"direction must be 'peak' or 'valley', got {direction!r}."
             )
-        self._items.append(
-            _QuadraticPeakItem(
-                param=param, center=float(center), direction=direction,
-                frozen=frozen,
+        return self.add(
+            make_pattern_spec(
+                pattern="quadratic_peak",
+                version="1.0",
+                parameters={
+                    "center": float(center),
+                    "direction": direction,
+                    "frozen": frozen,
+                },
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=1.0,
             )
         )
-        return self
 
     def with_monotone(
         self,
@@ -175,20 +231,32 @@ class Knowledge:
                 f"effect must be 'increases_objective' or "
                 f"'decreases_objective', got {effect!r}."
             )
-        self._items.append(
-            _MonotoneItem(
-                param=param,
-                effect=effect,
-                n_pairs_per_dim=n_pairs_per_dim,
-                epsilon=epsilon,
-                delta_norm=delta_norm,
+        direction = "increasing" if effect == "increases_objective" else "decreasing"
+        return self.add(
+            make_pattern_spec(
+                pattern="monotone",
+                version="1.0",
+                parameters={
+                    "direction": direction,
+                    "n_pairs_per_dim": n_pairs_per_dim,
+                    "epsilon": epsilon,
+                    "delta_norm": delta_norm,
+                },
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=1.0,
             )
         )
-        return self
 
     def with_random_augment(self, n: int = 20) -> "Knowledge":
-        self._items.append(_RandomAugmentItem(n=n))
-        return self
+        return self.add(
+            make_pattern_spec(
+                pattern="random_augment",
+                version="1.0",
+                parameters={"n": n},
+                scope=KnowledgeScope(),
+                confidence=1.0,
+            )
+        )
 
     def with_gp_prior(
         self,
@@ -198,8 +266,15 @@ class Knowledge:
             raise ValueError(
                 f"lengthscale preset must be one of {list(GP_PRIOR_PRESETS)}."
             )
-        self._items.append(_GPPriorItem(lengthscale=lengthscale))
-        return self
+        return self.add(
+            make_pattern_spec(
+                pattern="gp_prior",
+                version="1.0",
+                parameters={"lengthscale": lengthscale},
+                scope=KnowledgeScope(),
+                confidence=1.0,
+            )
+        )
 
     def strict(self) -> "Knowledge":
         """
@@ -223,24 +298,16 @@ class Knowledge:
         - ``drop_monotone()`` removes all monotone items.
         - ``drop_monotone("T")`` removes only items declared for parameter ``T``.
         """
-        self._items = [
-            it
-            for it in self._items
-            if not (
-                getattr(it, "kind", None) == "monotone"
-                and (param is None or getattr(it, "param", None) == param)
-            )
-        ]
-        return self
+        return self.drop("monotone", param)
 
     def drop(self, kind: str, param: str | None = None) -> "Knowledge":
         """Remove items of a given kind (and optionally a specific param)."""
-        self._items = [
-            it
-            for it in self._items
+        self._specs = [
+            spec
+            for spec in self._specs
             if not (
-                getattr(it, "kind", None) == kind
-                and (param is None or getattr(it, "param", None) == param)
+                spec.pattern == kind
+                and (param is None or param in spec.scope.factors)
             )
         ]
         return self
@@ -250,13 +317,31 @@ class Knowledge:
     # ------------------------------------------------------------------ #
     @property
     def items(self) -> list[Any]:
-        return list(self._items)
+        return [
+            item
+            for spec in self._specs
+            if (item := _legacy_item_from_spec(spec)) is not None
+        ]
+
+    @property
+    def specs(self) -> tuple[KnowledgePatternSpec, ...]:
+        """Return the immutable declaration set without mutable container leaks."""
+        return tuple(self._specs)
+
+    @property
+    def registry(self) -> PatternRegistry:
+        return self._registry
 
     def has_kind(self, kind: str) -> bool:
-        return any(getattr(it, "kind", None) == kind for it in self._items)
+        return any(spec.pattern == kind for spec in self._specs)
 
     def items_of(self, kind: str) -> list[Any]:
-        return [it for it in self._items if getattr(it, "kind", None) == kind]
+        return [
+            item
+            for spec in self._specs
+            if spec.pattern == kind
+            if (item := _legacy_item_from_spec(spec)) is not None
+        ]
 
     def is_strict(self) -> bool:
         return self._strict
@@ -291,7 +376,8 @@ class Knowledge:
             a, b = GP_PRIOR_PRESETS[preset]["ls"]
             ls_mode = _gamma_mode(a, b)
             min_eps = 0.3 * ls_mode
-            for idx, m in enumerate(list(self._items)):
+            for idx, spec in enumerate(list(self._specs)):
+                m = _legacy_item_from_spec(spec)
                 if getattr(m, "kind", None) != "monotone":
                     continue
                 if m.epsilon == "auto":
@@ -310,9 +396,22 @@ class Knowledge:
                         f"auto_rescue=True. "
                         f"See AGENT_KNOWLEDGE.md Exp-14 for the rule."
                     )
-                # Auto-rescue: replace the frozen dataclass item.
+                # Auto-rescue replaces the immutable value object while retaining
+                # the declaration's provenance identity. This also keeps IDs unique
+                # when distinct unsafe declarations converge on the same epsilon.
                 rescued_eps = round(max(min_eps, 0.05), 4)
-                self._items[idx] = replace(m, epsilon=rescued_eps)
+                parameters = spec.to_dict()["parameters"]
+                parameters["epsilon"] = rescued_eps
+                self._specs[idx] = make_pattern_spec(
+                    pattern_id=spec.pattern_id,
+                    pattern=spec.pattern,
+                    version=spec.version,
+                    parameters=parameters,
+                    scope=spec.scope,
+                    confidence=spec.confidence,
+                    evidence=spec.evidence,
+                    enabled=spec.enabled,
+                )
                 warnings.warn(
                     EpsilonAutoRescueNotice(
                         f"Auto-rescued with_monotone(param={m.param!r}): "
@@ -345,9 +444,35 @@ class Knowledge:
         return {
             "strict": self._strict,
             "items": [
-                {**it.__dict__} for it in self._items
+                {**it.__dict__} for it in self.items
             ],
         }
+
+    def to_specs_dict(self) -> dict:
+        """Serialize the versioned declarations without changing v0.4 payloads."""
+        return {"specs": [spec.to_dict() for spec in self._specs]}
+
+    def compile(self, space, observations=None) -> OptimizationArtifacts:
+        effective_specs: list[KnowledgePatternSpec] = []
+        for spec in self._specs:
+            if spec.pattern != "monotone" or spec.parameters["epsilon"] != "auto":
+                effective_specs.append(spec)
+                continue
+            parameters = spec.to_dict()["parameters"]
+            parameters["epsilon"] = self.resolve_epsilon(_legacy_item_from_spec(spec))
+            effective_specs.append(
+                make_pattern_spec(
+                    pattern_id=spec.pattern_id,
+                    pattern=spec.pattern,
+                    version=spec.version,
+                    parameters=parameters,
+                    scope=spec.scope,
+                    confidence=spec.confidence,
+                    evidence=spec.evidence,
+                    enabled=spec.enabled,
+                )
+            )
+        return self._registry.compile_many(effective_specs, space, observations)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Knowledge":

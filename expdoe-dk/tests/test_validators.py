@@ -147,6 +147,11 @@ def test_knowledge_drop_monotone_removes_single_param():
     k.drop_monotone("T")
     monos = k.items_of("monotone")
     assert {m.param for m in monos} == {"time"}
+    assert {
+        spec.scope.factors[0]
+        for spec in k.specs
+        if spec.pattern == "monotone"
+    } == {"time"}
     assert k.has_kind("quadratic_peak")  # untouched
 
 
@@ -156,6 +161,7 @@ def test_knowledge_drop_monotone_removes_all_when_no_arg():
          .with_monotone("time", effect="increases_objective"))
     k.drop_monotone()
     assert not k.items_of("monotone")
+    assert all(spec.pattern != "monotone" for spec in k.specs)
 
 
 # --------------------------------------------------------------------- #
