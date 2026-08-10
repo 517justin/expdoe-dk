@@ -9,6 +9,7 @@ from .constraints import (
     constraint_from_dict,
 )
 from .objective import Objective, normalize_objectives
+from .observation import ObservationBatch, PendingBatch
 from .parameter import Parameter
 from .space import Space
 
@@ -18,8 +19,10 @@ __all__ = [
     "ExpressionConstraint",
     "LinearConstraint",
     "Objective",
+    "ObservationBatch",
     "OutcomeConstraint",
     "Parameter",
+    "PendingBatch",
     "Space",
     "constraint_from_dict",
     "normalize_objectives",

@@ -29,7 +29,9 @@ from .domain import (
     Constraint,
     ExpressionConstraint,
     Objective,
+    ObservationBatch,
     OutcomeConstraint,
+    PendingBatch,
     normalize_objectives,
 )
 from .errors import EngineError, ErrorCode
@@ -46,10 +48,12 @@ __all__ = [
     "DesignDiagnostics",
     "compatible_design_methods",
     "Objective",
+    "ObservationBatch",
     "Constraint",
     "ExpressionConstraint",
     "CategoricalCombinationConstraint",
     "OutcomeConstraint",
+    "PendingBatch",
     "normalize_objectives",
     "EngineError",
     "ErrorCode",
