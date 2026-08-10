@@ -1,8 +1,11 @@
+import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import qmc
 
 from expdoe_dk import Parameter, Space, suggest_design
 from expdoe_dk.errors import EngineError, ErrorCode
+from expdoe_dk.doe.design import _draw_unit
 
 
 @pytest.fixture
@@ -44,6 +47,23 @@ def test_explicit_d_optimal_rejects_categorical_without_fallback(mixed_space):
 
     assert caught.value.code is ErrorCode.CONFIG_INVALID
     assert "sobol" in caught.value.details["compatible_methods"]
+
+
+def test_sobol_and_halton_use_their_declared_qmc_constructors():
+    n, dimensions, seed = 5, 2, 17
+
+    sobol = _draw_unit("sobol", n, dimensions, seed)
+    halton = _draw_unit("halton", n, dimensions, seed)
+
+    np.testing.assert_allclose(
+        sobol, qmc.Sobol(d=dimensions, scramble=True, seed=seed).random(n)
+    )
+    np.testing.assert_allclose(
+        halton, qmc.Halton(d=dimensions, scramble=True, seed=seed).random(n)
+    )
+    assert not np.array_equal(sobol, halton)
+    with pytest.raises(AssertionError):
+        _draw_unit("not-a-method", n, dimensions, seed)
 
 
 @pytest.mark.parametrize(

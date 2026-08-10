@@ -144,6 +144,28 @@ def test_finite_d_optimal_eligibility_rejections_are_counted_once():
     assert batch.diagnostics.rejection_counts["constraint"] == 0
 
 
+def test_finite_d_optimal_counts_hard_constraint_and_existing_once_each():
+    space = Space(
+        [Parameter("x", kind="integer", bounds=(0, 4))],
+        constraints=[ExpressionConstraint("exclude-zero", "x >= 1")],
+    )
+
+    batch = suggest_design(
+        space,
+        2,
+        method="d_optimal",
+        seed=1,
+        existing=pd.DataFrame({"x": [1]}),
+        return_diagnostics=True,
+    )
+
+    assert len(batch.frame) == 2
+    assert batch.frame["x"].between(2, 4).all()
+    assert batch.diagnostics.rejection_counts["constraint"] == 1
+    assert batch.diagnostics.rejection_counts["avoided"] == 1
+    assert batch.diagnostics.rejection_counts["duplicate"] == 0
+
+
 def test_d_optimal_matches_the_declared_greedy_log_determinant_criterion():
     space = Space([Parameter("x", kind="integer", bounds=(0, 4))])
     universe = pd.DataFrame({"x": [1, 2, 3, 4]})
@@ -184,17 +206,20 @@ def test_lhs_random_uses_each_requested_stratum_once():
     )
 
 
-def test_valid_constrained_lhs_keeps_requested_strata():
+@pytest.mark.parametrize("method", ["lhs_random", "lhs_maximin"])
+def test_filtering_constrained_lhs_keeps_requested_strata(method):
     space = Space(
-        [Parameter("x", bounds=(0.0, 1.0))],
-        constraints=[ExpressionConstraint("domain-safe", "x >= 0")],
+        [Parameter("x", bounds=(0.0, 1.0)), Parameter("y", bounds=(0.0, 1.0))],
+        constraints=[ExpressionConstraint("triangle", "x + y <= 1")],
     )
 
-    design = suggest_design(space, 8, method="lhs_random", seed=6, n_restarts=2)
+    design = suggest_design(space, 4, method=method, seed=6, n_restarts=20)
 
-    assert sorted(np.floor(design["x"].to_numpy() * 8).astype(int).tolist()) == list(
-        range(8)
-    )
+    assert (design["x"] + design["y"] <= 1).all()
+    for column in ("x", "y"):
+        assert sorted(np.floor(design[column].to_numpy() * 4).astype(int).tolist()) == list(
+            range(4)
+        )
 
 
 @pytest.mark.parametrize("method", ["lhs_random", "lhs_maximin"])

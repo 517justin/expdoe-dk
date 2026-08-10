@@ -294,7 +294,9 @@ def _draw_unit(method: str, n: int, d: int, seed: int) -> np.ndarray:
         return qmc.Sobol(d=d, scramble=True, seed=seed).random(n).astype(np.float64)
     if method == "halton":
         return qmc.Halton(d=d, scramble=True, seed=seed).random(n).astype(np.float64)
-    return np.random.default_rng(seed).uniform(size=(n, d))
+    if method in {"random_uniform", "d_optimal"}:
+        return np.random.default_rng(seed).uniform(size=(n, d))
+    raise AssertionError(f"unresolved method {method!r}")
 
 
 def _select_d_optimal(pool: pd.DataFrame, space: Space, n: int) -> pd.DataFrame:
