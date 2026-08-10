@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import math
 
+from expdoe_dk.errors import EngineError, ErrorCode
+
 from ..artifacts import OptimizationArtifact, OptimizationArtifacts
 from ..guard import CompatibilityResult, KnowledgeValidationResult
 from ..registry import KnowledgePatternDefinition
@@ -74,8 +76,24 @@ def _compile(spec, space, observations=None) -> OptimizationArtifacts:
         )
         return OptimizationArtifacts(outcome_constraints=(artifact,))
     weights = [float(value) for value in spec.parameters["weights"]]
-    total = sum(weights)
-    normalized = [value / total for value in weights]
+    scale = max(weights, default=0.0)
+    if (
+        not math.isfinite(scale)
+        or scale <= 0.0
+        or any(not math.isfinite(value) or value < 0.0 for value in weights)
+    ):
+        raise EngineError(
+            ErrorCode.KNOWLEDGE_INVALID,
+            "Acquisition preference weights must be finite, nonnegative, and not all zero",
+            details={
+                "pattern_id": spec.pattern_id,
+                "pattern": spec.pattern,
+                "version": spec.version,
+            },
+        )
+    scaled = [value / scale for value in weights]
+    scaled_total = sum(scaled)
+    normalized = [value / scaled_total for value in scaled]
     return OptimizationArtifacts(
         acquisition_preferences=(
             _artifact(

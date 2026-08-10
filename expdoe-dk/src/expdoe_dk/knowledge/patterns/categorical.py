@@ -1,6 +1,8 @@
 """Registered categorical ordering and similarity knowledge."""
 from __future__ import annotations
 
+from expdoe_dk.domain.parameter import _json_scalars_equal
+
 from ..artifacts import OptimizationArtifact, OptimizationArtifacts
 from ..guard import CompatibilityResult, KnowledgeValidationResult
 from ..registry import KnowledgePatternDefinition
@@ -17,21 +19,36 @@ def _artifact(spec, payload: dict) -> OptimizationArtifact:
 
 
 def _structural_errors(spec, space) -> tuple[str, ...]:
+    errors: list[str] = []
+    unknown_objectives = [
+        objective
+        for objective in spec.scope.objectives
+        if objective not in space.objectives
+    ]
+    if unknown_objectives:
+        errors.append(f"Unknown objectives {unknown_objectives!r}")
     if len(spec.scope.factors) != 1:
-        return (f"{spec.pattern} requires exactly one scoped factor",)
+        errors.append(f"{spec.pattern} requires exactly one scoped factor")
+        return tuple(errors)
     factor_name = spec.scope.factors[0]
     if factor_name not in space.param_names:
-        return (f"Unknown factor {factor_name!r}",)
+        errors.append(f"Unknown factor {factor_name!r}")
+        return tuple(errors)
     factor = space.param_by_name(factor_name)
     required_kind = "ordinal" if spec.pattern == "ordinal_categories" else "categorical"
-    errors: list[str] = []
     if factor.kind != required_kind:
         errors.append(f"Factor {factor_name!r} must be {required_kind}")
     declared = list(factor.values or ())
     levels = list(spec.parameters["levels"])
-    if any(level not in declared for level in levels):
+    if any(
+        not any(_json_scalars_equal(level, declared_level) for declared_level in declared)
+        for level in levels
+    ):
         errors.append("All referenced levels must exist in the factor")
-    if len(set(levels)) != len(levels):
+    if any(
+        any(_json_scalars_equal(level, previous) for previous in levels[:index])
+        for index, level in enumerate(levels)
+    ):
         errors.append("Referenced levels must be unique")
     if spec.pattern == "category_similarity":
         matrix = [list(row) for row in spec.parameters["matrix"]]
@@ -78,6 +95,7 @@ def _compile(spec, space, observations=None) -> OptimizationArtifacts:
                     "factor": factor,
                     "dimension": space.param_names.index(factor),
                     "parameters": spec.to_dict()["parameters"],
+                    "objectives": list(spec.scope.objectives),
                     "confidence": spec.confidence,
                 },
             ),
@@ -108,18 +126,20 @@ def _definition(pattern: str, properties: dict, required: list[str]):
 
 
 def ordinal_categories_definition() -> KnowledgePatternDefinition:
+    scalar = {"type": ["string", "number", "boolean", "null"]}
     return _definition(
         "ordinal_categories",
-        {"levels": {"type": "array", "items": {"type": "string"}, "minItems": 2, "uniqueItems": True}},
+        {"levels": {"type": "array", "items": scalar, "minItems": 2, "uniqueItems": True}},
         ["levels"],
     )
 
 
 def category_similarity_definition() -> KnowledgePatternDefinition:
+    scalar = {"type": ["string", "number", "boolean", "null"]}
     return _definition(
         "category_similarity",
         {
-            "levels": {"type": "array", "items": {"type": "string"}, "minItems": 2, "uniqueItems": True},
+            "levels": {"type": "array", "items": scalar, "minItems": 2, "uniqueItems": True},
             "matrix": {
                 "type": "array",
                 "minItems": 2,

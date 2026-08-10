@@ -1,12 +1,52 @@
 """Registered optimum-shape and random-augmentation knowledge."""
 from __future__ import annotations
 
+import math
+
 from ..artifacts import OptimizationArtifact, OptimizationArtifacts
 from ..guard import CompatibilityResult, KnowledgeValidationResult
 from ..registry import KnowledgePatternDefinition
 
 
 _NUMERIC_KINDS = frozenset({"continuous", "integer", "discrete"})
+
+
+def _has_usable_shape_evidence(spec, space, observations) -> bool:
+    """Return whether a batch is sufficient to attempt a shape agreement test."""
+    if observations is None:
+        return False
+    successful = observations.successful()
+    factor = spec.scope.factors[0]
+    objectives = spec.scope.objectives or tuple(space.objectives)
+    X = successful.X
+    Y = successful.Y
+    if (
+        len(X) < 4
+        or factor not in X.columns
+        or not objectives
+        or any(objective not in Y.columns for objective in objectives)
+    ):
+        return False
+    try:
+        factor_values = tuple(float(value) for value in X[factor])
+        objective_values = tuple(
+            float(value)
+            for objective in objectives
+            for value in Y[objective]
+        )
+    except (TypeError, ValueError):
+        return False
+    if not all(math.isfinite(value) for value in (*factor_values, *objective_values)):
+        return False
+    if len(set(factor_values)) < 3:
+        return False
+    parameter = space.param_by_name(factor)
+    if parameter.bounds is not None:
+        lo, hi = map(float, parameter.bounds)
+    else:
+        levels = tuple(float(value) for value in parameter.numeric_levels)
+        lo, hi = min(levels), max(levels)
+    return max(factor_values) - min(factor_values) >= 0.25 * (hi - lo)
 
 
 def _artifact(spec, kind: str, payload: dict) -> OptimizationArtifact:
@@ -110,8 +150,15 @@ def _compatible(spec, space) -> CompatibilityResult:
     return CompatibilityResult(compatible=True)
 
 
-def _new_shape_validation(spec, space, observations=None) -> KnowledgeValidationResult:
+def _new_shape_errors(spec, space) -> tuple[str, ...]:
     errors: list[str] = []
+    unknown_objectives = [
+        objective
+        for objective in spec.scope.objectives
+        if objective not in space.objectives
+    ]
+    if unknown_objectives:
+        errors.append(f"Unknown objectives {unknown_objectives!r}")
     if len(spec.scope.factors) != 1:
         errors.append(f"{spec.pattern} requires exactly one scoped factor")
     elif spec.scope.factors[0] not in space.param_names:
@@ -153,6 +200,11 @@ def _new_shape_validation(spec, space, observations=None) -> KnowledgeValidation
                     errors.append("period must be positive")
                 if hi - lo <= 0:
                     errors.append("factor range must be positive")
+    return tuple(errors)
+
+
+def _new_shape_validation(spec, space, observations=None) -> KnowledgeValidationResult:
+    errors = _new_shape_errors(spec, space)
     if errors:
         return KnowledgeValidationResult(
             pattern_id=spec.pattern_id,
@@ -161,7 +213,7 @@ def _new_shape_validation(spec, space, observations=None) -> KnowledgeValidation
             errors=tuple(errors),
             effective_confidence=spec.confidence,
         )
-    empirically_supported = observations is not None
+    empirically_supported = False
     if observations is not None and spec.pattern == "periodic":
         factor_name = spec.scope.factors[0]
         successful = observations.successful().X
@@ -171,6 +223,11 @@ def _new_shape_validation(spec, space, observations=None) -> KnowledgeValidation
             and float(successful[factor_name].max() - successful[factor_name].min())
             >= float(spec.parameters["period"])
         )
+    elif _has_usable_shape_evidence(spec, space, observations):
+        # The registry currently records descriptors rather than fitting them.
+        # Adequate rows permit a future agreement test but are not themselves
+        # evidence that the declared response shape agrees with observations.
+        empirically_supported = False
     state = "valid" if empirically_supported else "insufficient_data"
     return KnowledgeValidationResult(
         pattern_id=spec.pattern_id,
@@ -185,14 +242,8 @@ def _new_shape_validation(spec, space, observations=None) -> KnowledgeValidation
 
 
 def _new_shape_compatibility(spec, space) -> CompatibilityResult:
-    reasons: list[str] = []
-    if len(spec.scope.factors) != 1:
-        reasons.append(f"{spec.pattern} requires exactly one scoped factor")
-    elif spec.scope.factors[0] not in space.param_names:
-        reasons.append(f"Unknown factor {spec.scope.factors[0]!r}")
-    elif space.param_by_name(spec.scope.factors[0]).kind not in _NUMERIC_KINDS:
-        reasons.append(f"Factor {spec.scope.factors[0]!r} must be numeric")
-    return CompatibilityResult(compatible=not reasons, reasons=tuple(reasons))
+    reasons = _new_shape_errors(spec, space)
+    return CompatibilityResult(compatible=not reasons, reasons=reasons)
 
 
 def _compile_shape_descriptor(spec, space, observations=None) -> OptimizationArtifacts:
@@ -201,6 +252,7 @@ def _compile_shape_descriptor(spec, space, observations=None) -> OptimizationArt
         "factor": factor,
         "dimension": space.param_names.index(factor),
         "parameters": spec.to_dict()["parameters"],
+        "objectives": list(spec.scope.objectives),
         "confidence": spec.confidence,
     }
     artifact = _artifact(spec, f"{spec.pattern}_descriptor", payload)
@@ -334,7 +386,9 @@ def random_augment_definition() -> KnowledgePatternDefinition:
         family="experimental",
         schema={
             "type": "object",
-            "properties": {"n": {"type": "integer"}},
+            "properties": {
+                "n": {"type": "integer", "minimum": 1, "maximum": 4096}
+            },
             "required": ["n"],
             "additionalProperties": False,
         },

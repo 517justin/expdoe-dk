@@ -22,6 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
+    "jsonschema>=4.18",
     "torch>=2.0",
     "botorch>=0.11.0",
     "gpytorch>=1.11",

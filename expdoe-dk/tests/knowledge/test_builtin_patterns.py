@@ -2,8 +2,9 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from expdoe_dk import Knowledge, Objective, Parameter, Space
+from expdoe_dk.errors import EngineError, ErrorCode
 from expdoe_dk.knowledge.patterns import builtin_pattern_definitions
-from expdoe_dk.knowledge.registry import PatternRegistry
+from expdoe_dk.knowledge.registry import KnowledgePatternDefinition, PatternRegistry
 from expdoe_dk.knowledge.specs import KnowledgeScope, make_pattern_spec
 
 
@@ -78,6 +79,70 @@ def test_builtin_registry_uses_approved_taxonomy_families():
     }
 
 
+@pytest.mark.parametrize(
+    "pattern,parameters,factors",
+    [
+        ("saturation", {"direction": "increasing"}, ("x",)),
+        (
+            "saturation",
+            {"direction": "increasing", "half_response": True},
+            ("x",),
+        ),
+        (
+            "threshold",
+            {
+                "threshold": 0.5,
+                "below_behavior": "invalid",
+                "above_behavior": "flat",
+            },
+            ("x",),
+        ),
+        (
+            "conditional_effect",
+            {"operator": "!=", "value": 0.5},
+            ("x", "z"),
+        ),
+        ("synergy", {"unexpected": 1}, ("x", "z")),
+    ],
+)
+@pytest.mark.parametrize("operation", ["validate", "compile"])
+def test_registry_rejects_invalid_builtin_parameters_before_dispatch(
+    taxonomy_space, pattern, parameters, factors, operation
+):
+    spec = _spec(pattern, parameters, factors, ("y",))
+    registry = _builtin_registry()
+
+    with pytest.raises(EngineError) as caught:
+        if operation == "validate":
+            registry.validate(spec, taxonomy_space)
+        else:
+            registry.compile_many((spec,), taxonomy_space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+    assert caught.value.details["pattern"] == pattern
+    assert caught.value.details["version"] == "1.0"
+    assert caught.value.details["pattern_id"] == spec.pattern_id
+
+
+def test_registry_rejects_an_illegal_draft_2020_12_schema():
+    source = _builtin_registry().resolve("synergy", "1.0")
+    invalid = KnowledgePatternDefinition(
+        pattern="invalid_schema",
+        version="1.0",
+        family="test",
+        schema={"type": "not-a-json-schema-type"},
+        compiler=source.compiler,
+        validator=source.validator,
+        renderer=source.renderer,
+        compatibility=source.compatibility,
+    )
+
+    with pytest.raises(EngineError) as caught:
+        PatternRegistry().register(invalid)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+
+
 NEW_PATTERN_CASES = (
     ("saturation", {"direction": "increasing", "half_response": 0.5}, ("x",), ("y",), "mean_components"),
     ("threshold", {"threshold": 0.4, "below_behavior": "flat", "above_behavior": "increasing"}, ("x",), ("y",), "mean_components"),
@@ -121,19 +186,19 @@ EXPECTED_KINDS = {
 }
 
 EXPECTED_PAYLOADS = {
-    "saturation": {"factor": "x", "dimension": 0, "parameters": {"direction": "increasing", "half_response": 0.5}, "confidence": 0.8},
-    "threshold": {"factor": "x", "dimension": 0, "parameters": {"threshold": 0.4, "below_behavior": "flat", "above_behavior": "increasing"}, "confidence": 0.8},
-    "quadratic_valley": {"factor": "x", "dimension": 0, "parameters": {"center": 0.5, "width": 0.2}, "confidence": 0.8},
-    "optimum_range": {"factor": "x", "dimension": 0, "parameters": {"lower": 0.2, "upper": 0.8}, "confidence": 0.8},
-    "power_law": {"factor": "x", "dimension": 0, "parameters": {"exponent": 2.0, "scale": 1.0}, "confidence": 0.8},
-    "exponential": {"factor": "x", "dimension": 0, "parameters": {"rate": 1.0, "amplitude": 1.0}, "confidence": 0.8},
-    "periodic": {"factor": "x", "dimension": 0, "parameters": {"period": 0.5, "phase": 0.0}, "confidence": 0.8},
-    "synergy": {"factors": ["x", "z"], "dimensions": [0, 1], "parameters": {}, "confidence": 0.8},
-    "antagonism": {"factors": ["x", "z"], "dimensions": [0, 1], "parameters": {}, "confidence": 0.8},
-    "conditional_effect": {"factors": ["x", "z"], "dimensions": [0, 1], "parameters": {"operator": ">=", "value": 0.4}, "confidence": 0.8},
-    "ratio_optimum": {"factors": ["x", "z"], "dimensions": [0, 1], "parameters": {"ratio": 1.0, "tolerance": 0.2}, "confidence": 0.8},
-    "ordinal_categories": {"factor": "grade", "dimension": 2, "parameters": {"levels": ["low", "medium", "high"]}, "confidence": 0.8},
-    "category_similarity": {"factor": "material", "dimension": 3, "parameters": {"levels": ["A", "B"], "matrix": [[1.0, 0.5], [0.5, 1.0]]}, "confidence": 0.8},
+    "saturation": {"factor": "x", "dimension": 0, "parameters": {"direction": "increasing", "half_response": 0.5}, "objectives": ["y"], "confidence": 0.8},
+    "threshold": {"factor": "x", "dimension": 0, "parameters": {"threshold": 0.4, "below_behavior": "flat", "above_behavior": "increasing"}, "objectives": ["y"], "confidence": 0.8},
+    "quadratic_valley": {"factor": "x", "dimension": 0, "parameters": {"center": 0.5, "width": 0.2}, "objectives": ["y"], "confidence": 0.8},
+    "optimum_range": {"factor": "x", "dimension": 0, "parameters": {"lower": 0.2, "upper": 0.8}, "objectives": ["y"], "confidence": 0.8},
+    "power_law": {"factor": "x", "dimension": 0, "parameters": {"exponent": 2.0, "scale": 1.0}, "objectives": ["y"], "confidence": 0.8},
+    "exponential": {"factor": "x", "dimension": 0, "parameters": {"rate": 1.0, "amplitude": 1.0}, "objectives": ["y"], "confidence": 0.8},
+    "periodic": {"factor": "x", "dimension": 0, "parameters": {"period": 0.5, "phase": 0.0}, "objectives": ["y"], "confidence": 0.8},
+    "synergy": {"factors": ["x", "z"], "dimensions": [0, 1], "parameters": {}, "objectives": ["y"], "confidence": 0.8},
+    "antagonism": {"factors": ["x", "z"], "dimensions": [0, 1], "parameters": {}, "objectives": ["y"], "confidence": 0.8},
+    "conditional_effect": {"factors": ["x", "z"], "dimensions": [0, 1], "parameters": {"operator": ">=", "value": 0.4}, "objectives": ["y"], "confidence": 0.8},
+    "ratio_optimum": {"factors": ["x", "z"], "dimensions": [0, 1], "parameters": {"ratio": 1.0, "tolerance": 0.2}, "objectives": ["y"], "confidence": 0.8},
+    "ordinal_categories": {"factor": "grade", "dimension": 2, "parameters": {"levels": ["low", "medium", "high"]}, "objectives": ["y"], "confidence": 0.8},
+    "category_similarity": {"factor": "material", "dimension": 3, "parameters": {"levels": ["A", "B"], "matrix": [[1.0, 0.5], [0.5, 1.0]]}, "objectives": ["y"], "confidence": 0.8},
     "safe_region": {
         "constraint": {
             "kind": "expression", "name": "knowledge-KP-test-safe_region", "hard": True,
@@ -261,3 +326,69 @@ def test_new_helpers_create_only_versioned_specs_and_preserve_legacy_payload():
 def test_new_helpers_validate_typed_arguments_before_construction(call, message):
     with pytest.raises((TypeError, ValueError), match=message):
         call(Knowledge())
+
+
+@pytest.mark.parametrize(
+    "pattern,weights",
+    [
+        ("objective_priority", [1e308, 1e308]),
+        ("tradeoff", [1e-300, 1e-300]),
+    ],
+)
+def test_acquisition_preference_normalization_is_overflow_and_underflow_safe(
+    taxonomy_space, pattern, weights
+):
+    spec = _spec(pattern, {"weights": weights}, (), ("y", "cost"))
+
+    artifact = _builtin_registry().compile_many(
+        (spec,), taxonomy_space
+    ).acquisition_preferences[0]
+
+    assert artifact.to_dict()["payload"]["weights"] == [0.5, 0.5]
+    assert sum(artifact.payload["weights"]) == 1.0
+
+
+def test_acquisition_preference_compiler_rejects_all_zero_weights(taxonomy_space):
+    spec = _spec(
+        "objective_priority",
+        {"weights": [0.0, 0.0]},
+        (),
+        ("y", "cost"),
+    )
+
+    with pytest.raises(EngineError) as caught:
+        _builtin_registry().compile_many((spec,), taxonomy_space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+
+
+@pytest.mark.parametrize("n", [-1, 0, True, 4097])
+@pytest.mark.parametrize("operation", ["validate", "compile"])
+def test_random_augment_direct_specs_reject_invalid_campaign_sizes(
+    numeric_space, make_spec, n, operation
+):
+    spec = make_spec("random_augment", factors=(), parameters={"n": n})
+    registry = _builtin_registry()
+
+    with pytest.raises(EngineError) as caught:
+        if operation == "validate":
+            registry.validate(spec, numeric_space)
+        else:
+            registry.compile_many((spec,), numeric_space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+
+
+@pytest.mark.parametrize("n", [1, 20, 4096])
+def test_random_augment_campaign_size_boundaries_compile_literally(
+    numeric_space, make_spec, n
+):
+    spec = make_spec("random_augment", factors=(), parameters={"n": n})
+
+    result = _builtin_registry().validate(spec, numeric_space)
+    artifact = _builtin_registry().compile_many(
+        (spec,), numeric_space
+    ).virtual_observations[0]
+
+    assert result.state == "valid"
+    assert artifact.to_dict()["payload"] == {"n": n}

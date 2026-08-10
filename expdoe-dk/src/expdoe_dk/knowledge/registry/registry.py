@@ -5,6 +5,9 @@ import math
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
 from expdoe_dk.errors import EngineError, ErrorCode
 
 from ..artifacts import ARTIFACT_CATEGORIES, OptimizationArtifacts, merge_artifacts
@@ -25,6 +28,19 @@ class PatternRegistry:
     def register(self, definition: KnowledgePatternDefinition) -> None:
         if not isinstance(definition, KnowledgePatternDefinition):
             raise TypeError("definition must be a KnowledgePatternDefinition")
+        try:
+            Draft202012Validator.check_schema(self._plain_json(definition.schema))
+        except SchemaError as error:
+            raise EngineError(
+                ErrorCode.KNOWLEDGE_INVALID,
+                f"Invalid JSON Schema for {definition.pattern}@{definition.version}",
+                details={
+                    "pattern": definition.pattern,
+                    "version": definition.version,
+                    "schema_path": list(error.schema_path),
+                    "message": error.message,
+                },
+            ) from error
         key = (definition.pattern, definition.version)
         if key in self._definitions:
             raise ValueError(f"Pattern {key} already registered")
@@ -55,7 +71,9 @@ class PatternRegistry:
         observations: "ObservationBatch | None" = None,
     ) -> KnowledgeValidationResult:
         spec = self._require_spec(spec)
-        result = self.resolve(spec.pattern, spec.version).validator(
+        definition = self.resolve(spec.pattern, spec.version)
+        self._validate_parameters(spec, definition)
+        result = definition.validator(
             spec, space, observations
         )
         if not isinstance(result, KnowledgeValidationResult):
@@ -90,7 +108,9 @@ class PatternRegistry:
         compiled_sets: list[OptimizationArtifacts] = []
         for spec in specs:
             checked = self._require_spec(spec)
-            artifacts = self.resolve(checked.pattern, checked.version).compiler(
+            definition = self.resolve(checked.pattern, checked.version)
+            self._validate_parameters(checked, definition)
+            artifacts = definition.compiler(
                 checked, space, observations
             )
             if not isinstance(artifacts, OptimizationArtifacts):
@@ -100,6 +120,43 @@ class PatternRegistry:
         merged = merge_artifacts(compiled_sets)
         self._reject_proven_empty_safety_intersection(merged, space)
         return merged
+
+    @staticmethod
+    def _validate_parameters(
+        spec: KnowledgePatternSpec, definition: KnowledgePatternDefinition
+    ) -> None:
+        schema = PatternRegistry._plain_json(definition.schema)
+        parameters = PatternRegistry._plain_json(spec.parameters)
+        error = next(
+            Draft202012Validator(schema).iter_errors(parameters),
+            None,
+        )
+        if error is None:
+            return
+        raise EngineError(
+            ErrorCode.KNOWLEDGE_INVALID,
+            f"Invalid parameters for {spec.pattern}@{spec.version}: {error.message}",
+            details={
+                "pattern_id": spec.pattern_id,
+                "pattern": spec.pattern,
+                "version": spec.version,
+                "parameter_path": list(error.path),
+                "schema_path": list(error.schema_path),
+                "validator": error.validator,
+                "message": error.message,
+            },
+        )
+
+    @staticmethod
+    def _plain_json(value):
+        if isinstance(value, Mapping):
+            return {
+                key: PatternRegistry._plain_json(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, tuple):
+            return [PatternRegistry._plain_json(item) for item in value]
+        return value
 
     @classmethod
     def _reject_proven_empty_safety_intersection(

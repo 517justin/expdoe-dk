@@ -28,8 +28,16 @@ def _artifact(spec, kind: str, payload: dict) -> OptimizationArtifact:
 
 def _structural_errors(spec, space) -> tuple[str, ...]:
     errors: list[str] = []
+    unknown_objectives = [
+        objective
+        for objective in spec.scope.objectives
+        if objective not in space.objectives
+    ]
+    if unknown_objectives:
+        errors.append(f"Unknown objectives {unknown_objectives!r}")
     if len(spec.scope.factors) != 2:
-        return (f"{spec.pattern} requires exactly two distinct scoped factors",)
+        errors.append(f"{spec.pattern} requires exactly two distinct scoped factors")
+        return tuple(errors)
     first, second = spec.scope.factors
     if first == second:
         errors.append("Interaction factors must be distinct")
@@ -44,6 +52,15 @@ def _structural_errors(spec, space) -> tuple[str, ...]:
     ]
     if nonnumeric:
         errors.append(f"Interaction factors must be numeric; got {nonnumeric!r}")
+    if spec.pattern == "conditional_effect" and not nonnumeric:
+        conditioning_low, conditioning_high = _numeric_limits(
+            space.param_by_name(second)
+        )
+        threshold = float(spec.parameters["value"])
+        if not conditioning_low <= threshold <= conditioning_high:
+            errors.append(
+                "conditional_effect value must lie within the conditioning factor domain"
+            )
     if spec.pattern == "ratio_optimum" and not nonnumeric:
         numerator = space.param_by_name(first)
         denominator = space.param_by_name(second)
@@ -118,6 +135,7 @@ def _compile(spec, space, observations=None) -> OptimizationArtifacts:
             "factors": factors,
             "dimensions": [space.param_names.index(factor) for factor in factors],
             "parameters": spec.to_dict()["parameters"],
+            "objectives": list(spec.scope.objectives),
             "confidence": spec.confidence,
         },
     )

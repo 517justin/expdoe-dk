@@ -1,6 +1,8 @@
 """Registered physical-law and monotonicity knowledge."""
 from __future__ import annotations
 
+import math
+
 from .._frame import flip_for_minimize
 from ..artifacts import OptimizationArtifact, OptimizationArtifacts
 from ..guard import CompatibilityResult, KnowledgeValidationResult
@@ -133,16 +135,42 @@ def _arrhenius_errors(spec, space) -> tuple[str, ...]:
 
 def _validate_arrhenius(spec, space, observations=None) -> KnowledgeValidationResult:
     errors = _arrhenius_errors(spec, space)
+    empirical_evidence_ready = False
+    if not errors and observations is not None:
+        successful = observations.successful()
+        factor_name = spec.scope.factors[0]
+        objectives = spec.scope.objectives or tuple(space.objectives)
+        X = successful.X
+        Y = successful.Y
+        if (
+            len(X) >= 4
+            and factor_name in X.columns
+            and objectives
+            and all(objective in Y.columns for objective in objectives)
+        ):
+            try:
+                values = tuple(float(value) for value in X[factor_name]) + tuple(
+                    float(value)
+                    for objective in objectives
+                    for value in Y[objective]
+                )
+            except (TypeError, ValueError):
+                values = ()
+            empirical_evidence_ready = (
+                bool(values)
+                and all(math.isfinite(value) for value in values)
+                and len(set(float(value) for value in X[factor_name])) >= 3
+            )
     return KnowledgeValidationResult(
         pattern_id=spec.pattern_id,
-        state="invalid" if errors else ("insufficient_data" if observations is None else "valid"),
+        state="invalid" if errors else "insufficient_data",
         summary=(
             "Invalid arrhenius declaration"
             if errors
             else (
-                "arrhenius is structurally valid; empirical data was not provided"
-                if observations is None
-                else "arrhenius is valid"
+                "arrhenius is structurally valid; empirical agreement has not been established"
+                if empirical_evidence_ready
+                else "arrhenius is structurally valid; empirical coverage is insufficient"
             )
         ),
         errors=errors,
