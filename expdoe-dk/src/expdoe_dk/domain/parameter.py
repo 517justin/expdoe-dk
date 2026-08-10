@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence as OrderedSequence
 from dataclasses import dataclass
-from numbers import Real
+from numbers import Integral, Real
 from typing import Literal, Sequence
 
 import numpy as np
@@ -15,6 +16,13 @@ _NUMERIC_KINDS = {"continuous", "integer", "discrete"}
 _VALUE_KINDS = {"categorical", "ordinal"}
 _KINDS = _NUMERIC_KINDS | _VALUE_KINDS
 _TRANSFORMS = {"linear", "log"}
+_ULP_TOLERANCE = 4
+
+
+def _is_ulp_close(left: float, right: float) -> bool:
+    """Compare finite floats with an absolute tolerance measured in ULPs."""
+    tolerance = _ULP_TOLERANCE * max(math.ulp(left), math.ulp(right))
+    return abs(left - right) <= tolerance
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,12 @@ class Parameter:
             raise ValueError(f"Parameter {self.name}: log_scale must be a boolean.")
 
         if self.values is not None:
+            if isinstance(self.values, (str, bytes, bytearray)) or not isinstance(
+                self.values, OrderedSequence
+            ):
+                raise ValueError(
+                    f"Parameter {self.name}: values must be an ordered sequence."
+                )
             try:
                 normalized_values = tuple(self.values)
             except TypeError as error:
@@ -83,7 +97,9 @@ class Parameter:
         if self.kind == "continuous":
             return None
         if self.kind in {"integer", "discrete"}:
-            return len(self.numeric_levels)
+            if self.values is not None:
+                return len(self.values)
+            return self._bounded_level_count()
         return len(self.values or ())
 
     @property
@@ -97,10 +113,11 @@ class Parameter:
         low, high = self._validated_bounds()
         step = 1 if self.kind == "integer" and self.step is None else self.step
         assert step is not None  # Validated for bounded discrete parameters.
-        count = int(math.floor((high - low) / float(step) + 1e-12)) + 1
+        count = self._bounded_level_count()
         if self.kind == "integer":
             return tuple(int(low) + index * int(step) for index in range(count))
-        return tuple(float(low) + index * float(step) for index in range(count))
+        levels = tuple(float(low) + index * float(step) for index in range(count))
+        return tuple(high if _is_ulp_close(level, high) else level for level in levels)
 
     def encode(self, values: Sequence[object]) -> list[float]:
         """Map physical values into the parameter's model frame."""
@@ -116,9 +133,16 @@ class Parameter:
         numeric = self._validated_physical_values(values)
         low, high = self._physical_limits()
         if self._uses_log_transform:
-            encoded = np.log(numeric / low) / math.log(high / low)
+            log_low = math.log(low)
+            log_span = math.log(high) - log_low
+            encoded = (np.log(numeric) - log_low) / log_span
         else:
-            encoded = (numeric - low) / (high - low)
+            scale = max(abs(low), abs(high))
+            scaled_low = low / scale
+            scaled_span = high / scale - scaled_low
+            encoded = (numeric / scale - scaled_low) / scaled_span
+        if not np.all(np.isfinite(encoded)):
+            raise ValueError(f"Parameter {self.name}: encoded values must be finite.")
         return encoded.tolist()
 
     def decode(self, encoded: Sequence[float]) -> list[object]:
@@ -138,9 +162,14 @@ class Parameter:
 
         low, high = self._physical_limits()
         if self._uses_log_transform:
-            numeric = low * np.power(high / low, model)
+            numeric = np.power(low, 1.0 - model) * np.power(high, model)
         else:
-            numeric = low + model * (high - low)
+            scale = max(abs(low), abs(high))
+            scaled_low = low / scale
+            scaled_span = high / scale - scaled_low
+            numeric = scale * (scaled_low + model * scaled_span)
+        if not np.all(np.isfinite(numeric)):
+            raise ValueError(f"Parameter {self.name}: decoded values must be finite.")
         physical = np.asarray(self.snap(numeric))
         self._validated_physical_values(physical.tolist())
         return physical.tolist()
@@ -156,11 +185,14 @@ class Parameter:
     def snap(self, values: np.ndarray) -> np.ndarray:
         """Snap numeric values to the nearest declared finite level."""
         numeric = np.asarray(values, dtype=np.float64)
+        if not np.all(np.isfinite(numeric)):
+            raise ValueError(f"Parameter {self.name}: snap values must be finite.")
         if self.kind == "continuous":
             return numeric
         if self.kind not in {"integer", "discrete"}:
             raise TypeError(f"Parameter {self.name}: {self.kind} values are not numeric.")
-        levels = np.asarray(self.numeric_levels, dtype=np.float64)
+        level_dtype = np.int64 if self.kind == "integer" else np.float64
+        levels = np.asarray(self.numeric_levels, dtype=level_dtype)
         indices = np.abs(numeric[..., None] - levels).argmin(axis=-1)
         return levels[indices]
 
@@ -271,6 +303,22 @@ class Parameter:
             )
         return step
 
+    def _bounded_level_count(self) -> int:
+        """Count a bounded grid without constructing its physical levels."""
+        low, high = self._validated_bounds()
+        step = 1 if self.kind == "integer" and self.step is None else self.step
+        assert step is not None
+        if self.kind == "integer":
+            assert self.bounds is not None
+            return (int(self.bounds[1]) - int(self.bounds[0])) // int(step) + 1
+        floating_step = float(step)
+        scale = max(abs(low), abs(high), abs(floating_step))
+        ratio = (high / scale - low / scale) / (floating_step / scale)
+        nearest_integer = float(round(ratio))
+        if _is_ulp_close(ratio, nearest_integer):
+            ratio = nearest_integer
+        return int(math.floor(ratio)) + 1
+
     def _validate_numeric_levels(self, values: Sequence[object]) -> tuple[float, ...]:
         if any(isinstance(value, bool) or not isinstance(value, Real) for value in values):
             raise ValueError(
@@ -301,8 +349,9 @@ class Parameter:
         return self._validated_bounds()
 
     def _validated_physical_values(self, values: Sequence[object]) -> np.ndarray:
+        raw_values = tuple(values)
         try:
-            numeric = np.asarray(values, dtype=np.float64)
+            numeric = np.asarray(raw_values, dtype=np.float64)
         except (TypeError, ValueError) as error:
             raise ValueError(f"Parameter {self.name}: physical values must be numeric.") from error
         if not np.all(np.isfinite(numeric)):
@@ -312,10 +361,36 @@ class Parameter:
             raise ValueError(
                 f"Parameter {self.name}: physical values must be within {(low, high)}."
             )
-        if self.kind in {"integer", "discrete"}:
-            levels = np.asarray(self.numeric_levels, dtype=np.float64)
-            matches = np.isclose(numeric[..., None], levels, rtol=1e-9, atol=1e-12)
-            if not np.all(matches.any(axis=-1)):
+        if self.kind == "integer":
+            low_integer = int(low)
+            step = 1 if self.step is None else int(self.step)
+            integer_values: list[int] = []
+            for value in raw_values:
+                if isinstance(value, bool) or not isinstance(value, Real):
+                    raise ValueError(
+                        f"Parameter {self.name}: physical values must be declared levels."
+                    )
+                if isinstance(value, Integral):
+                    integer = int(value)
+                else:
+                    floating = float(value)
+                    if not floating.is_integer():
+                        raise ValueError(
+                            f"Parameter {self.name}: physical values must be declared levels."
+                        )
+                    integer = int(floating)
+                if (integer - low_integer) % step:
+                    raise ValueError(
+                        f"Parameter {self.name}: physical values must be declared levels."
+                    )
+                integer_values.append(integer)
+            return np.asarray(integer_values, dtype=np.float64)
+        if self.kind == "discrete":
+            levels = tuple(float(level) for level in self.numeric_levels)
+            if any(
+                not any(_is_ulp_close(float(value), level) for level in levels)
+                for value in numeric.flat
+            ):
                 raise ValueError(
                     f"Parameter {self.name}: physical values must be declared levels."
                 )

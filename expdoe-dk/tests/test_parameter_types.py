@@ -56,6 +56,28 @@ def test_parameter_exposes_model_bounds_cardinality_and_numeric_levels():
     assert ordinal.cardinality == 3
 
 
+@pytest.mark.parametrize(
+    ("kind", "bounds", "step", "expected"),
+    [
+        ("integer", (0, 1_000_000_000_000), 2, 500_000_000_001),
+        ("discrete", (0.0, 1_000_000_000_000.0), 0.25, 4_000_000_000_001),
+    ],
+)
+def test_large_bounded_cardinality_does_not_enumerate_levels(kind, bounds, step, expected):
+    """Catches cardinality allocating an unsafe multi-trillion-level grid."""
+
+    class EnumerationForbiddenParameter(Parameter):
+        @property
+        def numeric_levels(self):
+            raise AssertionError("cardinality enumerated numeric levels")
+
+    parameter = EnumerationForbiddenParameter(
+        "factor", kind=kind, bounds=bounds, step=step
+    )
+
+    assert parameter.cardinality == expected
+
+
 def test_parameter_normalizes_value_levels_to_an_immutable_tuple():
     """Catches caller-owned lists mutating a frozen parameter after construction."""
     values = ["A", "B"]
@@ -64,6 +86,30 @@ def test_parameter_normalizes_value_levels_to_an_immutable_tuple():
     values.append("C")
 
     assert parameter.values == ("A", "B")
+
+
+@pytest.mark.parametrize(
+    ("kind", "values"),
+    [
+        ("categorical", "AB"),
+        ("discrete", b"\x01\x02"),
+        ("categorical", {"A", "B"}),
+        ("ordinal", frozenset({"low", "high"})),
+        ("ordinal", {"low": 0, "high": 1}),
+    ],
+)
+def test_explicit_levels_reject_unordered_or_scalar_iterables(kind, values):
+    """Catches level order depending on scalar, set, or mapping iteration."""
+    with pytest.raises(ValueError, match="ordered sequence"):
+        Parameter("factor", kind=kind, values=values)
+
+
+def test_explicit_levels_accept_ordered_tuple_input_deterministically():
+    """Catches tuple inputs losing their declared categorical order."""
+    parameter = Parameter("grade", kind="ordinal", values=("high", "medium", "low"))
+
+    assert parameter.values == ("high", "medium", "low")
+    assert parameter.encode(["high", "low"]) == [0.0, 2.0]
 
 
 @pytest.mark.parametrize(
@@ -107,6 +153,26 @@ def test_integer_defaults_to_unit_step_and_discrete_grid_never_exceeds_bounds():
     assert discrete.numeric_levels == pytest.approx((0.0, 0.3, 0.6, 0.9))
 
 
+def test_decimal_bounded_grid_canonicalizes_reachable_high_endpoint():
+    """Catches binary rounding pushing a reachable grid endpoint out of bounds."""
+    parameter = Parameter("dose", kind="discrete", bounds=(0.0, 0.3), step=0.1)
+
+    assert parameter.numeric_levels == (0.0, 0.1, 0.2, 0.3)
+    assert parameter.decode(parameter.encode([0.3])) == [0.3]
+
+
+def test_discrete_membership_does_not_use_magnitude_relative_tolerance():
+    """Catches large explicit levels accepting a physically distinct nearby value."""
+    parameter = Parameter(
+        "dose",
+        kind="discrete",
+        values=[1_000_000_000_000_000.0, 1_000_000_000_000_010.0],
+    )
+
+    with pytest.raises(ValueError, match="declared levels"):
+        parameter.encode([1_000_000_000_000_001.0])
+
+
 def test_discrete_and_integer_decode_snap_to_the_nearest_physical_level():
     """Catches model decoding returning off-grid physical experiment settings."""
     integer = Parameter("count", kind="integer", bounds=(1, 9), step=2)
@@ -114,6 +180,48 @@ def test_discrete_and_integer_decode_snap_to_the_nearest_physical_level():
 
     assert integer.decode([0.45]) == [5]
     assert discrete.decode([0.5]) == [0.3]
+
+
+@pytest.mark.parametrize("physical", [1_000_000_000_000_000.25, 1_000_000_000_000_001])
+def test_integer_encode_requires_exact_grid_membership_at_large_magnitudes(physical):
+    """Catches relative float tolerance accepting non-integral or off-grid integers."""
+    parameter = Parameter(
+        "count",
+        kind="integer",
+        bounds=(1_000_000_000_000_000, 1_000_000_000_000_004),
+        step=2,
+    )
+
+    with pytest.raises(ValueError, match="declared levels"):
+        parameter.encode([physical])
+
+
+def test_integer_snap_and_decode_return_integer_types():
+    """Catches integer factors returning float experiment settings."""
+    parameter = Parameter("count", kind="integer", bounds=(1, 9), step=2)
+
+    snapped = parameter.snap(np.array([4.8]))
+    decoded = parameter.decode([0.5])
+
+    assert np.issubdtype(snapped.dtype, np.integer)
+    assert snapped.tolist() == [5]
+    assert decoded == [5]
+    assert type(decoded[0]) is int
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        Parameter("x", bounds=(0.0, 1.0)),
+        Parameter("count", kind="integer", bounds=(1, 9), step=2),
+        Parameter("dose", kind="discrete", values=[0.1, 0.3, 0.8]),
+    ],
+)
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_snap_rejects_nonfinite_numeric_values(parameter, value):
+    """Catches non-finite physical proposals silently snapping to a valid level."""
+    with pytest.raises(ValueError, match="finite"):
+        parameter.snap(np.array([value]))
 
 
 def test_transform_aliases_match_encode_and_decode():
@@ -124,6 +232,63 @@ def test_transform_aliases_match_encode_and_decode():
 
     assert encoded == pytest.approx([0.0, 0.5, 1.0])
     assert parameter.to_physical(encoded) == pytest.approx([1.0, 10.0, 100.0])
+
+
+def test_wide_linear_bounds_keep_model_and_physical_coordinates_finite():
+    """Catches affine span overflow corrupting finite endpoint and midpoint transforms."""
+    parameter = Parameter("x", bounds=(-1e308, 1e308))
+
+    encoded = parameter.encode([-1e308, 0.0, 1e308])
+    decoded = parameter.decode([0.0, 0.5, 1.0])
+
+    assert encoded == [0.0, 0.5, 1.0]
+    assert decoded == [-1e308, 0.0, 1e308]
+    assert np.isfinite(encoded).all()
+    assert np.isfinite(decoded).all()
+
+
+def test_wide_log_bounds_keep_model_and_physical_coordinates_finite():
+    """Catches positive-ratio overflow corrupting finite logarithmic transforms."""
+    parameter = Parameter("x", bounds=(1e-300, 1e300), transform="log")
+
+    encoded = parameter.encode([1e-300, 1.0, 1e300])
+    decoded = parameter.decode([0.0, 0.5, 1.0])
+
+    assert encoded == [0.0, 0.5, 1.0]
+    assert decoded == [1e-300, 1.0, 1e300]
+    assert np.isfinite(encoded).all()
+    assert np.isfinite(decoded).all()
+
+
+@pytest.mark.parametrize("encoded", [np.nan, np.inf, -np.inf, -0.001, 1.001])
+def test_decode_rejects_nonfinite_or_out_of_model_bounds(encoded):
+    """Catches invalid model coordinates escaping physical-frame validation."""
+    parameter = Parameter("x", bounds=(0.0, 10.0))
+
+    with pytest.raises(ValueError):
+        parameter.decode([encoded])
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "physical"),
+    [
+        ({"kind": "integer", "bounds": (1, 9), "step": 2}, [1, 5, 9]),
+        ({"kind": "discrete", "values": [0.1, 1.0, 10.0]}, [0.1, 1.0, 10.0]),
+    ],
+)
+def test_positive_finite_kinds_round_trip_with_transform_and_log_scale_alias(
+    kwargs, physical
+):
+    """Catches the declared log aliases diverging for integer or discrete factors."""
+    transformed = Parameter("factor", transform="log", **kwargs)
+    aliased = Parameter("factor", log_scale=True, **kwargs)
+
+    transformed_encoded = transformed.encode(physical)
+    aliased_encoded = aliased.encode(physical)
+
+    assert transformed_encoded == pytest.approx(aliased_encoded)
+    assert transformed.decode(transformed_encoded) == physical
+    assert aliased.decode(aliased_encoded) == physical
 
 
 def test_log_transform_rejects_nonpositive_explicit_discrete_levels():
