@@ -134,6 +134,13 @@ class Parameter:
                 raise ValueError(
                     f"Parameter {self.name}: value is not a declared level."
                 ) from error
+        if self.kind == "integer":
+            integers = self._validated_integer_values(tuple(values))
+            low, step, last_index = self._integer_grid()
+            encoded = [((value - low) // step) / last_index for value in integers]
+            if not all(math.isfinite(value) for value in encoded):
+                raise ValueError(f"Parameter {self.name}: encoded values must be finite.")
+            return encoded
 
         numeric = self._validated_physical_values(values)
         low, high = self._physical_limits()
@@ -164,6 +171,12 @@ class Parameter:
         if self.kind in _VALUE_KINDS:
             levels = list(self.values or ())
             return [levels[int(round(value))] for value in model.tolist()]
+        if self.kind == "integer":
+            low, step, last_index = self._integer_grid()
+            return [
+                low + self._nearest_grid_index(value, last_index) * step
+                for value in model.tolist()
+            ]
 
         low, high = self._physical_limits()
         if self._uses_log_transform:
@@ -189,26 +202,19 @@ class Parameter:
 
     def snap(self, values: np.ndarray) -> np.ndarray:
         """Snap numeric values to the nearest declared finite level."""
+        if self.kind == "integer":
+            return self._snap_integer_values(values)
         numeric = np.asarray(values, dtype=np.float64)
         if not np.all(np.isfinite(numeric)):
             raise ValueError(f"Parameter {self.name}: snap values must be finite.")
         if self.kind == "continuous":
             return numeric
-        if self.kind not in {"integer", "discrete"}:
+        if self.kind != "discrete":
             raise TypeError(f"Parameter {self.name}: {self.kind} values are not numeric.")
         level_values = self.numeric_levels
         distance_levels = np.asarray(level_values, dtype=np.float64)
         indices = np.abs(numeric[..., None] - distance_levels).argmin(axis=-1)
-        if self.kind == "integer":
-            integer_limits = np.iinfo(np.int64)
-            level_dtype = (
-                np.int64
-                if integer_limits.min <= level_values[0] <= level_values[-1] <= integer_limits.max
-                else object
-            )
-        else:
-            level_dtype = np.float64
-        levels = np.asarray(level_values, dtype=level_dtype)
+        levels = np.asarray(level_values, dtype=np.float64)
         return levels[indices]
 
     def _validate_continuous(self) -> None:
@@ -431,6 +437,58 @@ class Parameter:
                 )
             integers.append(integer)
         return tuple(integers)
+
+    def _integer_grid(self) -> tuple[int, int, int]:
+        """Return exact lower bound, step, and final grid index."""
+        assert self.bounds is not None
+        low = int(self.bounds[0])
+        step = 1 if self.step is None else int(self.step)
+        return low, step, self._bounded_level_count() - 1
+
+    @staticmethod
+    def _nearest_grid_index(model_value: float, last_index: int) -> int:
+        """Map a finite model coordinate to its nearest exact integer index."""
+        numerator, denominator = float(model_value).as_integer_ratio()
+        quotient, remainder = divmod(numerator * last_index, denominator)
+        if 2 * remainder > denominator:
+            quotient += 1
+        return min(max(quotient, 0), last_index)
+
+    def _snap_integer_values(self, values: np.ndarray) -> np.ndarray:
+        """Snap integer-factor inputs with exact integer/index arithmetic."""
+        raw = np.asarray(values, dtype=object)
+        low, step, last_index = self._integer_grid()
+        high = low + last_index * step
+        snapped: list[int] = []
+        for value in raw.flat:
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise ValueError(f"Parameter {self.name}: snap values must be numeric.")
+            if isinstance(value, Integral):
+                if value <= low:
+                    index = 0
+                elif value >= high:
+                    index = last_index
+                else:
+                    quotient, remainder = divmod(int(value) - low, step)
+                    index = quotient + int(2 * remainder > step)
+            else:
+                floating = float(value)
+                if not math.isfinite(floating):
+                    raise ValueError(f"Parameter {self.name}: snap values must be finite.")
+                numerator, denominator = floating.as_integer_ratio()
+                offset = numerator - low * denominator
+                quotient, remainder = divmod(offset, step * denominator)
+                index = quotient + int(2 * remainder > step * denominator)
+                index = min(max(index, 0), last_index)
+            snapped.append(low + index * step)
+
+        integer_limits = np.iinfo(np.int64)
+        dtype = (
+            np.int64
+            if integer_limits.min <= low <= high <= integer_limits.max
+            else object
+        )
+        return np.asarray(snapped, dtype=dtype).reshape(raw.shape)
 
 
 __all__ = ["Parameter", "ParameterKind", "ParameterTransform"]

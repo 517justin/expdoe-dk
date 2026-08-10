@@ -230,6 +230,23 @@ def test_integer_round_trip_preserves_python_ints_above_int64():
     assert all(type(value) is int for value in decoded)
 
 
+def test_fine_integer_grid_above_int64_keeps_adjacent_python_int_exact():
+    """Catches float64 collapsing adjacent valid levels in a large integer grid."""
+    low = 2**63
+    physical = low + 1
+    parameter = Parameter("fine", kind="integer", bounds=(low, low + 4096), step=1)
+
+    encoded = parameter.encode([physical])
+    decoded = parameter.decode(encoded)
+    snapped = parameter.snap([physical])
+
+    assert encoded == [1 / 4096]
+    assert decoded == [physical]
+    assert type(decoded[0]) is int
+    assert snapped.tolist() == [physical]
+    assert type(snapped.tolist()[0]) is int
+
+
 def test_integer_snap_and_decode_return_integer_types():
     """Catches integer factors returning float experiment settings."""
     parameter = Parameter("count", kind="integer", bounds=(1, 9), step=2)
