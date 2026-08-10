@@ -36,6 +36,24 @@ def test_legacy_doe_generate_remains_a_dataframe_wrapper():
     assert len(frame) == 3
 
 
+def test_top_level_suggest_design_accepts_known_legacy_tuning_keywords():
+    frame = ed.suggest_design(
+        ed.Space([ed.Parameter("x", bounds=(0.0, 1.0))]),
+        3,
+        seed=13,
+        n_iterations=20,
+        n_restarts=2,
+        max_resample=3,
+        verbose=False,
+    )
+
+    assert frame.__class__.__name__ == "DataFrame"
+    with pytest.raises(TypeError, match="unexpected legacy option"):
+        ed.suggest_design(
+            ed.Space([ed.Parameter("x", bounds=(0.0, 1.0))]), 1, unknown=1
+        )
+
+
 def test_v04_knowledge_payload_round_trips():
     payload = {
         "strict": False,
