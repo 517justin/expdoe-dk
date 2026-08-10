@@ -161,6 +161,14 @@ def test_decimal_bounded_grid_canonicalizes_reachable_high_endpoint():
     assert parameter.decode(parameter.encode([0.3])) == [0.3]
 
 
+def test_negative_decimal_grid_sets_integral_ratio_endpoint_exactly_to_high():
+    """Catches signed decimal accumulation leaving a reachable zero off-grid."""
+    parameter = Parameter("dose", kind="discrete", bounds=(-0.3, 0.0), step=0.1)
+
+    assert parameter.numeric_levels[-1] == 0.0
+    assert parameter.decode(parameter.encode([0.0])) == [0.0]
+
+
 def test_discrete_membership_does_not_use_magnitude_relative_tolerance():
     """Catches large explicit levels accepting a physically distinct nearby value."""
     parameter = Parameter(
@@ -194,6 +202,32 @@ def test_integer_encode_requires_exact_grid_membership_at_large_magnitudes(physi
 
     with pytest.raises(ValueError, match="declared levels"):
         parameter.encode([physical])
+
+
+def test_integer_encode_rejects_exact_value_above_bound_before_float_conversion():
+    """Catches float64 rounding an out-of-bounds Python integer onto the upper bound."""
+    parameter = Parameter("count", kind="integer", bounds=(0, 2**53))
+
+    with pytest.raises(ValueError, match="within"):
+        parameter.encode([2**53 + 1])
+
+
+def test_integer_round_trip_preserves_python_ints_above_int64():
+    """Catches integer snapping overflowing while coercing valid Python ints to int64."""
+    physical = [2**63, 2**63 + 2048, 2**63 + 4096]
+    parameter = Parameter(
+        "count", kind="integer", bounds=(2**63, 2**63 + 4096), step=2048
+    )
+
+    encoded = parameter.encode(physical)
+    snapped = parameter.snap(np.array([float(2**63 + 2048)]))
+    decoded = parameter.decode(encoded)
+
+    assert encoded == [0.0, 0.5, 1.0]
+    assert snapped.tolist() == [2**63 + 2048]
+    assert type(snapped.tolist()[0]) is int
+    assert decoded == physical
+    assert all(type(value) is int for value in decoded)
 
 
 def test_integer_snap_and_decode_return_integer_types():
