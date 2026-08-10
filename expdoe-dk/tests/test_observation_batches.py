@@ -1,5 +1,6 @@
 import warnings
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -45,6 +46,31 @@ def test_successful_rows_require_finite_objectives():
             Y=pd.DataFrame({"yield": [float("nan")]}),
             status=pd.Series(["success"]),
         )
+
+
+@pytest.mark.parametrize("value", ["1.25", True, 1 + 2j])
+def test_successful_rows_reject_coercible_nonnumeric_boolean_or_complex_values(value):
+    """Catches successful outcomes being silently coerced to lossy floats."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError, match="successful.*finite.*real.*non-boolean"):
+            ObservationBatch(
+                X=pd.DataFrame({"x": [0.1]}),
+                Y=pd.DataFrame({"yield": [value]}),
+                status=pd.Series(["success"]),
+            )
+
+
+def test_successful_rows_accept_finite_real_numeric_scalar_types():
+    """Catches strict outcome validation excluding genuine NumPy real scalars."""
+    batch = ObservationBatch(
+        X=pd.DataFrame({"x": [0.1, 0.2]}),
+        Y=pd.DataFrame(
+            {"yield": pd.Series([np.int64(4), np.float32(5.5)], dtype=object)}
+        ),
+    )
+
+    assert batch.Y["yield"].tolist() == [np.int64(4), np.float32(5.5)]
 
 
 def test_failed_and_warning_rows_may_retain_missing_objectives():

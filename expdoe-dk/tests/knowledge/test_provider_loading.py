@@ -690,8 +690,9 @@ def test_report_is_deterministic_immutable_detached_and_json_serializable(
     )
     monkeypatch.setattr(providers, "entry_points", lambda *, group: entries)
 
+    registry = PatternRegistry()
     report = providers.load_pattern_providers(
-        {"zed-distribution", "alpha_distribution"}, PatternRegistry()
+        {"zed-distribution", "alpha_distribution"}, registry
     )
 
     assert [item.entry_point_name for item in report.providers] == [
@@ -704,6 +705,19 @@ def test_report_is_deterministic_immutable_detached_and_json_serializable(
         for item in report.providers[2].definitions
     ] == [("alpha", "1.0"), ("zeta", "2.0")]
     payload = report.to_dict()
+    digests = [
+        definition["schema_digest"]
+        for provider in payload["providers"]
+        for definition in provider["definitions"]
+    ]
+    assert len(digests) == 4
+    assert all(
+        len(digest) == 64 and set(digest) <= set("0123456789abcdef")
+        for digest in digests
+    )
+    for provider in payload["providers"]:
+        for definition in provider["definitions"]:
+            del definition["schema_digest"]
     assert payload == {
         "providers": [
             {
@@ -732,11 +746,43 @@ def test_report_is_deterministic_immutable_detached_and_json_serializable(
             },
         ]
     }
+    assert registry.provider_records == report.providers
+    assert providers.ProviderLoadReport.from_dict(report.to_dict()) == report
     json.dumps(payload)
     payload["providers"][0]["definitions"][0]["pattern"] = "mutated"
     assert report.providers[0].definitions[0].pattern == "gamma"
     with pytest.raises(AttributeError):
         report.providers = ()
+
+
+def test_provider_schema_digest_is_canonical_and_order_independent(
+    monkeypatch, fake_definition
+):
+    providers = _providers_module()
+
+    def load_digest(schema):
+        entry = FakeEntryPoint(
+            name="schema-entry",
+            value="schema.patterns:provide",
+            group="expdoe_dk.knowledge_patterns",
+            dist=FakeDistribution("schema-provider", "1.0"),
+            factory=lambda: lambda: (
+                _definition(fake_definition, "schema-pattern", schema=schema),
+            ),
+        )
+        monkeypatch.setattr(providers, "entry_points", lambda *, group: (entry,))
+        return providers.load_pattern_providers(
+            {"schema-provider"}, PatternRegistry()
+        ).providers[0].definitions[0].schema_digest
+
+    first = load_digest(
+        {"type": "object", "properties": {"b": {"type": "string"}, "a": {"type": "number"}}}
+    )
+    second = load_digest(
+        {"properties": {"a": {"type": "number"}, "b": {"type": "string"}}, "type": "object"}
+    )
+
+    assert first == second
 
 
 def test_provider_loading_api_is_publicly_exported():

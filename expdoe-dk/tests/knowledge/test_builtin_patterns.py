@@ -2,6 +2,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from expdoe_dk import Knowledge, Objective, Parameter, Space
+from expdoe_dk.domain import ExpressionConstraint
 from expdoe_dk.errors import EngineError, ErrorCode
 from expdoe_dk.knowledge.patterns import builtin_pattern_definitions
 from expdoe_dk.knowledge.registry import KnowledgePatternDefinition, PatternRegistry
@@ -40,6 +41,17 @@ def _builtin_registry() -> PatternRegistry:
     for definition in builtin_pattern_definitions():
         registry.register(definition)
     return registry
+
+
+def _safety_parameters(expression: str) -> dict:
+    constraint = ExpressionConstraint("source-boundary", expression)
+    return {
+        "constraint": {
+            "kind": "expression",
+            "hard": True,
+            "ast": constraint.ast,
+        }
+    }
 
 
 def test_builtin_registry_contains_complete_taxonomy():
@@ -157,8 +169,8 @@ NEW_PATTERN_CASES = (
     ("ratio_optimum", {"ratio": 1.0, "tolerance": 0.2}, ("x", "z"), ("y",), "mean_components"),
     ("ordinal_categories", {"levels": ["low", "medium", "high"]}, ("grade",), ("y",), "kernel_components"),
     ("category_similarity", {"levels": ["A", "B"], "matrix": [[1.0, 0.5], [0.5, 1.0]]}, ("material",), ("y",), "kernel_components"),
-    ("safe_region", {"expression": "x >= 0.2"}, ("x",), ("y",), "parameter_constraints"),
-    ("forbidden_region", {"expression": "x > 0.8"}, ("x",), ("y",), "parameter_constraints"),
+    ("safe_region", _safety_parameters("x >= 0.2"), ("x",), ("y",), "parameter_constraints"),
+    ("forbidden_region", _safety_parameters("x > 0.8"), ("x",), ("y",), "parameter_constraints"),
     ("target_range", {"lower": 0.2, "upper": 0.8}, (), ("y",), "outcome_constraints"),
     ("objective_priority", {"weights": [1.0, 2.0]}, (), ("y", "cost"), "acquisition_preferences"),
     ("tradeoff", {"weights": [2.0, 1.0]}, (), ("y", "cost"), "acquisition_preferences"),
@@ -204,7 +216,7 @@ EXPECTED_PAYLOADS = {
             "kind": "expression", "name": "knowledge-KP-test-safe_region", "hard": True,
             "ast": {"type": "compare", "op": ">=", "left": {"type": "name", "name": "x"}, "right": {"type": "constant", "value": 0.2}},
         },
-        "source_expression": "x >= 0.2", "region_semantics": "allowed",
+        "region_semantics": "allowed",
     },
     "forbidden_region": {
         "constraint": {
@@ -215,7 +227,7 @@ EXPECTED_PAYLOADS = {
                 "right": {"type": "constant", "value": False},
             },
         },
-        "source_expression": "x > 0.8", "region_semantics": "forbidden",
+        "region_semantics": "forbidden",
     },
     "target_range": {"objective": "y", "lower": 0.2, "upper": 0.8, "hard": False, "confidence": 0.8},
     "objective_priority": {"objectives": ["y", "cost"], "weights": [0.3333333333333333, 0.6666666666666666], "confidence": 0.8},
@@ -309,6 +321,49 @@ def test_new_helpers_create_only_versioned_specs_and_preserve_legacy_payload():
     assert Knowledge().with_saturation(
         "x", direction="increasing", half_response=0.5, confidence=0.7
     ).specs[0].pattern_id == knowledge.specs[0].pattern_id
+
+
+def test_safe_region_helper_discards_source_and_hashes_canonical_meaning():
+    """Catches source spelling leaking into persisted safety data or IDs."""
+    compact = Knowledge().with_safe_region(expression="x>=0.2", factors=("x",))
+    parenthesized = Knowledge().with_safe_region(
+        expression="(x >= 0.2)", factors=("x",)
+    )
+
+    assert compact.specs[0].pattern_id == parenthesized.specs[0].pattern_id
+    parameters = compact.specs[0].to_dict()["parameters"]
+    assert parameters == _safety_parameters("x >= 0.2")
+    assert "expression" not in parameters
+    assert "source_expression" not in parameters
+
+
+def test_safety_artifacts_never_persist_source_expression_text():
+    """Catches canonical safety compilation reintroducing accepted source text."""
+    knowledge = Knowledge().with_safe_region(expression="x >= 0.2", factors=("x",))
+    artifacts = knowledge.compile(Space([Parameter("x", bounds=(0.0, 1.0))]))
+    serialized = artifacts.to_dict()
+
+    def assert_no_source_fields(value):
+        if isinstance(value, dict):
+            assert "expression" not in value
+            assert "source_expression" not in value
+            for item in value.values():
+                assert_no_source_fields(item)
+        elif isinstance(value, list):
+            for item in value:
+                assert_no_source_fields(item)
+
+    assert_no_source_fields(serialized)
+
+
+def test_registry_rejects_source_shaped_persisted_safety_parameters(taxonomy_space):
+    """Catches current-version persisted specs accepting raw source text."""
+    spec = _spec("safe_region", {"expression": "x >= 0.2"}, ("x",), ("y",))
+
+    with pytest.raises(EngineError) as caught:
+        _builtin_registry().compile_many((spec,), taxonomy_space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
 
 
 @pytest.mark.parametrize(

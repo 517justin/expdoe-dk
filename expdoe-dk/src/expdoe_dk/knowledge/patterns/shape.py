@@ -63,8 +63,7 @@ def _compile_quadratic_peak(spec, space, observations=None) -> OptimizationArtif
     parameters = spec.parameters
     factor = spec.scope.factors[0]
     dim = space.param_names.index(factor)
-    lo, hi = space.param_by_name(factor).bounds
-    center_unit = (parameters["center"] - lo) / (hi - lo)
+    center_unit = space.param_by_name(factor).encode([parameters["center"]])[0]
     curvature_signs = [0.0] * space.n_dims
     if parameters["direction"] == "peak":
         sign_internal = 1.0 if space.maximize[0] else -1.0
@@ -110,13 +109,10 @@ def _validate_factor(spec, space, observations=None) -> KnowledgeValidationResul
             if parameter.kind not in _NUMERIC_KINDS:
                 errors.append(f"Factor {factor!r} must be numeric")
             elif spec.pattern == "quadratic_peak":
-                if parameter.bounds is not None:
-                    lo, hi = map(float, parameter.bounds)
-                else:
-                    levels = tuple(float(value) for value in parameter.numeric_levels)
-                    lo, hi = min(levels), max(levels)
-                if not lo <= float(spec.parameters["center"]) <= hi:
-                    errors.append("center must lie within factor bounds")
+                try:
+                    parameter.encode([spec.parameters["center"]])
+                except (TypeError, ValueError, OverflowError):
+                    errors.append("center must be a valid factor value")
     return KnowledgeValidationResult(
         pattern_id=spec.pattern_id,
         state="invalid" if errors else "valid",

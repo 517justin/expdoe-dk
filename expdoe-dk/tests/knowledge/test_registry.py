@@ -294,8 +294,116 @@ def test_registry_compile_many_merges_in_spec_order(numeric_space, make_spec):
         "KP-first",
     ]
     assert calls == [
+        ("validate", "KP-second", observations),
         ("compile", "KP-second", observations),
+        ("validate", "KP-first", observations),
         ("compile", "KP-first", observations),
+    ]
+
+
+def test_disabled_specs_never_resolve_validate_or_compile(numeric_space, make_spec):
+    """Catches disabled audit declarations reaching any executable registry hook."""
+    registry = PatternRegistry()
+    disabled = make_spec(
+        pattern="provider-not-loaded",
+        version="9.0",
+        pattern_id="KP-disabled",
+        enabled=False,
+    )
+
+    assert registry.validate_many((disabled,), numeric_space) == ()
+    assert registry.compile_many((disabled,), numeric_space) == OptimizationArtifacts()
+
+
+def test_compile_gates_compatibility_and_validation_before_compiler(
+    fake_definition, numeric_space, make_spec
+):
+    """Catches structurally incompatible or invalid declarations reaching compilers."""
+    calls: list[str] = []
+
+    def compatibility(spec, space):
+        calls.append("compatibility")
+        return CompatibilityResult(compatible=False, reasons=("wrong factor kind",))
+
+    def validator(spec, space, observations=None):
+        calls.append("validator")
+        return KnowledgeValidationResult(
+            pattern_id=spec.pattern_id, state="valid", summary="valid"
+        )
+
+    def compiler(spec, space, observations=None):
+        calls.append("compiler")
+        return OptimizationArtifacts()
+
+    registry = PatternRegistry()
+    registry.register(
+        _provider_definition(
+            fake_definition,
+            compatibility=compatibility,
+            validator=validator,
+            compiler=compiler,
+        )
+    )
+
+    with pytest.raises(EngineError, match="incompatible") as caught:
+        registry.compile_many((make_spec(),), numeric_space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+    assert calls == ["compatibility"]
+
+
+def test_invalid_validation_blocks_compiler_but_insufficient_data_compiles_with_diagnostic(
+    fake_definition, numeric_space, make_spec
+):
+    """Catches invalid and insufficient-data states being treated identically."""
+    calls: list[tuple[str, str]] = []
+
+    def compatibility(spec, space):
+        calls.append((spec.pattern, "compatibility"))
+        return CompatibilityResult(compatible=True)
+
+    def validator(spec, space, observations=None):
+        calls.append((spec.pattern, "validator"))
+        state = "invalid" if spec.pattern == "invalid-pattern" else "insufficient_data"
+        return KnowledgeValidationResult(
+            pattern_id=spec.pattern_id,
+            state=state,
+            summary=f"{state} summary",
+            errors=("structural contradiction",) if state == "invalid" else (),
+            warnings=("more observations required",) if state == "insufficient_data" else (),
+            effective_confidence=spec.confidence,
+        )
+
+    def compiler(spec, space, observations=None):
+        calls.append((spec.pattern, "compiler"))
+        return OptimizationArtifacts()
+
+    registry = PatternRegistry()
+    for pattern in ("invalid-pattern", "insufficient-pattern"):
+        registry.register(
+            _provider_definition(
+                fake_definition,
+                pattern=pattern,
+                compatibility=compatibility,
+                validator=validator,
+                compiler=compiler,
+            )
+        )
+
+    invalid = make_spec(pattern="invalid-pattern", pattern_id="KP-invalid")
+    insufficient = make_spec(
+        pattern="insufficient-pattern", pattern_id="KP-insufficient"
+    )
+
+    with pytest.raises(EngineError, match="invalid") as caught:
+        registry.compile_many((invalid,), numeric_space)
+    artifacts = registry.compile_many((insufficient,), numeric_space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+    assert ("invalid-pattern", "compiler") not in calls
+    assert ("insufficient-pattern", "compiler") in calls
+    assert [item.payload["state"] for item in artifacts.diagnostics] == [
+        "insufficient_data"
     ]
 
 

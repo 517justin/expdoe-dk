@@ -2,17 +2,25 @@
 from __future__ import annotations
 
 import math
+from itertools import product
 from collections.abc import Iterable, Mapping
 from threading import RLock
 from typing import TYPE_CHECKING
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
+from scipy.optimize import linprog
 
+from expdoe_dk.domain import ExpressionConstraint, constraint_from_dict
 from expdoe_dk.errors import EngineError, ErrorCode
 
-from ..artifacts import ARTIFACT_CATEGORIES, OptimizationArtifacts, merge_artifacts
-from ..guard import KnowledgeValidationResult
+from ..artifacts import (
+    ARTIFACT_CATEGORIES,
+    OptimizationArtifact,
+    OptimizationArtifacts,
+    merge_artifacts,
+)
+from ..guard import CompatibilityResult, KnowledgeValidationResult
 from ..specs import KnowledgePatternSpec
 from .definition import KnowledgePatternDefinition
 
@@ -20,11 +28,17 @@ if TYPE_CHECKING:
     from expdoe_dk.domain import ObservationBatch, Space
 
 
+_SAFETY_ENUMERATION_LIMIT = 100_000
+
+_SafetyConstraint = tuple[str, ExpressionConstraint]
+
+
 class PatternRegistry:
     """Own exact ``(pattern, version)`` definitions and dispatch to them."""
 
     def __init__(self) -> None:
         self._definitions: dict[tuple[str, str], KnowledgePatternDefinition] = {}
+        self._provider_records: tuple[object, ...] = ()
         self._lock = RLock()
 
     def register(self, definition: KnowledgePatternDefinition) -> None:
@@ -95,6 +109,27 @@ class PatternRegistry:
                 self._definitions[key] for key in sorted(self._definitions)
             )
 
+    @property
+    def provider_records(self) -> tuple[object, ...]:
+        """Return detached immutable provenance for explicitly loaded providers."""
+        with self._lock:
+            return tuple(self._provider_records)
+
+    def _record_provider_records(self, records: Iterable[object]) -> None:
+        """Attach provider declarations after their definitions commit atomically."""
+        incoming = tuple(records)
+        with self._lock:
+            combined = self._provider_records + incoming
+            self._provider_records = tuple(
+                sorted(
+                    combined,
+                    key=lambda item: (
+                        item.canonical_distribution_name,
+                        item.entry_point_name,
+                    ),
+                )
+            )
+
     @staticmethod
     def _require_spec(spec: object) -> KnowledgePatternSpec:
         if not isinstance(spec, KnowledgePatternSpec):
@@ -134,7 +169,11 @@ class PatternRegistry:
         space: "Space",
         observations: "ObservationBatch | None" = None,
     ) -> tuple[KnowledgeValidationResult, ...]:
-        return tuple(self.validate(spec, space, observations) for spec in specs)
+        return tuple(
+            self.validate(spec, space, observations)
+            for spec in specs
+            if self._require_spec(spec).enabled
+        )
 
     def compile_many(
         self,
@@ -145,8 +184,43 @@ class PatternRegistry:
         compiled_sets: list[OptimizationArtifacts] = []
         for spec in specs:
             checked = self._require_spec(spec)
+            if not checked.enabled:
+                continue
             definition = self.resolve(checked.pattern, checked.version)
             self._validate_parameters(checked, definition)
+            compatibility = definition.compatibility(checked, space)
+            if not isinstance(compatibility, CompatibilityResult):
+                raise TypeError(
+                    "pattern compatibility must return CompatibilityResult"
+                )
+            if not compatibility.compatible:
+                raise EngineError(
+                    ErrorCode.KNOWLEDGE_INVALID,
+                    f"Knowledge pattern {checked.pattern}@{checked.version} is incompatible",
+                    details={
+                        "pattern_id": checked.pattern_id,
+                        "pattern": checked.pattern,
+                        "version": checked.version,
+                        "reasons": list(compatibility.reasons),
+                    },
+                )
+            validation = self.validate(checked, space, observations)
+            if validation.state == "invalid":
+                raise EngineError(
+                    validation.error_code or ErrorCode.KNOWLEDGE_INVALID,
+                    f"Knowledge pattern {checked.pattern}@{checked.version} is invalid",
+                    details=(
+                        dict(validation.error_details)
+                        if validation.error_details is not None
+                        else {
+                            "pattern_id": checked.pattern_id,
+                            "pattern": checked.pattern,
+                            "version": checked.version,
+                            "summary": validation.summary,
+                            "errors": list(validation.errors),
+                        }
+                    ),
+                )
             artifacts = definition.compiler(
                 checked, space, observations
             )
@@ -154,9 +228,36 @@ class PatternRegistry:
                 raise TypeError("pattern compiler must return OptimizationArtifacts")
             self._validate_artifact_provenance(checked, artifacts)
             compiled_sets.append(artifacts)
+            if validation.state != "valid":
+                compiled_sets.append(
+                    OptimizationArtifacts(
+                        diagnostics=(
+                            OptimizationArtifact(
+                                kind="knowledge_validation",
+                                payload={
+                                    "state": validation.state,
+                                    "summary": validation.summary,
+                                    "errors": list(validation.errors),
+                                    "warnings": list(validation.warnings),
+                                    "effective_confidence": validation.effective_confidence,
+                                },
+                                source_pattern_id=checked.pattern_id,
+                                source_pattern=checked.pattern,
+                                source_version=checked.version,
+                            ),
+                        )
+                    )
+                )
         merged = merge_artifacts(compiled_sets)
-        self._reject_proven_empty_safety_intersection(merged, space)
-        return merged
+        safety_diagnostics = self._safety_feasibility_diagnostics(merged, space)
+        if not safety_diagnostics:
+            return merged
+        return merge_artifacts(
+            (
+                merged,
+                OptimizationArtifacts(diagnostics=safety_diagnostics),
+            )
+        )
 
     @staticmethod
     def _validate_parameters(
@@ -199,29 +300,141 @@ class PatternRegistry:
     def _reject_proven_empty_safety_intersection(
         cls, artifacts: OptimizationArtifacts, space: "Space"
     ) -> None:
-        """Reject only interval contradictions proved by canonical hard constraints."""
-        intervals: dict[str, dict[str, object]] = {}
-        for artifact in sorted(
-            artifacts.parameter_constraints,
-            key=lambda item: (item.source_pattern_id, item.kind),
-        ):
-            if artifact.source_pattern not in {"safe_region", "forbidden_region"}:
+        """Reject certified conflicts while retaining a compatibility entry point."""
+        cls._safety_feasibility_diagnostics(artifacts, space)
+
+    @classmethod
+    def _safety_feasibility_diagnostics(
+        cls, artifacts: OptimizationArtifacts, space: "Space"
+    ) -> tuple[OptimizationArtifact, ...]:
+        """Certify supported safety sets or return explicit inconclusive diagnostics."""
+        safety_artifacts = cls._safety_artifacts(artifacts)
+        if not safety_artifacts:
+            return ()
+        safety_constraints = cls._constraints_from_safety_artifacts(
+            safety_artifacts, space
+        )
+        status, details = cls._safety_constraint_certificate(
+            safety_constraints, space
+        )
+        if status == "infeasible":
+            raise EngineError(
+                ErrorCode.KNOWLEDGE_CONFLICT,
+                "Hard safety regions have a certified empty intersection",
+                details=details,
+            )
+        if status == "feasible":
+            return ()
+        source_pattern_ids = sorted(
+            {artifact.source_pattern_id for artifact in safety_artifacts}
+        )
+        payload = {
+            "status": "inconclusive",
+            **details,
+            "source_pattern_ids": source_pattern_ids,
+        }
+        return tuple(
+            OptimizationArtifact(
+                kind="safety_feasibility",
+                payload=payload,
+                source_pattern_id=artifact.source_pattern_id,
+                source_pattern=artifact.source_pattern,
+                source_version=artifact.source_version,
+            )
+            for artifact in safety_artifacts
+        )
+
+    @staticmethod
+    def _safety_artifacts(
+        artifacts: OptimizationArtifacts,
+    ) -> tuple[OptimizationArtifact, ...]:
+        return tuple(
+            artifact
+            for artifact in sorted(
+                artifacts.parameter_constraints,
+                key=lambda item: (item.source_pattern_id, item.kind),
+            )
+            if artifact.source_pattern in {"safe_region", "forbidden_region"}
+            and isinstance(artifact.payload.get("constraint"), Mapping)
+            and artifact.payload["constraint"].get("hard") is True
+        )
+
+    @classmethod
+    def _constraints_from_safety_artifacts(
+        cls,
+        safety_artifacts: tuple[OptimizationArtifact, ...],
+        space: "Space",
+    ) -> tuple[_SafetyConstraint, ...]:
+        parsed: list[_SafetyConstraint] = []
+        for artifact in safety_artifacts:
+            constraint = constraint_from_dict(
+                cls._plain_json(artifact.payload["constraint"]),
+                allowed_names=space.param_names,
+            )
+            if not isinstance(constraint, ExpressionConstraint):
+                raise EngineError(
+                    ErrorCode.KNOWLEDGE_INVALID,
+                    "Hard safety artifact must contain an expression constraint",
+                    details={"source_pattern_ids": [artifact.source_pattern_id]},
+                )
+            parsed.append((artifact.source_pattern_id, constraint))
+        return tuple(parsed)
+
+    @classmethod
+    def _safety_constraint_certificate(
+        cls,
+        safety_constraints: tuple[_SafetyConstraint, ...],
+        space: "Space",
+    ) -> tuple[str, dict[str, object]]:
+        """Certify parsed constraints without invoking a pattern compiler."""
+        ordered = tuple(sorted(safety_constraints, key=lambda item: item[0]))
+        cls._reject_invalid_safety_roots(ordered)
+        all_finite = all(
+            parameter.cardinality is not None for parameter in space.params
+        )
+        if all_finite:
+            return cls._extended_safety_certificate(ordered, space)
+        if cls._mixed_domain_requires_exact_finite_arithmetic(space):
+            return "inconclusive", {
+                "reason": "finite_domain_numeric_precision"
+            }
+
+        cls._reject_scalar_safety_intersection(ordered, space)
+        return cls._extended_safety_certificate(ordered, space)
+
+    @staticmethod
+    def _mixed_domain_requires_exact_finite_arithmetic(space: "Space") -> bool:
+        """Detect finite integral levels that cannot safely enter float proofs."""
+        for parameter in space.params:
+            if parameter.cardinality is None:
                 continue
-            constraint = artifact.payload.get("constraint")
-            if not isinstance(constraint, Mapping) or constraint.get("hard") is not True:
+            if parameter.kind == "integer":
+                assert parameter.bounds is not None
+                if any(abs(int(value)) > 2**53 for value in parameter.bounds):
+                    return True
                 continue
-            ast = constraint.get("ast")
-            if isinstance(ast, Mapping) and ast.get("type") not in {
-                "compare",
-                "boolean",
-                "constant",
-            }:
+            if parameter.kind == "discrete" and any(
+                type(value) is int and float(value) != value
+                for value in parameter.numeric_levels
+            ):
+                return True
+        return False
+
+    @classmethod
+    def _reject_invalid_safety_roots(
+        cls,
+        safety_constraints: tuple[_SafetyConstraint, ...],
+    ) -> None:
+        """Reject non-predicate roots and exact constant contradictions."""
+        for source_pattern_id, constraint in safety_constraints:
+            ast = constraint.ast
+            if ast.get("type") not in {"compare", "boolean", "constant"}:
                 raise EngineError(
                     ErrorCode.KNOWLEDGE_INVALID,
                     "Hard safety expression must have a boolean root",
                     details={
-                        "source_pattern_ids": [artifact.source_pattern_id],
-                        "constraint": constraint.get("name"),
+                        "source_pattern_ids": [source_pattern_id],
+                        "constraint": constraint.name,
                         "root_type": ast.get("type"),
                     },
                 )
@@ -231,9 +444,9 @@ class PatternRegistry:
                     ErrorCode.KNOWLEDGE_INVALID,
                     "Hard safety expression must evaluate to a boolean",
                     details={
-                        "source_pattern_ids": [artifact.source_pattern_id],
-                        "constraint": constraint.get("name"),
-                        "root_type": ast.get("type") if isinstance(ast, Mapping) else None,
+                        "source_pattern_ids": [source_pattern_id],
+                        "constraint": constraint.name,
+                        "root_type": ast.get("type"),
                     },
                 )
             if is_constant and constant_value is False:
@@ -241,11 +454,22 @@ class PatternRegistry:
                     ErrorCode.KNOWLEDGE_CONFLICT,
                     "Hard safety region is provably empty",
                     details={
-                        "source_pattern_ids": [artifact.source_pattern_id],
-                        "constraint": constraint.get("name"),
+                        "source_pattern_ids": [source_pattern_id],
+                        "constraint": constraint.name,
                         "reason": "constant_false",
                     },
                 )
+
+    @classmethod
+    def _reject_scalar_safety_intersection(
+        cls,
+        safety_constraints: tuple[_SafetyConstraint, ...],
+        space: "Space",
+    ) -> None:
+        """Reject interval contradictions proved by canonical hard constraints."""
+        intervals: dict[str, dict[str, object]] = {}
+        for source_pattern_id, constraint in safety_constraints:
+            ast = constraint.ast
             comparisons = cls._interval_comparisons(ast)
             if comparisons is None:
                 continue
@@ -272,7 +496,7 @@ class PatternRegistry:
                 )
                 sources = interval["sources"]
                 assert isinstance(sources, set)
-                sources.add(artifact.source_pattern_id)
+                sources.add(source_pattern_id)
                 if operator in {">", ">="}:
                     current = float(interval["lower"])
                     if value > current:
@@ -316,6 +540,324 @@ class PatternRegistry:
                             "upper": upper,
                         },
                     )
+
+    @classmethod
+    def _extended_safety_certificate(
+        cls,
+        safety_constraints: tuple[_SafetyConstraint, ...],
+        space: "Space",
+    ) -> tuple[str, dict[str, object]]:
+        """Return feasible/infeasible/inconclusive without sampling."""
+        source_pattern_ids = sorted(
+            {source_pattern_id for source_pattern_id, _ in safety_constraints}
+        )
+        constraints = tuple(
+            constraint for _, constraint in safety_constraints
+        )
+        asts = tuple(
+            constraint.ast for constraint in constraints
+        )
+
+        for ast in asts:
+            predicate_status, _ = cls._affine_predicates(ast)
+            if predicate_status == "infeasible":
+                return "infeasible", {
+                    "source_pattern_ids": source_pattern_ids,
+                    "reason": "tautological_false",
+                }
+
+        finite_parameters = tuple(
+            parameter for parameter in space.params if parameter.cardinality is not None
+        )
+        enumeration_size = math.prod(
+            int(parameter.cardinality) for parameter in finite_parameters
+        )
+        if enumeration_size > _SAFETY_ENUMERATION_LIMIT:
+            return "inconclusive", {
+                "reason": "finite_domain_resource_limit",
+                "enumeration_size": enumeration_size,
+                "enumeration_limit": _SAFETY_ENUMERATION_LIMIT,
+            }
+
+        finite_levels = tuple(
+            cls._finite_parameter_levels(parameter)
+            for parameter in finite_parameters
+        )
+        finite_assignments = product(*finite_levels) if finite_levels else ((),)
+        all_finite = len(finite_parameters) == len(space.params)
+        if all_finite:
+            for values in finite_assignments:
+                row = {
+                    parameter.name: value
+                    for parameter, value in zip(finite_parameters, values)
+                }
+                try:
+                    if all(constraint.satisfied(row) for constraint in constraints):
+                        return "feasible", {"reason": "exact_finite_enumeration"}
+                except (ArithmeticError, EngineError, OverflowError, TypeError, ValueError):
+                    return "inconclusive", {
+                        "reason": "finite_domain_evaluation_inconclusive"
+                    }
+            return "infeasible", {
+                "source_pattern_ids": source_pattern_ids,
+                "reason": "exact_finite_enumeration",
+            }
+
+        predicates: list[tuple[dict[str, float], float, str]] = []
+        for ast in asts:
+            predicate_status, extracted = cls._affine_predicates(ast)
+            if predicate_status == "unsupported":
+                return "inconclusive", {"reason": "unsupported_continuous_ast"}
+            if predicate_status == "infeasible":
+                return "infeasible", {
+                    "source_pattern_ids": source_pattern_ids,
+                    "reason": "tautological_false",
+                }
+            predicates.extend(extracted)
+
+        continuous_parameters = tuple(
+            parameter for parameter in space.params if parameter.kind == "continuous"
+        )
+        saw_inconclusive = False
+        for values in finite_assignments:
+            fixed = {
+                parameter.name: value
+                for parameter, value in zip(finite_parameters, values)
+            }
+            status = cls._solve_affine_feasibility(
+                predicates,
+                continuous_parameters,
+                fixed,
+            )
+            if status == "feasible":
+                return "feasible", {"reason": "continuous_affine_feasible"}
+            if status == "inconclusive":
+                saw_inconclusive = True
+        if saw_inconclusive:
+            return "inconclusive", {"reason": "affine_solver_inconclusive"}
+        return "infeasible", {
+            "source_pattern_ids": source_pattern_ids,
+            "reason": "continuous_affine_infeasible",
+        }
+
+    @staticmethod
+    def _finite_parameter_levels(parameter) -> tuple[object, ...]:
+        if parameter.kind in {"categorical", "ordinal"}:
+            return tuple(parameter.values or ())
+        return tuple(parameter.numeric_levels)
+
+    @classmethod
+    def _affine_predicates(
+        cls, node: object
+    ) -> tuple[str, list[tuple[dict[str, float], float, str]]]:
+        """Extract an affine conjunction, recognizing structural tautologies."""
+        if not isinstance(node, Mapping):
+            return "unsupported", []
+        known, value = cls._constant_value(node)
+        if known:
+            if type(value) is not bool:
+                return "unsupported", []
+            return ("feasible", []) if value else ("infeasible", [])
+        if node.get("type") == "boolean" and node.get("op") == "and":
+            values = node.get("values")
+            if not isinstance(values, (list, tuple)):
+                return "unsupported", []
+            combined: list[tuple[dict[str, float], float, str]] = []
+            for item in values:
+                status, predicates = cls._affine_predicates(item)
+                if status != "feasible":
+                    return status, []
+                combined.extend(predicates)
+            return "feasible", combined
+        if node.get("type") != "compare":
+            return "unsupported", []
+        operator = node.get("op")
+        left = node.get("left")
+        right = node.get("right")
+        if cls._plain_json(left) == cls._plain_json(right):
+            if operator in {"==", "<=", ">="}:
+                return "feasible", []
+            if operator in {"!=", "<", ">"}:
+                return "infeasible", []
+            return "unsupported", []
+        if (
+            operator == "=="
+            and isinstance(right, Mapping)
+            and right.get("type") == "constant"
+            and right.get("value") is False
+            and isinstance(left, Mapping)
+            and left.get("type") == "compare"
+        ):
+            inverse = {
+                "<": ">=",
+                "<=": ">",
+                ">": "<=",
+                ">=": "<",
+                "==": "!=",
+                "!=": "==",
+            }.get(left.get("op"))
+            if inverse is None:
+                return "unsupported", []
+            inverted = dict(left)
+            inverted["op"] = inverse
+            return cls._affine_predicates(inverted)
+        if operator not in {"<", "<=", "==", ">=", ">"}:
+            return "unsupported", []
+        left_affine = cls._affine_expression(left)
+        right_affine = cls._affine_expression(right)
+        if left_affine is None or right_affine is None:
+            return "unsupported", []
+        coefficients = dict(left_affine[0])
+        for name, coefficient in right_affine[0].items():
+            coefficients[name] = coefficients.get(name, 0.0) - coefficient
+            if coefficients[name] == 0.0:
+                del coefficients[name]
+        return "feasible", [
+            (coefficients, left_affine[1] - right_affine[1], operator)
+        ]
+
+    @classmethod
+    def _affine_expression(
+        cls, node: object
+    ) -> tuple[dict[str, float], float] | None:
+        if not isinstance(node, Mapping):
+            return None
+        node_type = node.get("type")
+        if node_type == "constant":
+            value = node.get("value")
+            if type(value) not in (int, float) or not math.isfinite(float(value)):
+                return None
+            return {}, float(value)
+        if node_type == "name":
+            name = node.get("name")
+            return ({name: 1.0}, 0.0) if type(name) is str else None
+        if node_type == "unary" and node.get("op") in {"+", "-"}:
+            operand = cls._affine_expression(node.get("operand"))
+            if operand is None:
+                return None
+            scale = 1.0 if node.get("op") == "+" else -1.0
+            return (
+                {name: scale * value for name, value in operand[0].items()},
+                scale * operand[1],
+            )
+        if node_type != "binary":
+            return None
+        left = cls._affine_expression(node.get("left"))
+        right = cls._affine_expression(node.get("right"))
+        if left is None or right is None:
+            return None
+        operator = node.get("op")
+        if operator in {"+", "-"}:
+            scale = 1.0 if operator == "+" else -1.0
+            coefficients = dict(left[0])
+            for name, value in right[0].items():
+                coefficients[name] = coefficients.get(name, 0.0) + scale * value
+                if coefficients[name] == 0.0:
+                    del coefficients[name]
+            return coefficients, left[1] + scale * right[1]
+        if operator == "*":
+            if not left[0]:
+                return (
+                    {name: left[1] * value for name, value in right[0].items()},
+                    left[1] * right[1],
+                )
+            if not right[0]:
+                return (
+                    {name: right[1] * value for name, value in left[0].items()},
+                    right[1] * left[1],
+                )
+            return None
+        if operator == "/" and not right[0] and right[1] != 0.0:
+            return (
+                {name: value / right[1] for name, value in left[0].items()},
+                left[1] / right[1],
+            )
+        return None
+
+    @staticmethod
+    def _solve_affine_feasibility(
+        predicates: list[tuple[dict[str, float], float, str]],
+        continuous_parameters: tuple,
+        fixed: Mapping[str, object],
+    ) -> str:
+        names = tuple(parameter.name for parameter in continuous_parameters)
+        strict = any(operator in {"<", ">"} for _, _, operator in predicates)
+        n_variables = len(names) + (1 if strict else 0)
+        if not names:
+            for coefficients, constant, operator in predicates:
+                value = constant + sum(
+                    coefficient * float(fixed[name])
+                    for name, coefficient in coefficients.items()
+                )
+                satisfied = {
+                    "<": value < 0.0,
+                    "<=": value <= 0.0,
+                    "==": value == 0.0,
+                    ">=": value >= 0.0,
+                    ">": value > 0.0,
+                }[operator]
+                if not satisfied:
+                    return "infeasible"
+            return "feasible"
+
+        a_ub: list[list[float]] = []
+        b_ub: list[float] = []
+        a_eq: list[list[float]] = []
+        b_eq: list[float] = []
+        for coefficients, raw_constant, operator in predicates:
+            try:
+                constant = raw_constant + sum(
+                    coefficient * float(fixed[name])
+                    for name, coefficient in coefficients.items()
+                    if name in fixed
+                )
+            except (OverflowError, TypeError, ValueError):
+                return "inconclusive"
+            unknown = set(coefficients) - set(names) - set(fixed)
+            if unknown:
+                return "inconclusive"
+            row = [coefficients.get(name, 0.0) for name in names]
+            if strict:
+                row.append(1.0 if operator in {"<", ">"} else 0.0)
+            if operator in {"<", "<="}:
+                a_ub.append(row)
+                b_ub.append(-constant)
+            elif operator in {">", ">="}:
+                a_ub.append([-value for value in row])
+                if strict and operator == ">":
+                    a_ub[-1][-1] = 1.0
+                b_ub.append(constant)
+            else:
+                a_eq.append(row)
+                b_eq.append(-constant)
+        objective = [0.0] * n_variables
+        if strict:
+            objective[-1] = -1.0
+        bounds = [
+            (float(parameter.bounds[0]), float(parameter.bounds[1]))
+            for parameter in continuous_parameters
+        ]
+        if strict:
+            bounds.append((None, None))
+        try:
+            result = linprog(
+                objective,
+                A_ub=a_ub or None,
+                b_ub=b_ub or None,
+                A_eq=a_eq or None,
+                b_eq=b_eq or None,
+                bounds=bounds,
+                method="highs",
+            )
+        except Exception:
+            return "inconclusive"
+        if result.status == 2:
+            return "infeasible"
+        if result.status != 0 or result.x is None:
+            return "inconclusive"
+        if strict and result.x[-1] <= 0.0:
+            return "infeasible"
+        return "feasible"
 
     @staticmethod
     def _domain_has_interval_value(

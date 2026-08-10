@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from importlib.metadata import entry_points
@@ -20,9 +22,39 @@ ENTRY_POINT_GROUP = "expdoe_dk.knowledge_patterns"
 class ProviderDefinitionRecord:
     pattern: str
     version: str
+    schema_digest: str
+
+    def __post_init__(self) -> None:
+        for field_name in ("pattern", "version"):
+            value = getattr(self, field_name)
+            if type(value) is not str or not value:
+                raise TypeError(f"ProviderDefinitionRecord.{field_name} must be a non-empty string")
+        if type(self.schema_digest) is not str or re.fullmatch(
+            r"[0-9a-f]{64}", self.schema_digest
+        ) is None:
+            raise ValueError(
+                "ProviderDefinitionRecord.schema_digest must be a lowercase SHA-256 digest"
+            )
 
     def to_dict(self) -> dict[str, str]:
-        return {"pattern": self.pattern, "version": self.version}
+        return {
+            "pattern": self.pattern,
+            "version": self.version,
+            "schema_digest": self.schema_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: object) -> "ProviderDefinitionRecord":
+        item = _exact_mapping(
+            payload,
+            {"pattern", "version", "schema_digest"},
+            "ProviderDefinitionRecord",
+        )
+        return cls(
+            pattern=item["pattern"],  # type: ignore[arg-type]
+            version=item["version"],  # type: ignore[arg-type]
+            schema_digest=item["schema_digest"],  # type: ignore[arg-type]
+        )
 
 
 @dataclass(frozen=True)
@@ -33,6 +65,34 @@ class ProviderRecord:
     distribution_version: str
     definitions: tuple[ProviderDefinitionRecord, ...]
 
+    def __post_init__(self) -> None:
+        for field_name in (
+            "distribution_name",
+            "canonical_distribution_name",
+            "entry_point_name",
+            "distribution_version",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not str or not value:
+                raise TypeError(f"ProviderRecord.{field_name} must be a non-empty string")
+        if canonical_distribution_name(self.distribution_name) != self.canonical_distribution_name:
+            raise ValueError(
+                "ProviderRecord.canonical_distribution_name does not match distribution_name"
+            )
+        definitions = tuple(self.definitions)
+        if not all(isinstance(item, ProviderDefinitionRecord) for item in definitions):
+            raise TypeError(
+                "ProviderRecord.definitions must contain ProviderDefinitionRecord values"
+            )
+        keys = [(item.pattern, item.version) for item in definitions]
+        if len(keys) != len(set(keys)):
+            raise ValueError("ProviderRecord.definitions contains duplicate pattern versions")
+        object.__setattr__(
+            self,
+            "definitions",
+            tuple(sorted(definitions, key=lambda item: (item.pattern, item.version))),
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {
             "distribution_name": self.distribution_name,
@@ -42,13 +102,65 @@ class ProviderRecord:
             "definitions": [item.to_dict() for item in self.definitions],
         }
 
+    @classmethod
+    def from_dict(cls, payload: object) -> "ProviderRecord":
+        item = _exact_mapping(
+            payload,
+            {
+                "distribution_name",
+                "canonical_distribution_name",
+                "entry_point_name",
+                "distribution_version",
+                "definitions",
+            },
+            "ProviderRecord",
+        )
+        definitions = item["definitions"]
+        if type(definitions) is not list:
+            raise TypeError("ProviderRecord.definitions must be a JSON array")
+        return cls(
+            distribution_name=item["distribution_name"],  # type: ignore[arg-type]
+            canonical_distribution_name=item["canonical_distribution_name"],  # type: ignore[arg-type]
+            entry_point_name=item["entry_point_name"],  # type: ignore[arg-type]
+            distribution_version=item["distribution_version"],  # type: ignore[arg-type]
+            definitions=tuple(
+                ProviderDefinitionRecord.from_dict(value) for value in definitions
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class ProviderLoadReport:
     providers: tuple[ProviderRecord, ...]
 
+    def __post_init__(self) -> None:
+        providers = tuple(self.providers)
+        if not all(isinstance(item, ProviderRecord) for item in providers):
+            raise TypeError("ProviderLoadReport.providers must contain ProviderRecord values")
+        object.__setattr__(
+            self,
+            "providers",
+            tuple(
+                sorted(
+                    providers,
+                    key=lambda item: (
+                        item.canonical_distribution_name,
+                        item.entry_point_name,
+                    ),
+                )
+            ),
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {"providers": [item.to_dict() for item in self.providers]}
+
+    @classmethod
+    def from_dict(cls, payload: object) -> "ProviderLoadReport":
+        item = _exact_mapping(payload, {"providers"}, "ProviderLoadReport")
+        providers = item["providers"]
+        if type(providers) is not list:
+            raise TypeError("ProviderLoadReport.providers must be a JSON array")
+        return cls(tuple(ProviderRecord.from_dict(value) for value in providers))
 
 
 @dataclass(frozen=True)
@@ -58,6 +170,32 @@ class _EntryMetadata:
     canonical_distribution_name: str
     entry_point_name: str
     distribution_version: str
+
+
+def _exact_mapping(
+    payload: object, expected: set[str], context: str
+) -> Mapping[str, object]:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be an object")
+    if any(type(key) is not str for key in payload):
+        raise TypeError(f"{context} keys must be strings")
+    actual = set(payload)
+    if actual != expected:
+        raise ValueError(
+            f"{context} requires exactly keys {sorted(expected)!r}; got {sorted(actual)!r}"
+        )
+    return payload
+
+
+def _schema_digest(definition: KnowledgePatternDefinition) -> str:
+    canonical = json.dumps(
+        PatternRegistry._plain_json(definition.schema),
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def canonical_distribution_name(name: str) -> str:
@@ -364,7 +502,11 @@ def load_pattern_providers(
             entry_point_name=metadata.entry_point_name,
             distribution_version=metadata.distribution_version,
             definitions=tuple(
-                ProviderDefinitionRecord(item.pattern, item.version)
+                ProviderDefinitionRecord(
+                    item.pattern,
+                    item.version,
+                    _schema_digest(item),
+                )
                 for item in definitions
             ),
         )
@@ -398,6 +540,7 @@ def load_pattern_providers(
                 for item in definitions_to_register
             ],
         ) from None
+    registry._record_provider_records(records)
     return ProviderLoadReport(records)
 
 

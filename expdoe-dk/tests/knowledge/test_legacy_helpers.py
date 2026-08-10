@@ -3,7 +3,7 @@ import torch
 import pandas as pd
 from jsonschema import Draft202012Validator
 
-from expdoe_dk import Knowledge, Parameter, Space
+from expdoe_dk import EngineError, ErrorCode, Knowledge, Parameter, Space
 from expdoe_dk.bo.gp import build_gp
 from expdoe_dk.knowledge.artifacts import (
     ARTIFACT_CATEGORIES,
@@ -88,6 +88,40 @@ def test_builtin_schemas_accept_every_helper_generated_parameter_payload():
         assert list(validator.iter_errors(spec.to_dict()["parameters"])) == []
 
 
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        Parameter("dose", bounds=(1.0, 100.0), transform="log"),
+        Parameter(
+            "dose", kind="discrete", values=[1.0, 10.0, 100.0], transform="log"
+        ),
+    ],
+)
+def test_quadratic_peak_center_uses_the_parameter_model_transform(parameter):
+    """Catches peak compilation linearly unpacking bounds instead of encoding."""
+    knowledge = Knowledge().with_quadratic_peak("dose", center=10.0)
+    space = Space([parameter], objectives="yield")
+
+    artifacts = knowledge.compile(space)
+
+    assert artifacts.mean_components[0].payload["centers"] == (pytest.approx(0.5),)
+
+
+def test_quadratic_peak_rejects_a_center_outside_discrete_levels_before_compile():
+    """A discrete center must be a declared level, not merely inside its range."""
+    knowledge = Knowledge().with_quadratic_peak("dose", center=0.5)
+    space = Space(
+        [Parameter("dose", kind="discrete", values=[0.0, 1.0])],
+        objectives="yield",
+    )
+
+    with pytest.raises(EngineError) as caught:
+        knowledge.compile(space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+    assert "center" in repr(caught.value.details).casefold()
+
+
 def test_explicit_registry_is_used_as_is_and_empty_compile_is_empty():
     registry = PatternRegistry()
     knowledge = Knowledge(registry=registry)
@@ -107,6 +141,27 @@ def test_specs_are_an_immutable_tuple_and_pattern_ids_are_unique():
         knowledge.specs.append(declaration)
     with pytest.raises(ValueError, match="pattern_id"):
         knowledge.add(declaration)
+
+
+def test_disabled_legacy_declaration_is_audit_only_not_effective():
+    """Catches disabled declarations leaking into v0.4 effective knowledge."""
+    enabled = Knowledge().with_random_augment(3).specs[0]
+    disabled = make_pattern_spec(
+        pattern_id=enabled.pattern_id,
+        pattern=enabled.pattern,
+        version=enabled.version,
+        parameters=enabled.to_dict()["parameters"],
+        scope=enabled.scope,
+        confidence=enabled.confidence,
+        enabled=False,
+    )
+    knowledge = Knowledge().add(disabled)
+
+    assert knowledge.specs == (disabled,)
+    assert knowledge.items == []
+    assert knowledge.items_of("random_augment") == []
+    assert not knowledge.has_kind("random_augment")
+    assert knowledge.to_dict() == {"strict": False, "items": []}
 
 
 def test_repeated_identical_helpers_get_stable_occurrence_distinct_ids():

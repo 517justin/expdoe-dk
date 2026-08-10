@@ -1,8 +1,12 @@
+import json
+
 import pytest
 import pandas as pd
 
-from expdoe_dk import ObservationBatch, Parameter, Space
+from expdoe_dk import Knowledge, ObservationBatch, Parameter, Space
+from expdoe_dk.domain import ExpressionConstraint
 from expdoe_dk.errors import EngineError, ErrorCode
+from expdoe_dk.knowledge.patterns import feasibility
 from expdoe_dk.knowledge.patterns import builtin_pattern_definitions
 from expdoe_dk.knowledge.registry import PatternRegistry
 
@@ -14,10 +18,21 @@ def _builtin_registry() -> PatternRegistry:
     return registry
 
 
+def _safety_parameters(expression: str) -> dict:
+    constraint = ExpressionConstraint("source-boundary", expression)
+    return {
+        "constraint": {
+            "kind": "expression",
+            "hard": True,
+            "ast": constraint.ast,
+        }
+    }
+
+
 def test_safe_and_forbidden_artifacts_intersect(numeric_space, make_spec):
-    safe = make_spec("safe_region", parameters={"expression": "x >= 0.2"})
+    safe = make_spec("safe_region", parameters=_safety_parameters("x >= 0.2"))
     forbidden = make_spec(
-        "forbidden_region", parameters={"expression": "x > 0.8"}
+        "forbidden_region", parameters=_safety_parameters("x > 0.8")
     )
 
     artifacts = _builtin_registry().compile_many((safe, forbidden), numeric_space)
@@ -25,10 +40,196 @@ def test_safe_and_forbidden_artifacts_intersect(numeric_space, make_spec):
     assert len(artifacts.parameter_constraints) == 2
 
 
+@pytest.mark.parametrize(
+    "expression",
+    (
+        "x >= 0.2 and x <= 0.8",
+        "abs(x - 0.5) <= 0.25",
+    ),
+    ids=("boolean", "call"),
+)
+def test_frozen_canonical_safety_ast_compiles_directly(make_spec, expression):
+    """Catches frozen tuple children reaching the strict AST rehydration boundary."""
+    space = Space([Parameter("x", bounds=(0.0, 1.0))])
+    spec = make_spec("safe_region", parameters=_safety_parameters(expression))
+
+    artifacts = _builtin_registry().compile_many((spec,), space)
+
+    assert len(artifacts.parameter_constraints) == 1
+
+
+@pytest.mark.parametrize(
+    "expression",
+    (
+        "x >= 0.2 and x <= 0.8",
+        "abs(x - 0.5) <= 0.25",
+    ),
+    ids=("boolean", "call"),
+)
+def test_envelope_roundtrip_safety_ast_compiles(make_spec, expression):
+    """Catches JSON-restored AST arrays being frozen before compilation."""
+    space = Space([Parameter("x", bounds=(0.0, 1.0))])
+    knowledge = Knowledge().add(
+        make_spec("safe_region", parameters=_safety_parameters(expression))
+    )
+    restored = Knowledge.from_envelope(
+        json.loads(json.dumps(knowledge.to_envelope()))
+    )
+
+    artifacts = restored.compile(space)
+
+    assert len(artifacts.parameter_constraints) == 1
+
+
+def test_strict_affine_tiny_positive_margin_is_certified(make_spec):
+    """Catches valid strict regions being erased by an absolute margin cutoff."""
+    space = Space([Parameter("x", bounds=(0.0, 1.0))])
+    spec = make_spec(
+        "safe_region",
+        parameters=_safety_parameters("x < 1e-10"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+    artifacts = _builtin_registry().compile_many((spec,), space)
+
+    assert result.state == "valid"
+    assert len(artifacts.parameter_constraints) == 1
+
+
+def test_integral_discrete_safety_preserves_values_above_float_precision(make_spec):
+    """Catches scalar float shortcuts running before exact finite enumeration."""
+    exact_boundary = 2**53
+    space = Space(
+        [
+            Parameter(
+                "x",
+                kind="discrete",
+                values=(exact_boundary, exact_boundary + 1),
+            )
+        ]
+    )
+    spec = make_spec(
+        "safe_region",
+        parameters=_safety_parameters(f"x > {exact_boundary}"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+    artifacts = _builtin_registry().compile_many((spec,), space)
+
+    assert result.state == "valid"
+    assert len(artifacts.parameter_constraints) == 1
+
+
+def test_large_integral_finite_domain_is_inconclusive_before_float_shortcuts(
+    make_spec,
+):
+    """Catches resource-limited exact domains falling through to float proofs."""
+    exact_boundary = 2**53
+    upper = exact_boundary + 100_000
+    space = Space(
+        [Parameter("x", kind="integer", bounds=(exact_boundary, upper))]
+    )
+    spec = make_spec(
+        "safe_region",
+        parameters=_safety_parameters(f"x > {upper - 1}"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+    artifacts = _builtin_registry().compile_many((spec,), space)
+    diagnostic = next(
+        item for item in artifacts.diagnostics if item.kind == "safety_feasibility"
+    )
+
+    assert result.state == "insufficient_data"
+    assert diagnostic.payload["reason"] == "finite_domain_resource_limit"
+    assert diagnostic.payload["enumeration_size"] == 100_001
+
+
+def test_large_integral_mixed_safety_is_explicitly_inconclusive_not_conflicting(
+    make_spec,
+):
+    """An unrelated continuous dimension must not force a lossy conflict proof."""
+    exact_boundary = 2**53
+    space = Space(
+        [
+            Parameter(
+                "x",
+                kind="discrete",
+                values=(exact_boundary, exact_boundary + 1),
+            ),
+            Parameter("y", bounds=(0.0, 1.0)),
+        ]
+    )
+    spec = make_spec(
+        "safe_region",
+        factors=("x",),
+        parameters=_safety_parameters(f"x > {exact_boundary}"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+    artifacts = _builtin_registry().compile_many((spec,), space)
+
+    assert result.state == "insufficient_data"
+    assert len(artifacts.parameter_constraints) == 1
+    diagnostic = next(
+        item for item in artifacts.diagnostics if item.kind == "safety_feasibility"
+    )
+    assert diagnostic.payload["reason"] == "finite_domain_numeric_precision"
+
+
+def test_mixed_domain_large_integral_levels_avoid_float_certification(make_spec):
+    """Catches mixed finite/continuous spaces re-entering lossy scalar proofs."""
+    exact_boundary = 2**53
+    space = Space(
+        [
+            Parameter(
+                "x",
+                kind="discrete",
+                values=(exact_boundary, exact_boundary + 1),
+            ),
+            Parameter("y", bounds=(0.0, 1.0)),
+        ]
+    )
+    spec = make_spec(
+        "safe_region",
+        factors=("x",),
+        parameters=_safety_parameters(f"x > {exact_boundary}"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+    artifacts = _builtin_registry().compile_many((spec,), space)
+    diagnostic = next(
+        item for item in artifacts.diagnostics if item.kind == "safety_feasibility"
+    )
+
+    assert result.state == "insufficient_data"
+    assert diagnostic.payload["reason"] == "finite_domain_numeric_precision"
+
+
+def test_safety_validation_does_not_invoke_the_compiler(
+    monkeypatch, make_spec
+):
+    """Catches safety certification bypassing validator-before-compiler ordering."""
+    space = Space([Parameter("x", bounds=(0.0, 1.0))])
+    spec = make_spec(
+        "safe_region",
+        parameters=_safety_parameters("x >= 0.2"),
+    )
+
+    def unexpected_compile(*args, **kwargs):
+        raise AssertionError("safety validator invoked the compiler")
+
+    monkeypatch.setattr(feasibility, "_compile", unexpected_compile)
+
+    result = _builtin_registry().validate(spec, space)
+
+    assert result.state == "valid"
+
+
 def test_forbidding_the_constant_true_region_is_provably_empty(
     numeric_space, make_spec
 ):
-    spec = make_spec("forbidden_region", parameters={"expression": "True"})
+    spec = make_spec("forbidden_region", parameters=_safety_parameters("True"))
 
     result = _builtin_registry().validate(spec, numeric_space)
 
@@ -47,7 +248,7 @@ def test_safety_scope_rejects_expression_references_outside_declared_factors(
     spec = make_spec(
         "safe_region",
         factors=("x",),
-        parameters={"expression": "z >= 0.2"},
+        parameters=_safety_parameters("z >= 0.2"),
     )
 
     result = _builtin_registry().validate(spec, space)
@@ -56,7 +257,7 @@ def test_safety_scope_rejects_expression_references_outside_declared_factors(
 
 
 def test_single_out_of_bounds_safe_region_is_invalid(numeric_space, make_spec):
-    spec = make_spec("safe_region", parameters={"expression": "x > 2"})
+    spec = make_spec("safe_region", parameters=_safety_parameters("x > 2"))
 
     result = _builtin_registry().validate(spec, numeric_space)
 
@@ -66,7 +267,7 @@ def test_single_out_of_bounds_safe_region_is_invalid(numeric_space, make_spec):
 def test_constant_numeric_equality_matches_constraint_semantics(
     numeric_space, make_spec
 ):
-    spec = make_spec("safe_region", parameters={"expression": "1 == 1.0"})
+    spec = make_spec("safe_region", parameters=_safety_parameters("1 == 1.0"))
 
     result = _builtin_registry().validate(spec, numeric_space)
     artifacts = _builtin_registry().compile_many((spec,), numeric_space)
@@ -76,7 +277,7 @@ def test_constant_numeric_equality_matches_constraint_semantics(
 
 
 def test_constant_false_ordering_is_provably_empty(numeric_space, make_spec):
-    spec = make_spec("safe_region", parameters={"expression": "2 < 1"})
+    spec = make_spec("safe_region", parameters=_safety_parameters("2 < 1"))
 
     result = _builtin_registry().validate(spec, numeric_space)
 
@@ -87,7 +288,7 @@ def test_constant_false_ordering_is_provably_empty(numeric_space, make_spec):
 
 
 def test_non_boolean_constant_safety_root_is_invalid(numeric_space, make_spec):
-    spec = make_spec("safe_region", parameters={"expression": "0"})
+    spec = make_spec("safe_region", parameters=_safety_parameters("0"))
 
     result = _builtin_registry().validate(spec, numeric_space)
 
@@ -103,12 +304,12 @@ def test_provably_empty_hard_safety_intersection_is_a_typed_conflict(
     below = make_spec(
         "safe_region",
         pattern_id="KP-below",
-        parameters={"expression": "x <= 0.2"},
+        parameters=_safety_parameters("x <= 0.2"),
     )
     above = make_spec(
         "safe_region",
         pattern_id="KP-above",
-        parameters={"expression": "x >= 0.8"},
+        parameters=_safety_parameters("x >= 0.8"),
     )
 
     with pytest.raises(EngineError) as caught:
@@ -129,12 +330,12 @@ def test_strict_boundary_and_equal_point_are_provably_conflicting(
     strict = make_spec(
         "safe_region",
         pattern_id="KP-a-strict",
-        parameters={"expression": "x > 0.5"},
+        parameters=_safety_parameters("x > 0.5"),
     )
     point = make_spec(
         "safe_region",
         pattern_id="KP-z-point",
-        parameters={"expression": "x == 0.5"},
+        parameters=_safety_parameters("x == 0.5"),
     )
 
     with pytest.raises(EngineError) as caught:
@@ -159,10 +360,10 @@ def test_finite_numeric_domains_detect_empty_open_intersections(
 ):
     space = Space([parameter])
     lower = make_spec(
-        "safe_region", pattern_id="KP-lower", parameters={"expression": lower_expression}
+        "safe_region", pattern_id="KP-lower", parameters=_safety_parameters(lower_expression)
     )
     upper = make_spec(
-        "safe_region", pattern_id="KP-upper", parameters={"expression": upper_expression}
+        "safe_region", pattern_id="KP-upper", parameters=_safety_parameters(upper_expression)
     )
 
     with pytest.raises(EngineError) as caught:
@@ -183,15 +384,150 @@ def test_finite_numeric_domains_preserve_nonempty_open_intersections(
 ):
     space = Space([parameter])
     lower = make_spec(
-        "safe_region", pattern_id="KP-lower", parameters={"expression": "x > 0.2"}
+        "safe_region", pattern_id="KP-lower", parameters=_safety_parameters("x > 0.2")
     )
     upper = make_spec(
-        "safe_region", pattern_id="KP-upper", parameters={"expression": "x < 1.8"}
+        "safe_region", pattern_id="KP-upper", parameters=_safety_parameters("x < 1.8")
     )
 
     artifacts = _builtin_registry().compile_many((lower, upper), space)
 
     assert len(artifacts.parameter_constraints) == 2
+
+
+def test_self_inequality_is_a_typed_empty_safety_conflict(make_spec):
+    """Catches tautologically false comparisons bypassing interval analysis."""
+    space = Space([Parameter("x", bounds=(0.0, 1.0))])
+    spec = make_spec(
+        "safe_region",
+        pattern_id="KP-self-inequality",
+        parameters=_safety_parameters("x != x"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+
+    assert result.state == "invalid"
+    with pytest.raises(EngineError) as caught:
+        _builtin_registry().compile_many((spec,), space)
+    assert caught.value.code is ErrorCode.KNOWLEDGE_CONFLICT
+    assert caught.value.details["reason"] == "tautological_false"
+
+
+def test_continuous_multivariate_affine_contradiction_is_certified(make_spec):
+    """Catches mutually empty affine half-spaces being silently accepted."""
+    space = Space(
+        [Parameter("x", bounds=(0.0, 1.0)), Parameter("y", bounds=(0.0, 1.0))]
+    )
+    low = make_spec(
+        "safe_region",
+        pattern_id="KP-affine-low",
+        factors=("x", "y"),
+        parameters=_safety_parameters("x + y <= 0.25"),
+    )
+    high = make_spec(
+        "safe_region",
+        pattern_id="KP-affine-high",
+        factors=("x", "y"),
+        parameters=_safety_parameters("x + y >= 1.75"),
+    )
+
+    with pytest.raises(EngineError) as caught:
+        _builtin_registry().compile_many((high, low), space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_CONFLICT
+    assert caught.value.details == {
+        "source_pattern_ids": ["KP-affine-high", "KP-affine-low"],
+        "reason": "continuous_affine_infeasible",
+    }
+
+
+def test_finite_domain_safety_is_exactly_enumerated(make_spec):
+    """Catches continuous relaxations incorrectly certifying a finite domain."""
+    space = Space(
+        [
+            Parameter("x", kind="integer", bounds=(0, 1)),
+            Parameter("y", kind="integer", bounds=(0, 1)),
+        ]
+    )
+    impossible = make_spec(
+        "safe_region",
+        pattern_id="KP-finite-impossible",
+        factors=("x", "y"),
+        parameters=_safety_parameters("x + y == 0.5"),
+    )
+    possible = make_spec(
+        "safe_region",
+        pattern_id="KP-finite-possible",
+        factors=("x", "y"),
+        parameters=_safety_parameters("x + y == 1"),
+    )
+
+    with pytest.raises(EngineError) as caught:
+        _builtin_registry().compile_many((impossible,), space)
+    assert caught.value.code is ErrorCode.KNOWLEDGE_CONFLICT
+    assert caught.value.details["reason"] == "exact_finite_enumeration"
+
+    artifacts = _builtin_registry().compile_many((possible,), space)
+    assert len(artifacts.parameter_constraints) == 1
+
+
+def test_tautological_safety_is_certified_without_inconclusive_diagnostic(make_spec):
+    space = Space([Parameter("x", bounds=(0.0, 1.0))])
+    spec = make_spec(
+        "safe_region",
+        pattern_id="KP-tautology",
+        parameters=_safety_parameters("x == x"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+    artifacts = _builtin_registry().compile_many((spec,), space)
+
+    assert result.state == "valid"
+    assert not [item for item in artifacts.diagnostics if item.kind == "safety_feasibility"]
+
+
+def test_unsupported_continuous_safety_emits_provenance_diagnostic(make_spec):
+    """Unsupported forms remain explicit instead of being labelled feasible."""
+    space = Space([Parameter("x", bounds=(0.0, 1.0))])
+    spec = make_spec(
+        "safe_region",
+        pattern_id="KP-nonlinear",
+        parameters=_safety_parameters("x * x <= 0.25"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+    artifacts = _builtin_registry().compile_many((spec,), space)
+    diagnostic = next(
+        item for item in artifacts.diagnostics if item.kind == "safety_feasibility"
+    )
+
+    assert result.state == "insufficient_data"
+    assert diagnostic.source_pattern_id == spec.pattern_id
+    assert diagnostic.to_dict()["payload"] == {
+        "status": "inconclusive",
+        "reason": "unsupported_continuous_ast",
+        "source_pattern_ids": [spec.pattern_id],
+    }
+
+
+def test_finite_enumeration_resource_limit_is_explicit(make_spec):
+    space = Space([Parameter("x", kind="integer", bounds=(0, 100_000))])
+    spec = make_spec(
+        "safe_region",
+        pattern_id="KP-finite-limit",
+        parameters=_safety_parameters("x * x >= 0"),
+    )
+
+    result = _builtin_registry().validate(spec, space)
+    artifacts = _builtin_registry().compile_many((spec,), space)
+    diagnostic = next(
+        item for item in artifacts.diagnostics if item.kind == "safety_feasibility"
+    )
+
+    assert result.state == "insufficient_data"
+    assert diagnostic.payload["reason"] == "finite_domain_resource_limit"
+    assert diagnostic.payload["enumeration_size"] == 100_001
+    assert diagnostic.payload["enumeration_limit"] == 100_000
 
 
 def test_arrhenius_rejects_non_temperature_scope(numeric_space, make_spec):

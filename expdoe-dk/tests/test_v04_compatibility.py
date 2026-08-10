@@ -36,6 +36,24 @@ def test_legacy_doe_generate_remains_a_dataframe_wrapper():
     assert len(frame) == 3
 
 
+def test_legacy_doe_generate_forwards_n_restarts_to_the_design_engine():
+    """Catches the compatibility wrapper silently replacing requested restarts."""
+    from expdoe_dk.doe import generate
+
+    space = ed.Space(
+        [ed.Parameter("x", bounds=(0.0, 1.0)), ed.Parameter("y", bounds=(0.0, 1.0))]
+    )
+
+    wrapped = generate(
+        space, 6, method="lhs_maximin", seed=13, n_restarts=1
+    )
+    direct = ed.suggest_design(
+        space, 6, method="lhs_maximin", seed=13, n_restarts=1
+    )
+
+    assert wrapped.equals(direct)
+
+
 def test_top_level_suggest_design_accepts_known_legacy_tuning_keywords():
     frame = ed.suggest_design(
         ed.Space([ed.Parameter("x", bounds=(0.0, 1.0))]),

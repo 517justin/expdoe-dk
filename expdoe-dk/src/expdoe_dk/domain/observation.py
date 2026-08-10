@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
+import math
+from numbers import Real
 
 import numpy as np
 import pandas as pd
@@ -20,8 +22,9 @@ def _clone_frame(value: pd.DataFrame, name: str) -> pd.DataFrame:
     if not value.columns.is_unique:
         raise ValueError(f"{name} must not have duplicate columns.")
     cloned = value.copy(deep=True).reset_index(drop=True)
-    for column in cloned.select_dtypes(include="object"):
-        cloned[column] = cloned[column].map(deepcopy)
+    for column in cloned.columns:
+        if cloned[column].dtype == object:
+            cloned[column] = cloned[column].map(deepcopy)
     return cloned
 
 
@@ -69,12 +72,20 @@ def _validate_successful_objectives(Y: pd.DataFrame, status: pd.Series) -> None:
     successful = status.eq("success").to_numpy()
     if not successful.any():
         return
-    try:
-        values = Y.iloc[successful].to_numpy(dtype=float)
-    except (TypeError, ValueError) as error:
-        raise ValueError("successful rows must have finite objective values.") from error
-    if not np.all(np.isfinite(values)):
-        raise ValueError("successful rows must have finite objective values.")
+    values = Y.iloc[successful].to_numpy(dtype=object).reshape(-1).tolist()
+    for value in values:
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+            raise ValueError(
+                "successful rows must have finite real non-boolean objective values."
+            )
+        try:
+            finite = math.isfinite(float(value))
+        except (OverflowError, TypeError, ValueError):
+            finite = False
+        if not finite:
+            raise ValueError(
+                "successful rows must have finite real non-boolean objective values."
+            )
 
 
 @dataclass(frozen=True, init=False)

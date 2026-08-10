@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Literal
+
+from expdoe_dk.errors import ErrorCode
 
 
 ValidationState = Literal["valid", "warning", "invalid", "insufficient_data"]
@@ -39,6 +43,8 @@ class KnowledgeValidationResult:
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     effective_confidence: float | None = None
+    error_code: ErrorCode | None = None
+    error_details: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if type(self.pattern_id) is not str or not self.pattern_id:
@@ -68,6 +74,16 @@ class KnowledgeValidationResult:
                     self.effective_confidence,
                     "KnowledgeValidationResult.effective_confidence",
                 ),
+            )
+        if self.error_code is not None and not isinstance(self.error_code, ErrorCode):
+            raise TypeError("KnowledgeValidationResult.error_code must be an ErrorCode")
+        if self.error_details is not None:
+            if not isinstance(self.error_details, Mapping):
+                raise TypeError("KnowledgeValidationResult.error_details must be a mapping")
+            object.__setattr__(
+                self,
+                "error_details",
+                MappingProxyType(deepcopy(dict(self.error_details))),
             )
 
     @property

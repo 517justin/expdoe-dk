@@ -1,10 +1,16 @@
+import itertools
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from expdoe_dk import Parameter, Space, suggest_design
 from expdoe_dk.domain import CategoricalCombinationConstraint, ExpressionConstraint
-from expdoe_dk.doe.design import candidate_keys
+from expdoe_dk.doe.design import (
+    _select_balanced_maximin,
+    _solve_balanced_selection,
+    candidate_keys,
+)
 from expdoe_dk.errors import EngineError, ErrorCode
 
 
@@ -291,6 +297,74 @@ def test_balance_is_jointly_feasible_across_ordinal_factors():
     design = suggest_design(space, 2, method="sobol", seed=4)
 
     assert {tuple(row) for row in design.to_numpy()} == {(0, 1), (1, 0)}
+
+
+def test_balance_is_certified_beyond_the_exhaustive_subset_cutoff():
+    """Catches the large-pool heuristic returning 4/2 where 3/3 is feasible."""
+    rows = list(itertools.product([0, 1], repeat=5))[:23]
+    columns = list("abcde")
+    pool = pd.DataFrame(rows, columns=columns)
+    space = Space(
+        [Parameter(name, kind="ordinal", values=[0, 1]) for name in columns]
+    )
+
+    selected = _select_balanced_maximin(
+        pool, space, 6, random_ties=False
+    )
+    repeated = _select_balanced_maximin(
+        pool, space, 6, random_ties=False
+    )
+
+    pd.testing.assert_frame_equal(selected, repeated)
+    assert {column: selected[column].value_counts().to_dict() for column in columns} == {
+        column: {0: 3, 1: 3} for column in columns
+    }
+
+    model = space.physical_to_model(pool).cpu().numpy()
+    distances = np.linalg.norm(model[:, None, :] - model[None, :, :], axis=2)
+    balanced_witnesses = []
+    for indices in itertools.combinations(range(len(pool)), 6):
+        if not np.all(pool.iloc[list(indices)].to_numpy().sum(axis=0) == 3):
+            continue
+        nearest = min(
+            distances[first, second]
+            for first, second in itertools.combinations(indices, 2)
+        )
+        balanced_witnesses.append((-nearest, indices))
+    expected = min(balanced_witnesses)[1]
+    index_by_row = {tuple(row): index for index, row in enumerate(rows)}
+    actual = tuple(index_by_row[tuple(row)] for row in selected.to_numpy())
+
+    assert actual == expected
+
+
+def test_balance_certification_fails_explicitly_before_dense_resource_blowup(
+    monkeypatch,
+):
+    row_count = 300
+    parameter = Parameter("group", kind="categorical", values=["A", "B"])
+    pool = pd.DataFrame(
+        {"group": ["A" if index % 2 == 0 else "B" for index in range(row_count)]}
+    )
+    model = np.arange(row_count, dtype=float).reshape(-1, 1)
+
+    def unexpected_dense_distance(*args, **kwargs):
+        raise AssertionError("dense pairwise distance allocation was attempted")
+
+    monkeypatch.setattr(np.linalg, "norm", unexpected_dense_distance)
+
+    with pytest.raises(EngineError) as caught:
+        _solve_balanced_selection(
+            pool,
+            model,
+            [parameter],
+            6,
+            random_ties=False,
+        )
+
+    assert caught.value.code is ErrorCode.CONFIG_INVALID
+    assert caught.value.details["certification"] == "balanced_maximin"
+    assert caught.value.details["row_count"] == row_count
 
 
 def test_design_batch_is_defensive_and_detached_from_inputs():

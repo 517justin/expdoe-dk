@@ -32,6 +32,44 @@ def test_point_target_utility_penalizes_distance_on_either_side():
     assert actual.tolist() == [-2.0, 0.0, -1.5]
 
 
+@pytest.mark.parametrize(
+    "target",
+    [
+        True,
+        "5.0",
+        float("nan"),
+        float("inf"),
+        10**400,
+        [1.0, 2.0],
+        (1.0,),
+        (1.0, 2.0, 3.0),
+        (2.0, 1.0),
+        (1.0, float("nan")),
+        (False, 2.0),
+        ("1.0", 2.0),
+    ],
+)
+def test_target_objective_rejects_malformed_nonfinite_or_boolean_targets(target):
+    """Catches malformed targets escaping construction and failing in utility code."""
+    with pytest.raises(EngineError) as caught:
+        Objective("quality", direction="target", target=target)
+
+    assert caught.value.code is ErrorCode.CONFIG_INVALID
+
+
+def test_target_objective_normalizes_real_numeric_scalars_and_ranges():
+    """Catches NumPy real scalars remaining non-JSON-native in objective state."""
+    point = Objective("quality", direction="target", target=np.int64(5))
+    interval = Objective(
+        "quality", direction="target", target=(np.float32(1.5), np.int64(3))
+    )
+
+    assert point.target == 5.0
+    assert type(point.target) is float
+    assert interval.target == (1.5, 3.0)
+    assert all(type(value) is float for value in interval.target)
+
+
 def test_objective_rejects_boolean_priority_even_though_bool_is_an_int():
     """Catches bool priorities bypassing the non-negative integer rank rule."""
     with pytest.raises(EngineError) as caught:

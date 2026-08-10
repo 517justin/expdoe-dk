@@ -175,7 +175,12 @@ class Parameter:
         if self.kind not in {"integer", "discrete"}:
             raise AttributeError(f"Parameter {self.name} is not integer or discrete.")
         if self.values is not None:
-            return tuple(sorted(float(value) for value in self.values))
+            return tuple(
+                sorted(
+                    int(value) if isinstance(value, Integral) else float(value)
+                    for value in self.values
+                )
+            )
 
         low, high = self._validated_bounds()
         step = 1 if self.kind == "integer" and self.step is None else self.step
@@ -234,6 +239,25 @@ class Parameter:
                 raise ValueError(f"Parameter {self.name}: encoded values must be finite.")
             return encoded
 
+        integral_levels = (
+            self._integral_discrete_levels() if self.kind == "discrete" else None
+        )
+        if integral_levels is not None:
+            integers = self._validated_integral_discrete_values(values, integral_levels)
+            low, high = integral_levels[0], integral_levels[-1]
+            if self._uses_log_transform:
+                log_span = math.log1p((high - low) / low)
+                encoded = [
+                    math.log1p((value - low) / low) / log_span
+                    for value in integers
+                ]
+            else:
+                span = high - low
+                encoded = [(value - low) / span for value in integers]
+            if not all(math.isfinite(value) for value in encoded):
+                raise ValueError(f"Parameter {self.name}: encoded values must be finite.")
+            return encoded
+
         numeric = self._validated_physical_values(values)
         low, high = self._physical_limits()
         if self._uses_log_transform:
@@ -265,6 +289,13 @@ class Parameter:
             return [levels[int(round(value))] for value in model.tolist()]
         if self.kind == "integer":
             return self._decode_integer_values(model.tolist())
+        integral_levels = (
+            self._integral_discrete_levels() if self.kind == "discrete" else None
+        )
+        if integral_levels is not None:
+            return self._decode_integral_discrete_values(
+                model.tolist(), integral_levels
+            )
 
         low, high = self._physical_limits()
         if self._uses_log_transform:
@@ -346,6 +377,7 @@ class Parameter:
             if values.is_floating_point():
                 position = (values - low) / step
                 lower_index = torch.floor(position)
+                # Preserve the v0.4 rule: midpoints resolve upward.
                 index = lower_index + ((position - lower_index) >= 0.5)
                 snapped = low + index.clamp(0, last_index) * step
                 return snapped.to(dtype=values.dtype)
@@ -479,7 +511,17 @@ class Parameter:
         return np.asarray(snapped, dtype=output_dtype).reshape(template.shape)
 
     def _validate_continuous(self) -> None:
-        self._validated_bounds()
+        bounds = self._validated_bounds()
+        try:
+            floating_bounds = tuple(float(value) for value in bounds)
+        except OverflowError as error:
+            raise ValueError(
+                f"Parameter {self.name}: continuous bounds must be finite float values."
+            ) from error
+        if not all(math.isfinite(value) for value in floating_bounds):
+            raise ValueError(
+                f"Parameter {self.name}: continuous bounds must be finite float values."
+            )
         if self.step is not None:
             raise ValueError(
                 f"Parameter {self.name}: step must be None for continuous parameters."
@@ -491,7 +533,10 @@ class Parameter:
 
     def _validate_integer(self) -> None:
         low, high = self._validated_bounds()
-        if not (low.is_integer() and high.is_integer()):
+        if not all(
+            isinstance(value, Integral) or float(value).is_integer()
+            for value in (low, high)
+        ):
             raise ValueError(f"Parameter {self.name}: integer bounds must be integral.")
         if self.values is not None:
             raise ValueError(
@@ -499,7 +544,7 @@ class Parameter:
             )
         if self.step is not None:
             step = self._validated_step()
-            if not step.is_integer():
+            if not (isinstance(step, Integral) or float(step).is_integer()):
                 raise ValueError(f"Parameter {self.name}: integer step must be integral.")
 
     def _validate_discrete(self) -> None:
@@ -550,15 +595,27 @@ class Parameter:
                 f"Parameter {self.name}: {self.kind} parameters require at least two values."
             )
 
-    def _validated_bounds(self) -> tuple[float, float]:
+    def _validated_bounds(self) -> tuple[int | float, int | float]:
         if self.bounds is None:
             raise ValueError(f"Parameter {self.name}: {self.kind} requires bounds.")
         if len(self.bounds) != 2:
             raise ValueError(f"Parameter {self.name}: bounds must be a (low, high) pair.")
         if any(isinstance(value, bool) or not isinstance(value, Real) for value in self.bounds):
             raise ValueError(f"Parameter {self.name}: bounds must be numeric.")
-        low, high = (float(self.bounds[0]), float(self.bounds[1]))
-        if not (math.isfinite(low) and math.isfinite(high)):
+        normalized: list[int | float] = []
+        for value in self.bounds:
+            if isinstance(value, Integral):
+                normalized.append(int(value))
+                continue
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                raise ValueError(f"Parameter {self.name}: bounds must be finite.")
+            normalized.append(numeric)
+        low, high = normalized
+        if not all(
+            isinstance(value, Integral) or math.isfinite(value)
+            for value in (low, high)
+        ):
             raise ValueError(f"Parameter {self.name}: bounds must be finite.")
         if low >= high:
             raise ValueError(
@@ -566,11 +623,11 @@ class Parameter:
             )
         return low, high
 
-    def _validated_step(self) -> float:
+    def _validated_step(self) -> int | float:
         if isinstance(self.step, bool) or not isinstance(self.step, Real):
             raise ValueError(f"Parameter {self.name}: step must be numeric.")
-        step = float(self.step)
-        if not math.isfinite(step) or step <= 0:
+        step = int(self.step) if isinstance(self.step, Integral) else float(self.step)
+        if (not isinstance(step, Integral) and not math.isfinite(step)) or step <= 0:
             raise ValueError(f"Parameter {self.name}: step must be finite and > 0.")
         low, high = self._validated_bounds()
         if step > high - low:
@@ -601,13 +658,20 @@ class Parameter:
         scale = max(abs(low), abs(high), abs(floating_step))
         return (high / scale - low / scale) / (floating_step / scale)
 
-    def _validate_numeric_levels(self, values: Sequence[object]) -> tuple[float, ...]:
+    def _validate_numeric_levels(
+        self, values: Sequence[object]
+    ) -> tuple[int | float, ...]:
         if any(isinstance(value, bool) or not isinstance(value, Real) for value in values):
             raise ValueError(
                 f"Parameter {self.name}: discrete values must all be numeric."
             )
-        numeric = tuple(float(value) for value in values)
-        if not all(math.isfinite(value) for value in numeric):
+        numeric = tuple(
+            int(value) if isinstance(value, Integral) else float(value)
+            for value in values
+        )
+        if not all(
+            isinstance(value, Integral) or math.isfinite(value) for value in numeric
+        ):
             raise ValueError(f"Parameter {self.name}: discrete values must be finite.")
         return numeric
 
@@ -623,9 +687,12 @@ class Parameter:
     def _uses_log_transform(self) -> bool:
         return self.transform == "log" or self.log_scale
 
-    def _physical_limits_and_levels(self) -> tuple[float, ...]:
+    def _physical_limits_and_levels(self) -> tuple[int | float, ...]:
         if self.values is not None:
-            return tuple(float(value) for value in self.values)
+            return tuple(
+                int(value) if isinstance(value, Integral) else float(value)
+                for value in self.values
+            )
         return self._validated_bounds()
 
     def _physical_limits(self) -> tuple[float, float]:
@@ -697,6 +764,70 @@ class Parameter:
             integers.append(integer)
         return tuple(integers)
 
+    def _validated_integral_discrete_values(
+        self, values: Sequence[object], levels: tuple[int, ...]
+    ) -> tuple[int, ...]:
+        """Validate explicit integral discrete values without float coercion."""
+        integers: list[int] = []
+        declared = set(levels)
+        for value in values:
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise ValueError(
+                    f"Parameter {self.name}: physical values must be declared levels."
+                )
+            if isinstance(value, Integral):
+                integer = int(value)
+            else:
+                floating = float(value)
+                if not math.isfinite(floating):
+                    raise ValueError(
+                        f"Parameter {self.name}: physical values must be finite."
+                    )
+                if not floating.is_integer():
+                    raise ValueError(
+                        f"Parameter {self.name}: physical values must be declared levels."
+                    )
+                integer = int(floating)
+            if integer not in declared:
+                raise ValueError(
+                    f"Parameter {self.name}: physical values must be declared levels."
+                )
+            integers.append(integer)
+        return tuple(integers)
+
+    def _decode_integral_discrete_values(
+        self, model_values: Sequence[float], levels: tuple[int, ...]
+    ) -> list[int]:
+        """Decode explicit integral levels without collapsing large neighbors."""
+        low, high = levels[0], levels[-1]
+        if self._uses_log_transform:
+            log_span = math.log1p((high - low) / low)
+            decoded_offsets = [
+                low * math.expm1(value * log_span) for value in model_values
+            ]
+            return [
+                min(
+                    levels,
+                    key=lambda level: (abs((level - low) - offset), level),
+                )
+                for offset in decoded_offsets
+            ]
+
+        span = high - low
+        decoded: list[int] = []
+        for model_value in model_values:
+            numerator, denominator = float(model_value).as_integer_ratio()
+            decoded.append(
+                min(
+                    levels,
+                    key=lambda level: (
+                        abs((level - low) * denominator - numerator * span),
+                        level,
+                    ),
+                )
+            )
+        return decoded
+
     def _integer_grid(self) -> tuple[int, int, int]:
         """Return exact lower bound, step, and final grid index."""
         assert self.bounds is not None
@@ -710,7 +841,7 @@ class Parameter:
     ) -> int:
         """Round a rational grid position to its nearest bounded index."""
         quotient, remainder = divmod(numerator, denominator)
-        if 2 * remainder > denominator:
+        if 2 * remainder >= denominator:
             quotient += 1
         return min(max(quotient, 0), last_index)
 

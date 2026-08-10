@@ -1,7 +1,9 @@
 """Objective definitions and legacy objective normalization."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from numbers import Real
 from typing import Literal, Sequence
 
 import numpy as np
@@ -42,16 +44,46 @@ class Objective:
                     "Target objectives require a target value",
                 )
             if isinstance(self.target, tuple):
-                if len(self.target) != 2 or self.target[0] > self.target[1]:
+                if len(self.target) != 2:
                     raise EngineError(
                         ErrorCode.CONFIG_INVALID,
                         "Target ranges must be ordered (low, high) pairs",
                     )
+                endpoints = tuple(self._target_number(value) for value in self.target)
+                if endpoints[0] > endpoints[1]:
+                    raise EngineError(
+                        ErrorCode.CONFIG_INVALID,
+                        "Target ranges must be ordered (low, high) pairs",
+                    )
+                object.__setattr__(self, "target", endpoints)
+            else:
+                object.__setattr__(self, "target", self._target_number(self.target))
         elif self.target is not None:
             raise EngineError(
                 ErrorCode.CONFIG_INVALID,
                 f"Objective {self.direction} does not accept a target",
             )
+
+    @staticmethod
+    def _target_number(value: object) -> float:
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise EngineError(
+                ErrorCode.CONFIG_INVALID,
+                "Target values must be finite non-boolean real numbers",
+            )
+        try:
+            numeric = float(value)
+        except (OverflowError, TypeError, ValueError) as error:
+            raise EngineError(
+                ErrorCode.CONFIG_INVALID,
+                "Target values must be finite non-boolean real numbers",
+            ) from error
+        if not math.isfinite(numeric):
+            raise EngineError(
+                ErrorCode.CONFIG_INVALID,
+                "Target values must be finite non-boolean real numbers",
+            )
+        return numeric
 
     def to_utility(self, values: np.ndarray) -> np.ndarray:
         """Return higher-is-better utilities in the objective's native units."""

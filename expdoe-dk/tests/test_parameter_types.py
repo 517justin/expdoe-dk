@@ -1,7 +1,51 @@
 import numpy as np
 import pytest
+import torch
 
 from expdoe_dk.domain import Parameter
+
+
+def test_adjacent_integral_domains_above_float_precision_remain_distinct():
+    """Catches construction collapsing adjacent exact integers through float64."""
+    low = 2**53
+
+    integer = Parameter("count", kind="integer", bounds=(low, low + 1))
+    discrete = Parameter("dose", kind="discrete", values=[low, low + 1])
+
+    assert integer.numeric_levels == (low, low + 1)
+    assert discrete.numeric_levels == (low, low + 1)
+    assert integer.decode(integer.encode([low, low + 1])) == [low, low + 1]
+    assert discrete.decode(discrete.encode([low, low + 1])) == [low, low + 1]
+
+
+def test_adjacent_integral_log_levels_preserve_their_model_span():
+    """Catches log subtraction collapsing adjacent arbitrary-precision levels."""
+    low = 2**53
+    parameter = Parameter(
+        "dose", kind="discrete", values=[low, low + 1], transform="log"
+    )
+
+    encoded = parameter.encode([low, low + 1])
+
+    assert encoded == pytest.approx([0.0, 1.0])
+    assert parameter.decode(encoded) == [low, low + 1]
+
+
+def test_integer_midpoint_ties_choose_the_upper_level_on_every_backend():
+    """Catches decode, Python, NumPy, and Torch choosing different tie sides."""
+    low = 2**53
+    parameter = Parameter("count", kind="integer", bounds=(low, low + 4), step=4)
+    midpoint = low + 2
+    upper = low + 4
+
+    assert parameter.decode([0.5]) == [upper]
+    assert parameter.snap([midpoint]).tolist() == [upper]
+    assert parameter.snap(np.array([midpoint], dtype=np.int64)).tolist() == [upper]
+    assert parameter.snap(np.array([float(midpoint)], dtype=np.float64)).tolist() == [upper]
+    assert parameter.snap(torch.tensor([midpoint], dtype=torch.int64)).tolist() == [upper]
+    assert parameter.snap(torch.tensor([float(midpoint)], dtype=torch.float64)).tolist() == [
+        float(upper)
+    ]
 
 
 @pytest.mark.parametrize(

@@ -353,10 +353,12 @@ def generate(
     Historical tuning arguments are accepted so existing callers continue to
     run; the v0.5 deterministic selector intentionally does not vary by them.
     """
-    del n_iterations, n_restarts, max_resample, verbose
+    del n_iterations, max_resample, verbose
     from .design import suggest_design
 
-    result = suggest_design(space, n, method=method, seed=seed)
+    result = suggest_design(
+        space, n, method=method, seed=seed, n_restarts=n_restarts
+    )
     assert isinstance(result, pd.DataFrame)
     return result
 

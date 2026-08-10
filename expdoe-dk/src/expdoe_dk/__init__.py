@@ -16,8 +16,9 @@ Quick start:
 """
 
 from .space import Parameter, LinearConstraint, Space
-from .knowledge import Knowledge
+from .knowledge import KNOWLEDGE_SCHEMA_VERSION, Knowledge
 from .bo import Campaign, Result
+from .bo.loop import CHECKPOINT_SCHEMA_VERSION
 from .doe import (
     DesignBatch,
     DesignDiagnostics,
@@ -80,6 +81,8 @@ __all__ = [
     "ErrorCode",
     "ENGINE_VERSION",
     "SPACE_SCHEMA_VERSION",
+    "KNOWLEDGE_SCHEMA_VERSION",
+    "CHECKPOINT_SCHEMA_VERSION",
     "Evidence",
     "KnowledgePatternSpec",
     "KnowledgeScope",

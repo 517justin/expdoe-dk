@@ -12,6 +12,9 @@ from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import Bounds as ScipyBounds
+from scipy.optimize import LinearConstraint as ScipyLinearConstraint
+from scipy.optimize import milp
 from scipy.spatial.distance import pdist
 from scipy.stats import qmc
 
@@ -40,6 +43,7 @@ MAX_ENUMERATION_ROWS = 100_000
 _MAX_ATTEMPTS = 48
 _DEFAULT_LHS_RESTARTS = 10
 _EXACT_BALANCE_COMBINATIONS = 100_000
+_MAX_BALANCED_MAXIMIN_COEFFICIENTS = 10_000_000
 
 
 @dataclass(frozen=True)
@@ -357,6 +361,15 @@ def _select_balanced_maximin(
                 best_indices, best_score = indices, score
         assert best_indices is not None
         return pool.iloc[list(best_indices)].reset_index(drop=True)
+    if balanced:
+        indices = _solve_balanced_selection(
+            pool,
+            model,
+            balanced,
+            n,
+            random_ties=random_ties,
+        )
+        return pool.iloc[list(indices)].reset_index(drop=True)
 
     selected: list[int] = []
     remaining = np.ones(len(pool), dtype=bool)
@@ -378,6 +391,276 @@ def _select_balanced_maximin(
         distances = np.linalg.norm(model - model[best], axis=1)
         nearest = np.minimum(nearest, distances)
     return pool.iloc[selected].reset_index(drop=True)
+
+
+def _solve_balanced_selection(
+    pool: pd.DataFrame,
+    model: np.ndarray,
+    parameters: list[object],
+    n: int,
+    *,
+    random_ties: bool,
+) -> tuple[int, ...]:
+    """Certify balance, then maximin distance, then lexicographic pool order."""
+    row_count = len(pool)
+    if not random_ties and n > 1:
+        pair_count = row_count * (row_count - 1) // 2
+        estimated_variables = row_count + 1 + sum(
+            len(parameter.values or ()) for parameter in parameters
+        )
+        estimated_coefficients = pair_count * estimated_variables
+        if estimated_coefficients > _MAX_BALANCED_MAXIMIN_COEFFICIENTS:
+            raise EngineError(
+                ErrorCode.CONFIG_INVALID,
+                "Balanced maximin certification exceeds the declared resource limit",
+                details={
+                    "certification": "balanced_maximin",
+                    "solver": "scipy.optimize.milp",
+                    "row_count": row_count,
+                    "pair_count": pair_count,
+                    "estimated_coefficients": estimated_coefficients,
+                    "coefficient_limit": _MAX_BALANCED_MAXIMIN_COEFFICIENTS,
+                },
+            )
+    level_memberships: list[np.ndarray] = []
+    level_targets: list[float] = []
+    for parameter in parameters:
+        levels = tuple(parameter.values or ())
+        tokens = pool[parameter.name].map(_scalar_token).tolist()
+        for level in levels:
+            token = _scalar_token(level)
+            level_memberships.append(
+                np.asarray([value == token for value in tokens], dtype=float)
+            )
+            level_targets.append(n / len(levels))
+
+    max_deviation_index = row_count
+    deviation_start = row_count + 1
+    variable_count = deviation_start + len(level_memberships)
+    rows: list[np.ndarray] = []
+    lower: list[float] = []
+    upper: list[float] = []
+
+    selected_count = np.zeros(variable_count, dtype=float)
+    selected_count[:row_count] = 1.0
+    rows.append(selected_count)
+    lower.append(float(n))
+    upper.append(float(n))
+
+    for offset, (membership, target) in enumerate(
+        zip(level_memberships, level_targets, strict=True)
+    ):
+        deviation_index = deviation_start + offset
+        at_most = np.zeros(variable_count, dtype=float)
+        at_most[:row_count] = membership
+        at_most[deviation_index] = -1.0
+        rows.append(at_most)
+        lower.append(-np.inf)
+        upper.append(target)
+
+        at_least = np.zeros(variable_count, dtype=float)
+        at_least[:row_count] = membership
+        at_least[deviation_index] = 1.0
+        rows.append(at_least)
+        lower.append(target)
+        upper.append(np.inf)
+
+        bounded_by_maximum = np.zeros(variable_count, dtype=float)
+        bounded_by_maximum[deviation_index] = 1.0
+        bounded_by_maximum[max_deviation_index] = -1.0
+        rows.append(bounded_by_maximum)
+        lower.append(-np.inf)
+        upper.append(0.0)
+
+    variable_bounds = ScipyBounds(
+        np.zeros(variable_count),
+        np.concatenate(
+            (
+                np.ones(row_count),
+                np.full(variable_count - row_count, np.inf),
+            )
+        ),
+    )
+    integrality = np.concatenate(
+        (np.ones(row_count), np.zeros(variable_count - row_count))
+    )
+
+    def solve(
+        objective: np.ndarray,
+        extra_rows: list[np.ndarray] | tuple[np.ndarray, ...] = (),
+        extra_lower: list[float] | tuple[float, ...] = (),
+        extra_upper: list[float] | tuple[float, ...] = (),
+    ):
+        matrix = np.vstack((*rows, *extra_rows))
+        constraints = ScipyLinearConstraint(
+            matrix,
+            np.asarray((*lower, *extra_lower)),
+            np.asarray((*upper, *extra_upper)),
+        )
+        return milp(
+            c=objective,
+            integrality=integrality,
+            bounds=variable_bounds,
+            constraints=constraints,
+            options={"presolve": True},
+        )
+
+    balance_objective = np.zeros(variable_count)
+    balance_objective[max_deviation_index] = 1.0
+    balance_result = solve(balance_objective)
+    if not balance_result.success or balance_result.x is None:
+        raise EngineError(
+            ErrorCode.CONFIG_INVALID,
+            "Categorical balance could not be certified by the declared solver",
+            details={
+                "solver": "scipy.optimize.milp",
+                "status": int(balance_result.status),
+                "message": str(balance_result.message),
+            },
+        )
+
+    optimum_maximum = float(balance_result.x[max_deviation_index])
+    maximum_row = np.zeros(variable_count)
+    maximum_row[max_deviation_index] = 1.0
+    rows.append(maximum_row)
+    lower.append(-np.inf)
+    upper.append(optimum_maximum + 1e-8)
+
+    total_objective = np.zeros(variable_count)
+    total_objective[deviation_start:] = 1.0
+    total_result = solve(total_objective)
+    if not total_result.success or total_result.x is None:
+        raise EngineError(
+            ErrorCode.CONFIG_INVALID,
+            "Minimum total categorical imbalance could not be certified",
+            details={
+                "solver": "scipy.optimize.milp",
+                "status": int(total_result.status),
+                "message": str(total_result.message),
+            },
+        )
+    optimum_total = float(total_result.fun)
+    total_row = np.zeros(variable_count)
+    total_row[deviation_start:] = 1.0
+    rows.append(total_row)
+    lower.append(-np.inf)
+    upper.append(optimum_total + 1e-8)
+
+    if not random_ties and n > 1:
+        distances = np.linalg.norm(
+            model[:, None, :] - model[None, :, :], axis=2
+        )
+        thresholds = sorted(
+            {
+                float(distances[first, second])
+                for first in range(row_count)
+                for second in range(first + 1, row_count)
+            }
+        )
+
+        def distance_rows(threshold: float) -> list[np.ndarray]:
+            exclusions: list[np.ndarray] = []
+            for first in range(row_count):
+                for second in range(first + 1, row_count):
+                    if distances[first, second] + 1e-12 >= threshold:
+                        continue
+                    row = np.zeros(variable_count, dtype=float)
+                    row[first] = row[second] = 1.0
+                    exclusions.append(row)
+            return exclusions
+
+        low_index = 0
+        high_index = len(thresholds) - 1
+        best_threshold = thresholds[0] if thresholds else 0.0
+        while low_index <= high_index:
+            middle = (low_index + high_index) // 2
+            threshold = thresholds[middle]
+            exclusions = distance_rows(threshold)
+            result = solve(
+                np.zeros(variable_count),
+                exclusions,
+                [-np.inf] * len(exclusions),
+                [1.0] * len(exclusions),
+            )
+            if result.success:
+                best_threshold = threshold
+                low_index = middle + 1
+            elif result.status == 2:
+                high_index = middle - 1
+            else:
+                raise EngineError(
+                    ErrorCode.CONFIG_INVALID,
+                    "Balanced maximin distance could not be certified",
+                    details={
+                        "solver": "scipy.optimize.milp",
+                        "status": int(result.status),
+                        "message": str(result.message),
+                    },
+                )
+        exclusions = distance_rows(best_threshold)
+        rows.extend(exclusions)
+        lower.extend([-np.inf] * len(exclusions))
+        upper.extend([1.0] * len(exclusions))
+
+    selected: list[int] = []
+    next_index = 0
+    zero_objective = np.zeros(variable_count)
+    while len(selected) < n:
+        found = False
+        for candidate in range(next_index, row_count):
+            trial_rows: list[np.ndarray] = []
+            trial_lower: list[float] = []
+            trial_upper: list[float] = []
+            for excluded in range(next_index, candidate):
+                row = np.zeros(variable_count, dtype=float)
+                row[excluded] = 1.0
+                trial_rows.append(row)
+                trial_lower.append(0.0)
+                trial_upper.append(0.0)
+            candidate_row = np.zeros(variable_count, dtype=float)
+            candidate_row[candidate] = 1.0
+            trial_rows.append(candidate_row)
+            trial_lower.append(1.0)
+            trial_upper.append(1.0)
+            result = solve(
+                zero_objective,
+                trial_rows,
+                trial_lower,
+                trial_upper,
+            )
+            if result.success:
+                rows.extend(trial_rows)
+                lower.extend(trial_lower)
+                upper.extend(trial_upper)
+                selected.append(candidate)
+                next_index = candidate + 1
+                found = True
+                break
+            if result.status != 2:
+                raise EngineError(
+                    ErrorCode.CONFIG_INVALID,
+                    "Lexicographic balanced selection could not be certified",
+                    details={
+                        "solver": "scipy.optimize.milp",
+                        "status": int(result.status),
+                        "message": str(result.message),
+                    },
+                )
+        if not found:
+            raise EngineError(
+                ErrorCode.CONFIG_INVALID,
+                "Balance solver could not construct a certified selection",
+                details={"requested": n, "selected": len(selected)},
+            )
+
+    indices = tuple(selected)
+    if len(indices) != n:
+        raise EngineError(
+            ErrorCode.CONFIG_INVALID,
+            "Balance solver returned an uncertified selection cardinality",
+            details={"requested": n, "selected": len(indices)},
+        )
+    return indices
 
 
 def _selection_score(

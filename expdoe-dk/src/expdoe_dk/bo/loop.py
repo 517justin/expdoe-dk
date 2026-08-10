@@ -24,6 +24,8 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from ..space import Space
 from ..knowledge import Knowledge
+from ..domain.space import ENGINE_VERSION
+from ..errors import EngineError, ErrorCode
 from ..knowledge._frame import (
     flip_for_minimize,
     internal_to_physical,
@@ -42,6 +44,8 @@ from .gp import build_gp
 
 log = logging.getLogger("expdoe_dk.bo.Campaign")
 
+CHECKPOINT_SCHEMA_VERSION = "2.0"
+
 
 # --------------------------------------------------------------------- #
 # Result container
@@ -59,6 +63,7 @@ class Result:
     notes: list[str] = field(default_factory=list)
     param_units: dict[str, str] = field(default_factory=dict)
     param_kinds: dict[str, str] = field(default_factory=dict)
+    knowledge: dict[str, object] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -69,6 +74,7 @@ class Result:
             "objectives": self.objectives,
             "maximize": self.maximize,
             "knowledge_summary": self.knowledge_summary,
+            "knowledge": self.knowledge,
             "notes": self.notes,
             "param_units": self.param_units,
             "param_kinds": self.param_kinds,
@@ -539,6 +545,7 @@ class Campaign:
             objectives=list(self.space.objectives),
             maximize=list(self.space.maximize),
             knowledge_summary=self.knowledge.to_dict()["items"],
+            knowledge=self.knowledge.to_envelope(),
             param_units={p.name: p.unit for p in self.space.params},
             param_kinds={p.name: p.kind for p in self.space.params},
         )
@@ -562,8 +569,10 @@ class Campaign:
     def save_checkpoint(self, path: str | Path) -> None:
         p = Path(path)
         state = {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "engine_version": ENGINE_VERSION,
             "space": self.space.to_dict(),
-            "knowledge": self.knowledge.to_dict(),
+            "knowledge": self.knowledge.to_envelope(),
             "seed": self.seed,
             "history": self.history_df().to_dict(orient="records"),
             "trial_kind": list(self._trial_kind),
@@ -573,8 +582,57 @@ class Campaign:
     @classmethod
     def load_checkpoint(cls, path: str | Path) -> "Campaign":
         state = json.loads(Path(path).read_text())
+        if not isinstance(state, dict):
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Campaign checkpoint must be a JSON object",
+            )
+        if "schema_version" not in state:
+            return cls._load_v04_checkpoint(state)
+        expected = {
+            "schema_version",
+            "engine_version",
+            "space",
+            "knowledge",
+            "seed",
+            "history",
+            "trial_kind",
+        }
+        actual = set(state)
+        if actual != expected:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Campaign checkpoint has incompatible fields",
+                details={
+                    "missing": sorted(expected - actual),
+                    "unknown": sorted(actual - expected),
+                },
+            )
+        if state["schema_version"] != CHECKPOINT_SCHEMA_VERSION:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Unsupported Campaign schema version {state['schema_version']!r}",
+            )
+        if state["engine_version"] != ENGINE_VERSION:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Unsupported Campaign engine version {state['engine_version']!r}",
+            )
+        space = Space.from_dict(state["space"])
+        knowledge = Knowledge.from_envelope(state["knowledge"])
+        return cls._restore_checkpoint_state(state, space, knowledge)
+
+    @classmethod
+    def _load_v04_checkpoint(cls, state: dict) -> "Campaign":
+        """Preserve the exact unversioned v0.4 checkpoint migration path."""
         space = Space.from_dict(state["space"])
         knowledge = Knowledge.from_dict(state["knowledge"])
+        return cls._restore_checkpoint_state(state, space, knowledge)
+
+    @classmethod
+    def _restore_checkpoint_state(
+        cls, state: dict, space: Space, knowledge: Knowledge
+    ) -> "Campaign":
         c = cls(space=space, knowledge=knowledge, seed=state["seed"])
         # Re-tell from history.
         history = pd.DataFrame(state["history"])

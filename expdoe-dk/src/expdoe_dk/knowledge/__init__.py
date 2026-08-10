@@ -17,17 +17,19 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from expdoe_dk.domain import ExpressionConstraint
-from expdoe_dk.errors import EngineError
+from expdoe_dk.domain.space import ENGINE_VERSION
+from expdoe_dk.errors import EngineError, ErrorCode
 
 from ._frame import PhysicalEffect, flip_for_minimize, InternalDirection
 from .artifacts import OptimizationArtifacts
 from .monotone import epsilon_from_prior
 from .patterns import GP_PRIOR_PRESETS, builtin_pattern_definitions
-from .registry import PatternRegistry
+from .registry import PatternRegistry, ProviderRecord
 from .specs import KnowledgePatternSpec, KnowledgeScope, make_pattern_spec
 from .validators import (
     MonotoneCheckResult,
@@ -97,6 +99,8 @@ _LEGACY_PATTERN_KEYS = frozenset(
     }
 )
 
+KNOWLEDGE_SCHEMA_VERSION = "1.0"
+
 
 def _legacy_item_from_spec(spec: KnowledgePatternSpec) -> Any | None:
     """Render one built-in declaration through the exact v0.4 item view."""
@@ -158,6 +162,7 @@ class Knowledge:
                 registry.register(definition)
         self._registry = registry
         self._specs: list[KnowledgePatternSpec] = []
+        self._restored_provider_records: tuple[ProviderRecord, ...] = ()
         self._strict = False  # legacy flag; no longer affects Campaign behaviour
 
     def add(self, spec: KnowledgePatternSpec) -> "Knowledge":
@@ -292,7 +297,7 @@ class Knowledge:
         for factor in factors:
             self._require_name(factor, "factors")
         try:
-            ExpressionConstraint(
+            constraint = ExpressionConstraint(
                 "knowledge-helper-validation",
                 expression,
                 allowed_names=factors or None,
@@ -303,7 +308,13 @@ class Knowledge:
             make_pattern_spec(
                 pattern="safe_region",
                 version="1.0",
-                parameters={"expression": expression},
+                parameters={
+                    "constraint": {
+                        "kind": "expression",
+                        "hard": True,
+                        "ast": constraint.ast,
+                    }
+                },
                 scope=KnowledgeScope(factors=factors),
                 confidence=confidence,
             )
@@ -516,6 +527,7 @@ class Knowledge:
         return [
             item
             for spec in self._specs
+            if spec.enabled
             if (item := _legacy_item_from_spec(spec)) is not None
         ]
 
@@ -528,6 +540,91 @@ class Knowledge:
     def registry(self) -> PatternRegistry:
         return self._registry
 
+    @property
+    def provider_records(self) -> tuple[ProviderRecord, ...]:
+        """Return deterministic detached provider declarations for audit/reload."""
+        current = tuple(
+            item
+            for item in self._registry.provider_records
+            if isinstance(item, ProviderRecord)
+        )
+        keyed = {
+            (
+                item.canonical_distribution_name,
+                item.entry_point_name,
+            ): item
+            for item in self._restored_provider_records
+        }
+        for item in current:
+            keyed[(item.canonical_distribution_name, item.entry_point_name)] = item
+        return tuple(keyed[key] for key in sorted(keyed))
+
+    def _verify_restored_provider_records(self) -> None:
+        """Require exact explicit reloads for providers used by enabled specs."""
+        enabled = {
+            (spec.pattern, spec.version) for spec in self._specs if spec.enabled
+        }
+        required = tuple(
+            provider
+            for provider in self._restored_provider_records
+            if any(
+                (definition.pattern, definition.version) in enabled
+                for definition in provider.definitions
+            )
+        )
+        if not required:
+            return
+
+        current = {
+            (item.canonical_distribution_name, item.entry_point_name): item
+            for item in self._registry.provider_records
+            if isinstance(item, ProviderRecord)
+        }
+        missing: list[ProviderRecord] = []
+        mismatched: list[tuple[ProviderRecord, ProviderRecord]] = []
+        for expected in required:
+            key = (
+                expected.canonical_distribution_name,
+                expected.entry_point_name,
+            )
+            actual = current.get(key)
+            if actual is None:
+                missing.append(expected)
+            elif actual != expected:
+                mismatched.append((expected, actual))
+        if not missing and not mismatched:
+            return
+
+        missing_patterns = sorted(
+            {
+                f"{definition.pattern}@{definition.version}"
+                for provider in missing
+                for definition in provider.definitions
+                if (definition.pattern, definition.version) in enabled
+            }
+        )
+        raise EngineError(
+            ErrorCode.EXTENSION_NOT_ALLOWED,
+            "Knowledge pattern providers must be explicitly reloaded with exact "
+            "recorded provenance before compilation",
+            details={
+                "missing_patterns": missing_patterns,
+                "required_providers": [item.to_dict() for item in required],
+                "missing_provider_records": [item.to_dict() for item in missing],
+                "mismatched_provider_records": [
+                    {
+                        "expected": expected.to_dict(),
+                        "actual": actual.to_dict(),
+                    }
+                    for expected, actual in mismatched
+                ],
+            },
+            hints=(
+                "Call load_pattern_providers() with the recorded distributions "
+                "and restore using that registry.",
+            ),
+        )
+
     def has_kind(self, kind: str) -> bool:
         return bool(self.items_of(kind))
 
@@ -535,6 +632,7 @@ class Knowledge:
         return [
             item
             for spec in self._specs
+            if spec.enabled
             if spec.pattern == kind
             if (item := _legacy_item_from_spec(spec)) is not None
         ]
@@ -648,9 +746,136 @@ class Knowledge:
         """Serialize the versioned declarations without changing v0.4 payloads."""
         return {"specs": [spec.to_dict() for spec in self._specs]}
 
+    def to_envelope(self) -> dict[str, object]:
+        """Serialize all declarations and provider provenance reversibly."""
+        return {
+            "schema_version": KNOWLEDGE_SCHEMA_VERSION,
+            "engine_version": ENGINE_VERSION,
+            "strict": self._strict,
+            "specs": [spec.to_dict() for spec in self._specs],
+            "providers": [item.to_dict() for item in self.provider_records],
+        }
+
+    @classmethod
+    def from_envelope(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        registry: PatternRegistry | None = None,
+    ) -> "Knowledge":
+        """Restore the current versioned envelope without loading executable code."""
+        if not isinstance(payload, Mapping):
+            raise TypeError("Knowledge envelope must be an object")
+        expected = {
+            "schema_version",
+            "engine_version",
+            "strict",
+            "specs",
+            "providers",
+        }
+        actual = set(payload)
+        if actual != expected:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Knowledge envelope has incompatible fields",
+                details={
+                    "missing": sorted(expected - actual),
+                    "unknown": sorted(actual - expected),
+                },
+            )
+        if payload["schema_version"] != KNOWLEDGE_SCHEMA_VERSION:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Unsupported Knowledge schema version {payload['schema_version']!r}",
+            )
+        if payload["engine_version"] != ENGINE_VERSION:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Unsupported Knowledge engine version {payload['engine_version']!r}",
+            )
+        if type(payload["strict"]) is not bool:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Knowledge strict flag must be a boolean",
+            )
+        raw_specs = payload["specs"]
+        raw_providers = payload["providers"]
+        if type(raw_specs) is not list or type(raw_providers) is not list:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Knowledge specs and providers must be JSON arrays",
+            )
+        try:
+            specs = tuple(KnowledgePatternSpec.from_dict(item) for item in raw_specs)
+            providers = tuple(ProviderRecord.from_dict(item) for item in raw_providers)
+        except (TypeError, ValueError) as error:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Knowledge envelope declaration is invalid: {error}",
+            ) from error
+        knowledge = cls(registry=registry)
+        knowledge._strict = payload["strict"]
+        knowledge._restored_provider_records = tuple(
+            sorted(
+                providers,
+                key=lambda item: (
+                    item.canonical_distribution_name,
+                    item.entry_point_name,
+                ),
+            )
+        )
+        try:
+            for spec in specs:
+                knowledge.add(spec)
+        except (TypeError, ValueError) as error:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Knowledge envelope specs are invalid: {error}",
+            ) from error
+        return knowledge
+
     def compile(self, space, observations=None) -> OptimizationArtifacts:
+        self._verify_restored_provider_records()
+        registered = {
+            (definition.pattern, definition.version)
+            for definition in self._registry.definitions()
+        }
+        missing = sorted(
+            {
+                (spec.pattern, spec.version)
+                for spec in self._specs
+                if spec.enabled and (spec.pattern, spec.version) not in registered
+            }
+        )
+        required_providers = tuple(
+            provider
+            for provider in self.provider_records
+            if any(
+                (definition.pattern, definition.version) in missing
+                for definition in provider.definitions
+            )
+        )
+        if required_providers:
+            raise EngineError(
+                ErrorCode.EXTENSION_NOT_ALLOWED,
+                "Knowledge pattern providers must be explicitly reloaded before compilation",
+                details={
+                    "missing_patterns": [
+                        f"{pattern}@{version}" for pattern, version in missing
+                    ],
+                    "required_providers": [
+                        provider.to_dict() for provider in required_providers
+                    ],
+                },
+                hints=(
+                    "Call load_pattern_providers() with the recorded distributions "
+                    "and restore using that registry.",
+                ),
+            )
         effective_specs: list[KnowledgePatternSpec] = []
         for spec in self._specs:
+            if not spec.enabled:
+                continue
             if (
                 (spec.pattern, spec.version) != ("monotone", "1.0")
                 or spec.parameters["epsilon"] != "auto"
@@ -732,6 +957,7 @@ class EpsilonAutoRescueNotice(UserWarning):
 
 __all__ = [
     "Knowledge",
+    "KNOWLEDGE_SCHEMA_VERSION",
     "EpsilonConflictError",
     "EpsilonAutoRescueNotice",
     "LearnableMeanAbsorptionWarning",
