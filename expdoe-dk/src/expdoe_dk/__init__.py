@@ -19,6 +19,8 @@ from .space import Parameter, LinearConstraint, Space
 from .knowledge import Knowledge
 from .bo import Campaign, Result
 from .doe import generate as suggest_design
+from .domain import Objective, normalize_objectives
+from .errors import EngineError, ErrorCode
 
 __all__ = [
     "Parameter",
@@ -28,6 +30,10 @@ __all__ = [
     "Campaign",
     "Result",
     "suggest_design",
+    "Objective",
+    "normalize_objectives",
+    "EngineError",
+    "ErrorCode",
 ]
 
 __version__ = "0.4.0"
