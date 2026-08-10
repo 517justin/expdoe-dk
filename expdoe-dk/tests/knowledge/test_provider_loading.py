@@ -605,6 +605,7 @@ def test_provider_commit_failure_is_typed_and_preserves_registry_state(
 
         def __setattr__(self, name, value):
             if name == "_definitions" and self.fail_commit:
+                super().__setattr__(name, value)
                 raise RuntimeError("sensitive injected commit failure")
             super().__setattr__(name, value)
 

@@ -43,13 +43,21 @@ class PatternRegistry:
             self._validate_definition(definition)
 
         with self._lock:
-            replacement = dict(self._definitions)
+            original = self._definitions
+            replacement = dict(original)
             for definition in incoming:
                 key = (definition.pattern, definition.version)
                 if key in replacement:
                     raise ValueError(f"Pattern {key} already registered")
                 replacement[key] = definition
-            self._definitions = replacement
+            try:
+                self._definitions = replacement
+            except BaseException:
+                try:
+                    object.__setattr__(self, "_definitions", original)
+                except BaseException:
+                    pass
+                raise
 
     @staticmethod
     def _validate_definition(definition: KnowledgePatternDefinition) -> None:
