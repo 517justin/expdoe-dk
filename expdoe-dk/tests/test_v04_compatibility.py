@@ -3,6 +3,7 @@ from pathlib import Path
 import expdoe_dk as ed
 import numpy as np
 import pytest
+import torch
 
 from expdoe_dk.domain import LinearConstraint as DomainLinearConstraint
 from expdoe_dk.domain import Parameter as DomainParameter
@@ -80,3 +81,79 @@ def test_public_parameter_and_space_are_domain_identities_but_linear_is_adapter(
     assert ed.Parameter is DomainParameter
     assert ed.Space is DomainSpace
     assert ed.LinearConstraint is not DomainLinearConstraint
+
+
+@pytest.mark.parametrize(
+    ("parameter", "values", "expected"),
+    [
+        (ed.Parameter("x", bounds=(0.0, 10.0)), [1.25, 8.75], [1.25, 8.75]),
+        (
+            ed.Parameter("dose", kind="discrete", values=[0.1, 0.5, 0.9]),
+            [0.2, 0.8],
+            [0.1, 0.9],
+        ),
+        (
+            ed.Parameter("count", kind="integer", bounds=(1, 9), step=2),
+            [1.2, 4.8],
+            [1.0, 5.0],
+        ),
+    ],
+)
+def test_v04_parameter_snap_preserves_torch_backend_dtype_and_device(
+    parameter, values, expected
+):
+    """Catches legacy tensor snapping returning a host NumPy array."""
+    original = torch.tensor(values, dtype=torch.float32)
+
+    snapped = parameter.snap(original)
+
+    assert isinstance(snapped, torch.Tensor)
+    assert snapped.dtype == original.dtype
+    assert snapped.device == original.device
+    torch.testing.assert_close(
+        snapped, torch.tensor(expected, dtype=original.dtype, device=original.device)
+    )
+    if parameter.kind == "continuous":
+        assert snapped is original
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        ed.Parameter("x", bounds=(0.0, 10.0)),
+        ed.Parameter("dose", kind="discrete", values=[0.1, 0.5, 0.9]),
+        ed.Parameter("count", kind="integer", bounds=(1, 9), step=2),
+    ],
+)
+def test_v04_parameter_snap_keeps_numpy_inputs_numpy(parameter):
+    """Catches backend preservation accidentally changing NumPy callers."""
+    snapped = parameter.snap(np.array([0.2, 4.8], dtype=np.float32))
+
+    assert isinstance(snapped, np.ndarray)
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        ed.Parameter("x", bounds=(0.0, 10.0)),
+        ed.Parameter("dose", kind="discrete", values=[0.1, 0.5, 0.9]),
+        ed.Parameter("count", kind="integer", bounds=(1, 9), step=2),
+    ],
+)
+def test_v04_parameter_snap_rejects_nonfinite_torch_inputs(parameter):
+    """Catches tensor support bypassing Task 3 finite-input validation."""
+    with pytest.raises(ValueError, match="finite"):
+        parameter.snap(torch.tensor([float("nan")]))
+
+
+def test_v04_integer_tensor_snap_stays_exact_above_float_precision():
+    """Catches an int64 tensor taking a lossy float64 snapping detour."""
+    low = 2**53
+    parameter = ed.Parameter(
+        "count", kind="integer", bounds=(low, low + 4), step=2
+    )
+    values = torch.tensor([low + 3], dtype=torch.int64)
+
+    snapped = parameter.snap(values)
+
+    assert torch.equal(snapped, torch.tensor([low + 2], dtype=torch.int64))

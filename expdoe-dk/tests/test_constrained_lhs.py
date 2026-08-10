@@ -101,3 +101,29 @@ def test_sobol_mixed_constraint_filtering_stays_in_physical_frame():
         space.model_to_physical(space.physical_to_model(design)),
         check_dtype=False,
     )
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "lhs_maximin",
+        "lhs_random",
+        "sobol",
+        "halton",
+        "d_optimal",
+        "random_uniform",
+    ],
+)
+def test_all_current_methods_return_one_deterministic_row(method):
+    """Catches maximin distance reduction assuming at least two rows."""
+    space = Space([Parameter("x", bounds=(0.0, 1.0))])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        first = suggest_design(space, n=1, method=method, seed=17, n_iterations=20)
+        second = suggest_design(space, n=1, method=method, seed=17, n_iterations=20)
+
+    pd.testing.assert_frame_equal(first, second)
+    assert len(first) == 1
+    assert first["x"].between(0.0, 1.0).all()
+    assert bool(space.feasibility_mask(first).all())

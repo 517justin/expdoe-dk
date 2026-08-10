@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from numbers import Integral, Real
 
 import numpy as np
 import pandas as pd
@@ -14,11 +15,12 @@ from expdoe_dk.errors import EngineError, ErrorCode
 from .constraints import (
     CategoricalCombinationConstraint,
     Constraint,
+    LinearConstraint as DomainLinearConstraint,
     OutcomeConstraint,
     constraint_from_dict,
 )
 from .objective import Objective, normalize_objectives
-from .parameter import Parameter
+from .parameter import Parameter, _json_scalars_equal
 
 SPACE_SCHEMA_VERSION = "1.0"
 ENGINE_VERSION = "0.5.0"
@@ -57,6 +59,57 @@ def _require_sequence(value: object, context: str) -> Sequence[object]:
     return value
 
 
+def _require_list(value: object, context: str) -> list[object]:
+    if type(value) is not list:
+        raise _config_invalid(f"{context} must be a JSON array")
+    return value
+
+
+def _require_string(value: object, context: str, *, nonempty: bool = False) -> str:
+    if type(value) is not str or (nonempty and not value):
+        qualifier = "non-empty " if nonempty else ""
+        raise _config_invalid(f"{context} must be a {qualifier}string")
+    return value
+
+
+def _normalize_number(value: object, context: str) -> int | float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise _config_invalid(f"{context} must be a finite non-boolean number")
+    if isinstance(value, Integral):
+        return int(value)
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise _config_invalid(f"{context} must be a finite non-boolean number")
+    return numeric
+
+
+def _normalize_json_scalar(value: object, context: str) -> object:
+    if value is None or type(value) is str:
+        return value
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, Real):
+        return _normalize_number(value, context)
+    raise _config_invalid(f"{context} must be a finite JSON scalar")
+
+
+def _json_compatible(value: object, context: str) -> object:
+    """Return a detached structure accepted by ``json.dumps(allow_nan=False)``."""
+    if isinstance(value, Mapping):
+        normalized: dict[str, object] = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise _config_invalid(f"{context} keys must be strings")
+            normalized[key] = _json_compatible(item, f"{context}.{key}")
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [
+            _json_compatible(item, f"{context}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    return _normalize_json_scalar(value, context)
+
+
 def _duplicate_names(names: Sequence[str]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
@@ -93,24 +146,47 @@ def _parameter_from_payload(payload: object, index: int) -> Parameter:
     item = _require_mapping(payload, f"Space params[{index}]")
     expected = {"name", "kind", "bounds", "values", "step", "unit", "transform"}
     _require_exact_keys(item, expected, f"Space params[{index}]")
+    name = _require_string(
+        item["name"], f"Space params[{index}].name", nonempty=True
+    )
+    unit = _require_string(item["unit"], f"Space params[{index}].unit")
+    kind = _require_string(item["kind"], f"Space params[{index}].kind")
+    transform = _require_string(
+        item["transform"], f"Space params[{index}].transform"
+    )
     bounds = item["bounds"]
     if bounds is not None:
-        pair = _require_sequence(bounds, f"Space params[{index}].bounds")
+        pair = _require_list(bounds, f"Space params[{index}].bounds")
         if len(pair) != 2:
             raise _config_invalid(f"Space params[{index}].bounds must contain two values")
-        bounds = tuple(pair)
+        bounds = tuple(
+            _normalize_number(value, f"Space params[{index}].bounds[{bound_index}]")
+            for bound_index, value in enumerate(pair)
+        )
     values = item["values"]
     if values is not None:
-        values = list(_require_sequence(values, f"Space params[{index}].values"))
-    return Parameter(
-        item["name"],  # type: ignore[arg-type]
-        bounds=bounds,  # type: ignore[arg-type]
-        unit=item["unit"],  # type: ignore[arg-type]
-        kind=item["kind"],  # type: ignore[arg-type]
-        step=item["step"],  # type: ignore[arg-type]
-        values=values,  # type: ignore[arg-type]
-        transform=item["transform"],  # type: ignore[arg-type]
-    )
+        raw_values = _require_list(values, f"Space params[{index}].values")
+        values = [
+            _normalize_json_scalar(
+                value, f"Space params[{index}].values[{value_index}]"
+            )
+            for value_index, value in enumerate(raw_values)
+        ]
+    step = item["step"]
+    if step is not None:
+        step = _normalize_number(step, f"Space params[{index}].step")
+    try:
+        return Parameter(
+            name,
+            bounds=bounds,  # type: ignore[arg-type]
+            unit=unit,
+            kind=kind,  # type: ignore[arg-type]
+            step=step,
+            values=values,  # type: ignore[arg-type]
+            transform=transform,  # type: ignore[arg-type]
+        )
+    except (OverflowError, TypeError, ValueError) as error:
+        raise _config_invalid(f"Space params[{index}] is invalid: {error}") from error
 
 
 def _objective_payload(objective: Objective) -> dict[str, object]:
@@ -132,20 +208,51 @@ def _objective_from_payload(payload: object, index: int) -> Objective:
     item = _require_mapping(payload, f"Space objectives[{index}]")
     expected = {"name", "direction", "target", "unit", "priority"}
     _require_exact_keys(item, expected, f"Space objectives[{index}]")
+    name = _require_string(
+        item["name"], f"Space objectives[{index}].name", nonempty=True
+    )
+    direction = _require_string(
+        item["direction"], f"Space objectives[{index}].direction"
+    )
+    unit = _require_string(item["unit"], f"Space objectives[{index}].unit")
+    priority_value = item["priority"]
+    if (
+        isinstance(priority_value, (bool, np.bool_))
+        or not isinstance(priority_value, Integral)
+        or int(priority_value) < 0
+    ):
+        raise _config_invalid(
+            f"Space objectives[{index}].priority must be a non-negative integer"
+        )
+    priority = int(priority_value)
     target = item["target"]
-    if isinstance(target, list):
+    if type(target) is list:
         if len(target) != 2:
             raise _config_invalid(
                 f"Space objectives[{index}].target range must contain two values"
             )
-        target = tuple(target)
-    return Objective(
-        item["name"],  # type: ignore[arg-type]
-        item["direction"],  # type: ignore[arg-type]
-        target=target,  # type: ignore[arg-type]
-        unit=item["unit"],  # type: ignore[arg-type]
-        priority=item["priority"],  # type: ignore[arg-type]
-    )
+        target = tuple(
+            _normalize_number(
+                value, f"Space objectives[{index}].target[{target_index}]"
+            )
+            for target_index, value in enumerate(target)
+        )
+    elif target is not None:
+        target = _normalize_number(target, f"Space objectives[{index}].target")
+    try:
+        return Objective(
+            name,
+            direction,  # type: ignore[arg-type]
+            target=target,  # type: ignore[arg-type]
+            unit=unit,
+            priority=priority,
+        )
+    except EngineError:
+        raise
+    except (TypeError, ValueError) as error:
+        raise _config_invalid(
+            f"Space objectives[{index}] is invalid: {error}"
+        ) from error
 
 
 class Space:
@@ -280,10 +387,14 @@ class Space:
                 f"Model coordinates must have shape (n, {self.n_dims}), got {tuple(model.shape)}."
             )
         values = model.detach().cpu().numpy()
-        data = {
-            parameter.name: parameter.decode(values[:, index].tolist())
-            for index, parameter in enumerate(self.params)
-        }
+        data = {}
+        for index, parameter in enumerate(self.params):
+            decoded = parameter.decode(values[:, index].tolist())
+            data[parameter.name] = (
+                pd.Series(decoded, dtype=object)
+                if parameter.kind in {"categorical", "ordinal"}
+                else decoded
+            )
         return pd.DataFrame(data, columns=self.param_names)
 
     def physical_to_unit(self, X_phys: Tensor) -> Tensor:
@@ -314,29 +425,51 @@ class Space:
         return physical.squeeze(0) if one_row else physical
 
     def feasibility_mask(self, X_phys: Tensor | pd.DataFrame) -> Tensor:
-        """Return hard-constraint feasibility for rows in physical units."""
+        """Return parameter-domain and hard-constraint physical feasibility."""
         if isinstance(X_phys, pd.DataFrame):
-            missing = [name for name in self.param_names if name not in X_phys.columns]
-            if missing:
-                raise ValueError(f"Physical frame is missing parameter columns {missing}.")
+            self._validate_required_columns(X_phys)
             rows = X_phys[self.param_names].to_dict(orient="records")
         else:
             frame = self.to_dataframe(X_phys)
             rows = frame.to_dict(orient="records")
+        mask = [self._row_within_parameter_domains(row) for row in rows]
         hard_constraints = [
             constraint
             for constraint in self.constraints
             if getattr(constraint, "hard", True)
         ]
-        if not hard_constraints:
-            return torch.ones(len(rows), dtype=torch.bool)
-        return torch.tensor(
-            [
-                all(constraint.satisfied(row) for constraint in hard_constraints)
-                for row in rows
-            ],
-            dtype=torch.bool,
-        )
+        for index, row in enumerate(rows):
+            if mask[index] and hard_constraints:
+                mask[index] = all(
+                    constraint.satisfied(row) for constraint in hard_constraints
+                )
+        return torch.tensor(mask, dtype=torch.bool)
+
+    def _validate_required_columns(self, frame: pd.DataFrame) -> None:
+        missing = [name for name in self.param_names if name not in frame.columns]
+        duplicate = [
+            name for name in self.param_names if list(frame.columns).count(name) > 1
+        ]
+        if missing or duplicate:
+            details = []
+            if missing:
+                details.append(f"missing required columns {missing}")
+            if duplicate:
+                details.append(f"duplicate required columns {duplicate}")
+            raise _config_invalid("Physical frame has " + " and ".join(details))
+
+    def _row_within_parameter_domains(self, row: Mapping[str, object]) -> bool:
+        for parameter in self.params:
+            value = row[parameter.name]
+            if parameter.kind in {"continuous", "integer", "discrete"} and (
+                isinstance(value, (bool, np.bool_)) or not isinstance(value, Real)
+            ):
+                return False
+            try:
+                parameter.encode([value])
+            except (TypeError, ValueError, OverflowError):
+                return False
+        return True
 
     def with_constraints(self, *additional: Constraint | object) -> "Space":
         """Return a validated copy with additional parameter constraints."""
@@ -377,7 +510,7 @@ class Space:
         return torch.tensor(values, dtype=torch.float64)
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload = {
             "schema_version": SPACE_SCHEMA_VERSION,
             "engine_version": ENGINE_VERSION,
             "params": [_parameter_payload(parameter) for parameter in self.params],
@@ -389,6 +522,9 @@ class Space:
                 constraint.to_dict() for constraint in self.outcome_constraints
             ],
         }
+        normalized = _json_compatible(payload, "Space payload")
+        assert isinstance(normalized, dict)
+        return normalized
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "Space":
@@ -414,12 +550,12 @@ class Space:
                 f"Unsupported Space engine version {state['engine_version']!r}"
             )
 
-        raw_params = _require_sequence(state["params"], "Space params")
+        raw_params = _require_list(state["params"], "Space params")
         params = [
             _parameter_from_payload(item, index)
             for index, item in enumerate(raw_params)
         ]
-        raw_objectives = _require_sequence(state["objectives"], "Space objectives")
+        raw_objectives = _require_list(state["objectives"], "Space objectives")
         objectives = [
             _objective_from_payload(item, index)
             for index, item in enumerate(raw_objectives)
@@ -428,7 +564,7 @@ class Space:
         objective_names = {objective.name for objective in objectives}
 
         constraints: list[Constraint | object] = []
-        raw_constraints = _require_sequence(state["constraints"], "Space constraints")
+        raw_constraints = _require_list(state["constraints"], "Space constraints")
         for index, raw in enumerate(raw_constraints):
             item = _require_mapping(raw, f"Space constraints[{index}]")
             if item.get("kind") == "legacy_linear":
@@ -439,7 +575,7 @@ class Space:
                 )
 
         outcome_constraints: list[OutcomeConstraint] = []
-        raw_outcomes = _require_sequence(
+        raw_outcomes = _require_list(
             state["outcome_constraints"], "Space outcome_constraints"
         )
         for index, raw in enumerate(raw_outcomes):
@@ -518,9 +654,54 @@ class Space:
     def _legacy_constraint_from_payload(
         payload: Mapping[str, object], index: int
     ) -> object:
+        from expdoe_dk.space import LinearConstraint
+
         expected = {"kind", "name", "coeffs", "lower", "upper"}
         _require_exact_keys(payload, expected, f"Space constraints[{index}]")
-        return Space._v04_constraint_from_payload(payload, index)
+        _require_string(payload["kind"], f"Space constraints[{index}].kind")
+        name = _require_string(
+            payload["name"], f"Space constraints[{index}].name"
+        )
+        raw_coefficients = _require_mapping(
+            payload["coeffs"], f"Space constraints[{index}].coeffs"
+        )
+        if not raw_coefficients:
+            raise _config_invalid(
+                f"Space constraints[{index}].coeffs must be non-empty"
+            )
+        coefficients = {
+            _require_string(
+                factor,
+                f"Space constraints[{index}].coeffs factor",
+                nonempty=True,
+            ): _normalize_number(
+                coefficient,
+                f"Space constraints[{index}].coeffs[{factor!r}]",
+            )
+            for factor, coefficient in raw_coefficients.items()
+        }
+        lower = payload["lower"]
+        upper = payload["upper"]
+        normalized_lower = (
+            -math.inf
+            if lower is None
+            else _normalize_number(lower, f"Space constraints[{index}].lower")
+        )
+        normalized_upper = (
+            math.inf
+            if upper is None
+            else _normalize_number(upper, f"Space constraints[{index}].upper")
+        )
+        if normalized_lower > normalized_upper:
+            raise _config_invalid(
+                f"Space constraints[{index}] lower must not exceed upper"
+            )
+        return LinearConstraint(
+            coeffs=coefficients,
+            lower=normalized_lower,
+            upper=normalized_upper,
+            name=name,
+        )
 
     @staticmethod
     def _constraint_payload(constraint: object) -> dict[str, object]:
@@ -550,6 +731,7 @@ class Space:
                     raise ValueError(
                         f"LinearConstraint references unknown params {sorted(unknown)}."
                     )
+                self._validate_linear_factor_kinds(constraint.coeffs)  # type: ignore[attr-defined]
                 continue
             if not isinstance(constraint, Constraint):
                 raise _config_invalid(
@@ -562,6 +744,23 @@ class Space:
             )
             if isinstance(validated, CategoricalCombinationConstraint):
                 self._validate_categorical_assignments(validated)
+            elif isinstance(validated, DomainLinearConstraint):
+                self._validate_linear_factor_kinds(validated.coefficients)
+
+    def _validate_linear_factor_kinds(
+        self, coefficients: Mapping[str, object]
+    ) -> None:
+        nonnumeric = [
+            factor
+            for factor in coefficients
+            if self.param_by_name(factor).kind
+            not in {"continuous", "integer", "discrete"}
+        ]
+        if nonnumeric:
+            raise _config_invalid(
+                "LinearConstraint coefficients require numeric physical factors; "
+                f"got {sorted(nonnumeric)}"
+            )
 
     def _validate_outcome_constraints(
         self, parameter_names: set[str], objective_names: set[str]
@@ -589,7 +788,10 @@ class Space:
                         f"Categorical constraint {constraint.name!r} references "
                         f"non-categorical parameter {factor!r}"
                     )
-                if value not in (parameter.values or ()):
+                if not any(
+                    _json_scalars_equal(value, level)
+                    for level in parameter.values or ()
+                ):
                     raise _config_invalid(
                         f"Categorical constraint {constraint.name!r} value {value!r} "
                         f"is not declared for parameter {factor!r}"

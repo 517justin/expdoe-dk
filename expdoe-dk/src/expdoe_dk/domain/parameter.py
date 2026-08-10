@@ -8,6 +8,8 @@ from numbers import Integral, Real
 from typing import Literal, Sequence
 
 import numpy as np
+import torch
+from torch import Tensor
 
 ParameterKind = Literal["continuous", "integer", "discrete", "categorical", "ordinal"]
 ParameterTransform = Literal["linear", "log"]
@@ -23,6 +25,33 @@ def _is_ulp_close(left: float, right: float) -> bool:
     """Compare finite floats with an absolute tolerance measured in ULPs."""
     tolerance = _ULP_TOLERANCE * max(math.ulp(left), math.ulp(right))
     return abs(left - right) <= tolerance
+
+
+def _json_scalars_equal(left: object, right: object) -> bool:
+    """Compare JSON-like scalars without treating booleans as numbers."""
+    left_boolean = isinstance(left, (bool, np.bool_))
+    right_boolean = isinstance(right, (bool, np.bool_))
+    if left_boolean or right_boolean:
+        return left_boolean and right_boolean and bool(left) is bool(right)
+    left_number = isinstance(left, Real)
+    right_number = isinstance(right, Real)
+    if left_number or right_number:
+        return (
+            left_number
+            and right_number
+            and math.isfinite(float(left))
+            and math.isfinite(float(right))
+            and left == right
+        )
+    if type(left) is not type(right):
+        return False
+    return left == right
+
+
+def _is_json_scalar(value: object) -> bool:
+    if value is None or isinstance(value, (str, bool, np.bool_)):
+        return True
+    return isinstance(value, Real) and math.isfinite(float(value))
 
 
 @dataclass(frozen=True, init=False)
@@ -164,12 +193,22 @@ class Parameter:
         """Map physical values into the parameter's model frame."""
         if self.kind in _VALUE_KINDS:
             levels = list(self.values or ())
-            try:
-                return [float(levels.index(value)) for value in values]
-            except ValueError as error:
-                raise ValueError(
-                    f"Parameter {self.name}: value is not a declared level."
-                ) from error
+            encoded: list[float] = []
+            for value in values:
+                index = next(
+                    (
+                        index
+                        for index, level in enumerate(levels)
+                        if _json_scalars_equal(value, level)
+                    ),
+                    None,
+                )
+                if index is None:
+                    raise ValueError(
+                        f"Parameter {self.name}: value is not a declared level."
+                    )
+                encoded.append(float(index))
+            return encoded
         if self.kind == "integer":
             integers = self._validated_integer_values(tuple(values))
             low, _, _ = self._integer_grid()
@@ -238,8 +277,12 @@ class Parameter:
         """Alias for :meth:`decode` using the design terminology."""
         return self.decode(encoded)
 
-    def snap(self, values: np.ndarray) -> np.ndarray:
+    def snap(
+        self, values: np.ndarray | Tensor | Sequence[object]
+    ) -> np.ndarray | Tensor:
         """Snap numeric values to the nearest declared finite level."""
+        if isinstance(values, Tensor):
+            return self._snap_tensor(values)
         if self.kind == "integer":
             return self._snap_integer_values(values)
         numeric = np.asarray(values, dtype=np.float64)
@@ -254,6 +297,43 @@ class Parameter:
         indices = np.abs(numeric[..., None] - distance_levels).argmin(axis=-1)
         levels = np.asarray(level_values, dtype=np.float64)
         return levels[indices]
+
+    def _snap_tensor(self, values: Tensor) -> Tensor:
+        """Snap without moving a tensor off its device or changing its backend."""
+        if values.dtype == torch.bool or values.is_complex():
+            raise ValueError(f"Parameter {self.name}: snap values must be numeric.")
+        if not bool(torch.isfinite(values).all().item()):
+            raise ValueError(f"Parameter {self.name}: snap values must be finite.")
+        if self.kind == "continuous":
+            return values
+        if self.kind not in {"integer", "discrete"}:
+            raise TypeError(f"Parameter {self.name}: {self.kind} values are not numeric.")
+
+        if self.kind == "integer":
+            low, step, last_index = self._integer_grid()
+            if values.is_floating_point():
+                position = (values - low) / step
+                lower_index = torch.floor(position)
+                index = lower_index + ((position - lower_index) > 0.5)
+            else:
+                offset = values - low
+                index = torch.div(offset, step, rounding_mode="floor")
+                remainder = torch.remainder(offset, step)
+                index = index + (remainder > step // 2)
+            snapped = low + index.clamp(0, last_index) * step
+            return snapped.to(dtype=values.dtype)
+
+        levels = self.numeric_levels
+        preserve_dtype = values.is_floating_point() or all(
+            float(level).is_integer() for level in levels
+        )
+        output_dtype = values.dtype if preserve_dtype else torch.float64
+        working = values.to(dtype=output_dtype)
+        level_tensor = torch.tensor(
+            levels, dtype=output_dtype, device=values.device
+        )
+        indices = torch.abs(working.unsqueeze(-1) - level_tensor).argmin(dim=-1)
+        return level_tensor[indices]
 
     def _validate_continuous(self) -> None:
         self._validated_bounds()
@@ -308,16 +388,10 @@ class Parameter:
 
     def _validate_ordinal(self) -> None:
         self._validate_value_only_configuration()
-        scalar_types = (str, int, float, bool, type(None))
-        if not all(isinstance(value, scalar_types) for value in self.values or ()):
+        if not all(_is_json_scalar(value) for value in self.values or ()):
             raise ValueError(
                 f"Parameter {self.name}: ordinal values must be scalar values."
             )
-        if any(
-            isinstance(value, Real) and not math.isfinite(float(value))
-            for value in self.values or ()
-        ):
-            raise ValueError(f"Parameter {self.name}: ordinal values must be finite.")
         self._validate_unique(self.values or ())
 
     def _validate_value_only_configuration(self) -> None:
@@ -395,8 +469,12 @@ class Parameter:
         return numeric
 
     def _validate_unique(self, values: Sequence[object]) -> None:
-        if len(set(values)) != len(values):
-            raise ValueError(f"Parameter {self.name}: values must be unique.")
+        for index, value in enumerate(values):
+            if any(
+                _json_scalars_equal(value, previous)
+                for previous in values[:index]
+            ):
+                raise ValueError(f"Parameter {self.name}: values must be unique.")
 
     @property
     def _uses_log_transform(self) -> bool:
@@ -559,4 +637,8 @@ class Parameter:
         return np.asarray(snapped, dtype=dtype).reshape(raw.shape)
 
 
-__all__ = ["Parameter", "ParameterKind", "ParameterTransform"]
+__all__ = [
+    "Parameter",
+    "ParameterKind",
+    "ParameterTransform",
+]

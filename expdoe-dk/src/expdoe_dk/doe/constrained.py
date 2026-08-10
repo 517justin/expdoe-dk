@@ -434,6 +434,8 @@ def _sa_maximin_physical(
     rng = np.random.default_rng(seed)
     n, d = initial_phys.shape
     design = initial_phys.copy()
+    if n < 2:
+        return design, math.inf
 
     def wm(arr: np.ndarray) -> float:
         return float(np.min(pdist(arr * column_weights)))
