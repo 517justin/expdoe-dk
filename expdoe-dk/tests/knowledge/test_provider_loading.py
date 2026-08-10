@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from threading import Barrier
 
 import pytest
 
@@ -483,6 +485,169 @@ def test_duplicate_with_existing_registry_is_typed_and_atomic(
     assert [(item.pattern, item.version) for item in registry.definitions()] == [
         ("existing", "1.0")
     ]
+
+
+@pytest.mark.parametrize("second_kind", ["invalid-schema", "duplicate"])
+def test_registry_batch_registration_failure_preserves_preexisting_state(
+    fake_definition, second_kind
+):
+    registry = PatternRegistry()
+    existing = _definition(fake_definition, "existing")
+    registry.register(existing)
+    before = registry.definitions()
+    first = _definition(fake_definition, "first-new")
+    if second_kind == "invalid-schema":
+        second = _definition(
+            fake_definition,
+            "second-new",
+            schema={"type": "not-a-json-schema-type"},
+        )
+        expected_error = EngineError
+    else:
+        second = _definition(fake_definition, "first-new")
+        expected_error = ValueError
+
+    assert hasattr(registry, "register_many"), "atomic batch registration is missing"
+    with pytest.raises(expected_error):
+        registry.register_many((first, second))
+
+    assert registry.definitions() == before
+    assert registry.resolve("existing", "1.0") is existing
+
+
+def test_registry_batch_registration_commits_complete_deterministic_result(
+    fake_definition,
+):
+    registry = PatternRegistry()
+    existing = _definition(fake_definition, "middle")
+    first = _definition(fake_definition, "zeta", version="2.0")
+    second = _definition(fake_definition, "alpha")
+    registry.register(existing)
+
+    assert hasattr(registry, "register_many"), "atomic batch registration is missing"
+    registry.register_many((first, second))
+
+    assert [(item.pattern, item.version) for item in registry.definitions()] == [
+        ("alpha", "1.0"),
+        ("middle", "1.0"),
+        ("zeta", "2.0"),
+    ]
+    assert registry.resolve("alpha", "1.0") is second
+    assert registry.resolve("zeta", "2.0") is first
+
+
+def test_concurrent_register_and_register_many_preserve_all_unique_updates(
+    fake_definition,
+):
+    registry = PatternRegistry()
+    workers = 12
+    barrier = Barrier(workers)
+
+    def register_worker(index: int):
+        first = _definition(fake_definition, f"concurrent-{index}-a")
+        second = _definition(fake_definition, f"concurrent-{index}-b")
+        barrier.wait()
+        if index % 2:
+            registry.register(first)
+            registry.register(second)
+        else:
+            registry.register_many((first, second))
+
+    assert hasattr(registry, "register_many"), "atomic batch registration is missing"
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        tuple(executor.map(register_worker, range(workers)))
+
+    assert len(registry.definitions()) == workers * 2
+    assert {(item.pattern, item.version) for item in registry.definitions()} == {
+        (f"concurrent-{index}-{suffix}", "1.0")
+        for index in range(workers)
+        for suffix in ("a", "b")
+    }
+
+
+def test_concurrent_duplicate_registration_allows_exactly_one_commit(
+    fake_definition,
+):
+    registry = PatternRegistry()
+    workers = 12
+    barrier = Barrier(workers)
+
+    def register_worker(index: int):
+        definition = _definition(fake_definition, "shared")
+        barrier.wait()
+        try:
+            if index % 2:
+                registry.register(definition)
+            else:
+                registry.register_many((definition,))
+        except ValueError:
+            return "duplicate"
+        return "registered"
+
+    assert hasattr(registry, "register_many"), "atomic batch registration is missing"
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = tuple(executor.map(register_worker, range(workers)))
+
+    assert results.count("registered") == 1
+    assert results.count("duplicate") == workers - 1
+    assert [(item.pattern, item.version) for item in registry.definitions()] == [
+        ("shared", "1.0")
+    ]
+
+
+def test_provider_commit_failure_is_typed_and_preserves_registry_state(
+    monkeypatch, fake_definition
+):
+    providers = _providers_module()
+
+    class CommitFailureRegistry(PatternRegistry):
+        fail_commit = False
+
+        def __setattr__(self, name, value):
+            if name == "_definitions" and self.fail_commit:
+                raise RuntimeError("sensitive injected commit failure")
+            super().__setattr__(name, value)
+
+    registry = CommitFailureRegistry()
+    existing = _definition(fake_definition, "existing")
+    registry.register(existing)
+    before = registry.definitions()
+    registry.fail_commit = True
+    entry = FakeEntryPoint(
+        name="commit-entry",
+        value="package.patterns:commit",
+        group="expdoe_dk.knowledge_patterns",
+        dist=FakeDistribution("package", "4.2"),
+        factory=lambda: lambda: (
+            _definition(fake_definition, "alpha"),
+            _definition(fake_definition, "beta"),
+        ),
+    )
+    monkeypatch.setattr(providers, "entry_points", lambda *, group: (entry,))
+
+    with pytest.raises(EngineError) as caught:
+        providers.load_pattern_providers({"package"}, registry)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+    assert caught.value.details == {
+        "stage": "commit",
+        "error_type": "RuntimeError",
+        "providers": [
+            {
+                "distribution": "package",
+                "canonical_distribution": "package",
+                "entry_point": "commit-entry",
+                "distribution_version": "4.2",
+            }
+        ],
+        "definitions": [
+            {"pattern": "alpha", "version": "1.0"},
+            {"pattern": "beta", "version": "1.0"},
+        ],
+    }
+    assert "sensitive injected commit failure" not in str(caught.value)
+    assert registry.definitions() == before
+    assert registry.resolve("existing", "1.0") is existing
 
 
 def test_report_is_deterministic_immutable_detached_and_json_serializable(

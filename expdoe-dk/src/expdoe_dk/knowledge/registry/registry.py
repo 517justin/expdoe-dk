@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping
+from threading import RLock
 from typing import TYPE_CHECKING
 
 from jsonschema import Draft202012Validator
@@ -24,12 +25,40 @@ class PatternRegistry:
 
     def __init__(self) -> None:
         self._definitions: dict[tuple[str, str], KnowledgePatternDefinition] = {}
+        self._lock = RLock()
 
     def register(self, definition: KnowledgePatternDefinition) -> None:
+        self.register_many((definition,))
+
+    def register_many(
+        self, definitions: Iterable[KnowledgePatternDefinition]
+    ) -> None:
+        """Atomically register a batch after validating every definition."""
+        if isinstance(definitions, (str, bytes)) or not isinstance(
+            definitions, Iterable
+        ):
+            raise TypeError("definitions must be an iterable of definitions")
+        incoming = tuple(definitions)
+        for definition in incoming:
+            self._validate_definition(definition)
+
+        with self._lock:
+            replacement = dict(self._definitions)
+            for definition in incoming:
+                key = (definition.pattern, definition.version)
+                if key in replacement:
+                    raise ValueError(f"Pattern {key} already registered")
+                replacement[key] = definition
+            self._definitions = replacement
+
+    @staticmethod
+    def _validate_definition(definition: KnowledgePatternDefinition) -> None:
         if not isinstance(definition, KnowledgePatternDefinition):
             raise TypeError("definition must be a KnowledgePatternDefinition")
         try:
-            Draft202012Validator.check_schema(self._plain_json(definition.schema))
+            Draft202012Validator.check_schema(
+                PatternRegistry._plain_json(definition.schema)
+            )
         except SchemaError as error:
             raise EngineError(
                 ErrorCode.KNOWLEDGE_INVALID,
@@ -41,22 +70,22 @@ class PatternRegistry:
                     "message": error.message,
                 },
             ) from error
-        key = (definition.pattern, definition.version)
-        if key in self._definitions:
-            raise ValueError(f"Pattern {key} already registered")
-        self._definitions[key] = definition
 
     def resolve(self, pattern: str, version: str) -> KnowledgePatternDefinition:
-        try:
-            return self._definitions[(pattern, version)]
-        except KeyError as error:
-            raise EngineError(
-                ErrorCode.KNOWLEDGE_INVALID,
-                f"Unknown pattern {pattern}@{version}",
-            ) from error
+        with self._lock:
+            try:
+                return self._definitions[(pattern, version)]
+            except KeyError as error:
+                raise EngineError(
+                    ErrorCode.KNOWLEDGE_INVALID,
+                    f"Unknown pattern {pattern}@{version}",
+                ) from error
 
     def definitions(self) -> tuple[KnowledgePatternDefinition, ...]:
-        return tuple(self._definitions[key] for key in sorted(self._definitions))
+        with self._lock:
+            return tuple(
+                self._definitions[key] for key in sorted(self._definitions)
+            )
 
     @staticmethod
     def _require_spec(spec: object) -> KnowledgePatternSpec:

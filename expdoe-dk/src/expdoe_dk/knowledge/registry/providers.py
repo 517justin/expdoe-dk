@@ -370,9 +370,34 @@ def load_pattern_providers(
         )
         for metadata, definitions in loaded
     )
-    for _, definitions in loaded:
-        for definition in definitions:
-            registry.register(definition)
+    definitions_to_register = tuple(
+        definition
+        for _, definitions in loaded
+        for definition in definitions
+    )
+    try:
+        registry.register_many(definitions_to_register)
+    except Exception as error:
+        raise _knowledge_error(
+            "Pattern provider definitions could not be committed",
+            stage="commit",
+            error=error,
+            providers=[
+                {
+                    "distribution": metadata.distribution_name,
+                    "canonical_distribution": (
+                        metadata.canonical_distribution_name
+                    ),
+                    "entry_point": metadata.entry_point_name,
+                    "distribution_version": metadata.distribution_version,
+                }
+                for metadata, _ in loaded
+            ],
+            definitions=[
+                {"pattern": item.pattern, "version": item.version}
+                for item in definitions_to_register
+            ],
+        ) from None
     return ProviderLoadReport(records)
 
 
