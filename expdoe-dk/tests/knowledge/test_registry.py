@@ -51,6 +51,21 @@ def _definition(pattern: str, version: str, calls: list[tuple]) -> KnowledgePatt
     )
 
 
+def _provider_definition(fake_definition, **overrides) -> KnowledgePatternDefinition:
+    values = {
+        "pattern": fake_definition.pattern,
+        "version": fake_definition.version,
+        "family": fake_definition.family,
+        "schema": {"type": "object", "properties": {}},
+        "compiler": fake_definition.compiler,
+        "validator": fake_definition.validator,
+        "renderer": fake_definition.renderer,
+        "compatibility": fake_definition.compatibility,
+    }
+    values.update(overrides)
+    return KnowledgePatternDefinition(**values)
+
+
 def test_definition_detaches_and_freezes_schema_and_requires_callables(fake_definition):
     schema = {"properties": {"levels": ["A", "B"]}}
     values = {
@@ -166,6 +181,103 @@ def test_registry_validate_validate_many_and_render_dispatch_exactly(
         ("validate", "KP-second", observations),
         ("render", "KP-second"),
     ]
+
+
+def test_registry_rejects_validation_result_for_a_different_pattern_id(
+    fake_definition, numeric_space, make_spec
+):
+    def wrong_validator(spec, space, observations=None):
+        return KnowledgeValidationResult(
+            pattern_id="KP-another-declaration",
+            state="valid",
+            summary="valid",
+            effective_confidence=spec.confidence,
+        )
+
+    registry = PatternRegistry()
+    registry.register(_provider_definition(fake_definition, validator=wrong_validator))
+    spec = make_spec(pattern_id="KP-dispatched")
+
+    with pytest.raises(EngineError, match="provenance mismatch") as caught:
+        registry.validate(spec, numeric_space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+    assert caught.value.details["expected"] == {"pattern_id": "KP-dispatched"}
+    assert caught.value.details["actual"] == {
+        "pattern_id": "KP-another-declaration"
+    }
+
+
+@pytest.mark.parametrize(
+    "category,override,actual",
+    [
+        (
+            "input_transforms",
+            {"source_pattern_id": "KP-another-declaration"},
+            {
+                "source_pattern_id": "KP-another-declaration",
+                "source_pattern": "fake",
+                "source_version": "1.0",
+            },
+        ),
+        (
+            "diagnostics",
+            {"source_pattern": "another-pattern"},
+            {
+                "source_pattern_id": "KP-dispatched",
+                "source_pattern": "another-pattern",
+                "source_version": "1.0",
+            },
+        ),
+        (
+            "acquisition_preferences",
+            {"source_version": "2.0"},
+            {
+                "source_pattern_id": "KP-dispatched",
+                "source_pattern": "fake",
+                "source_version": "2.0",
+            },
+        ),
+    ],
+)
+def test_registry_rejects_artifact_provenance_mismatch_before_merge(
+    fake_definition,
+    numeric_space,
+    make_spec,
+    category,
+    override,
+    actual,
+):
+    def wrong_compiler(spec, space, observations=None):
+        provenance = {
+            "source_pattern_id": spec.pattern_id,
+            "source_pattern": spec.pattern,
+            "source_version": spec.version,
+        }
+        provenance.update(override)
+        artifact = OptimizationArtifact(
+            kind="compiled",
+            payload={},
+            **provenance,
+        )
+        return OptimizationArtifacts(**{category: (artifact,)})
+
+    registry = PatternRegistry()
+    registry.register(_provider_definition(fake_definition, compiler=wrong_compiler))
+    spec = make_spec(pattern_id="KP-dispatched")
+
+    with pytest.raises(EngineError, match="provenance mismatch") as caught:
+        registry.compile_many((spec,), numeric_space)
+
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+    assert caught.value.details["category"] == category
+    assert caught.value.details["artifact_index"] == 0
+    assert caught.value.details["expected"] == {
+        "source_pattern_id": "KP-dispatched",
+        "source_pattern": "fake",
+        "source_version": "1.0",
+    }
+    assert caught.value.details["actual"] == actual
 
 
 def test_registry_compile_many_merges_in_spec_order(numeric_space, make_spec):

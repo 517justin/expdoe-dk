@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from expdoe_dk.errors import EngineError, ErrorCode
 
-from ..artifacts import OptimizationArtifacts, merge_artifacts
+from ..artifacts import ARTIFACT_CATEGORIES, OptimizationArtifacts, merge_artifacts
 from ..guard import KnowledgeValidationResult
 from ..specs import KnowledgePatternSpec
 from .definition import KnowledgePatternDefinition
@@ -59,6 +59,17 @@ class PatternRegistry:
         )
         if not isinstance(result, KnowledgeValidationResult):
             raise TypeError("pattern validator must return KnowledgeValidationResult")
+        if result.pattern_id != spec.pattern_id:
+            raise EngineError(
+                ErrorCode.KNOWLEDGE_INVALID,
+                "Knowledge validation provenance mismatch: "
+                f"expected pattern_id {spec.pattern_id!r}, "
+                f"got {result.pattern_id!r}",
+                details={
+                    "expected": {"pattern_id": spec.pattern_id},
+                    "actual": {"pattern_id": result.pattern_id},
+                },
+            )
         return result
 
     def validate_many(
@@ -85,9 +96,39 @@ class PatternRegistry:
                     raise TypeError(
                         "pattern compiler must return OptimizationArtifacts"
                     )
+                self._validate_artifact_provenance(checked, artifacts)
                 yield artifacts
 
         return merge_artifacts(compiled())
+
+    @staticmethod
+    def _validate_artifact_provenance(
+        spec: KnowledgePatternSpec, artifacts: OptimizationArtifacts
+    ) -> None:
+        expected = {
+            "source_pattern_id": spec.pattern_id,
+            "source_pattern": spec.pattern,
+            "source_version": spec.version,
+        }
+        for category in ARTIFACT_CATEGORIES:
+            for index, artifact in enumerate(getattr(artifacts, category)):
+                actual = {
+                    "source_pattern_id": artifact.source_pattern_id,
+                    "source_pattern": artifact.source_pattern,
+                    "source_version": artifact.source_version,
+                }
+                if actual != expected:
+                    raise EngineError(
+                        ErrorCode.KNOWLEDGE_INVALID,
+                        "Knowledge artifact provenance mismatch in "
+                        f"{category}[{index}] for {spec.pattern}@{spec.version}",
+                        details={
+                            "category": category,
+                            "artifact_index": index,
+                            "expected": expected,
+                            "actual": actual,
+                        },
+                    )
 
     def render(self, spec: KnowledgePatternSpec, space: "Space") -> str:
         spec = self._require_spec(spec)
