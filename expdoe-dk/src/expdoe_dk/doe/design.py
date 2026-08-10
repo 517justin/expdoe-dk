@@ -123,10 +123,13 @@ def suggest_design(
         raise _config_invalid("return_diagnostics must be a boolean")
     legacy = _validate_legacy_options(legacy_options)
     constraints = _validate_constraints(parameter_constraints)
-    _validate_hard_constraints(constraints)
     sources = _validate_knowledge_sources(knowledge_sources)
     effective, rule = resolve_design_method(space, method)
-    design_space = space.with_constraints(*constraints)
+    hard_constraints = tuple(
+        constraint for constraint in constraints if getattr(constraint, "hard", True)
+    )
+    design_space = space.with_constraints(*hard_constraints)
+    diagnostic_space = space.with_constraints(*constraints)
 
     # Existing/pending conditions are historical conditions: canonicalize their
     # declared parameter values, but do not impose newly supplied safety rules.
@@ -148,17 +151,16 @@ def suggest_design(
         finite_eligible = None
 
     if effective == "d_optimal":
-        generated: Mapping[str, int] = {}
         if finite is None:
             universe, generated = _generate_feasible_pool(
                 design_space, n=n, method=effective, seed=seed
             )
-        else:
-            universe = finite
-        if finite is None:
+            eligible, rejected = _eligible_unique(universe, design_space, avoided_keys)
             _add_rejections(rejections, generated)
-        eligible, rejected = _eligible_unique(universe, design_space, avoided_keys)
-        _add_rejections(rejections, rejected)
+            _add_rejections(rejections, rejected)
+        else:
+            assert finite_eligible is not None
+            eligible = finite_eligible
         selected = _select_d_optimal(eligible, design_space, n)
     elif effective in {"lhs_random", "lhs_maximin"}:
         selected, rejected = _generate_lhs_design(
@@ -184,7 +186,15 @@ def suggest_design(
         raise _space_infeasible(n, available, effective, seed, {**rejections, "final_infeasible": 1})
 
     diagnostics = _build_diagnostics(
-        design_space, selected, method, effective, rule, seed, sources, rejections
+        design_space,
+        selected,
+        method,
+        effective,
+        rule,
+        seed,
+        sources,
+        rejections,
+        constraint_digest=_constraint_digest(diagnostic_space),
     )
     batch = DesignBatch(selected, diagnostics)
     return batch if return_diagnostics else batch.frame
@@ -224,18 +234,7 @@ def _generate_lhs_design(
         if method == "lhs_random":
             return eligible, rejections
     if not candidates:
-        # Snapping can make a coupled discrete constraint incompatible with the
-        # requested LHS strata.  Recover only after whole-design retries and
-        # column-swap repair have failed; unconstrained LHS never takes this path.
-        pool, generated = _generate_feasible_pool(
-            space, n=n, method="random_uniform", seed=seed
-        )
-        _add_rejections(rejections, generated)
-        eligible, rejected = _eligible_unique(pool, space, avoided_keys)
-        _add_rejections(rejections, rejected)
-        return _select_balanced_maximin(
-            eligible, space, n, random_ties=(method == "lhs_random")
-        ), rejections
+        return _physical_frame_from_records([], space), rejections
     _, _, chosen = max(candidates, key=lambda item: (item[0], -item[1]))
     return chosen, rejections
 
@@ -460,12 +459,13 @@ def _concat_condition_frames(existing: pd.DataFrame | None, pending: pd.DataFram
 def _build_diagnostics(
     space: Space, frame: pd.DataFrame, requested: str, effective: str, selection_rule: str,
     seed: int, knowledge_sources: tuple[str, ...], rejections: dict[str, int],
+    *, constraint_digest: str | None = None,
 ) -> DesignDiagnostics:
     model = space.physical_to_model(frame).cpu().numpy()
     levels = _empty_level_counts([p for p in space.params if p.kind in {"categorical", "ordinal"}])
     _ = [_increment_counts(levels, row, [p for p in space.params if p.kind in {"categorical", "ordinal"}]) for row in frame.to_dict("records")]
     return DesignDiagnostics(
-        requested, effective, selection_rule, seed, _constraint_digest(space), knowledge_sources,
+        requested, effective, selection_rule, seed, constraint_digest or _constraint_digest(space), knowledge_sources,
         _freeze_mapping({p.name: _factor_encoding(p) for p in space.params}),
         _freeze_mapping(levels), _minimum_distance(model), _freeze_mapping(dict(sorted(rejections.items()))),
         tuple(_candidate_key(row, space) for row in frame.to_dict("records")),
@@ -557,11 +557,6 @@ def _validate_constraints(value: object) -> tuple[object, ...]:
     if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
         raise _config_invalid("parameter_constraints must be an ordered sequence")
     return tuple(value)
-
-
-def _validate_hard_constraints(constraints: tuple[object, ...]) -> None:
-    if any(not getattr(constraint, "hard", True) for constraint in constraints):
-        raise _config_invalid("parameter_constraints used for initial safety must be hard")
 
 
 def _validate_knowledge_sources(value: object) -> tuple[str, ...]:

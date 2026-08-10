@@ -29,7 +29,7 @@ def _space_chem():
 
 
 @pytest.mark.parametrize(
-    "method", ["lhs_maximin", "lhs_random", "sobol", "halton", "random_uniform"]
+    "method", ["sobol", "halton", "random_uniform"]
 )
 def test_methods_produce_feasible_discrete_designs(method):
     space = _space_chem()

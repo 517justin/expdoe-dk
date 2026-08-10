@@ -127,6 +127,53 @@ def test_d_optimal_deduplicates_and_avoids_before_exact_selection():
     assert design["x"].nunique() == 2
 
 
+def test_finite_d_optimal_eligibility_rejections_are_counted_once():
+    space = Space([Parameter("x", kind="integer", bounds=(0, 4))])
+
+    batch = suggest_design(
+        space,
+        2,
+        method="d_optimal",
+        seed=1,
+        existing=pd.DataFrame({"x": [0]}),
+        return_diagnostics=True,
+    )
+
+    assert batch.diagnostics.rejection_counts["avoided"] == 1
+    assert batch.diagnostics.rejection_counts["duplicate"] == 0
+    assert batch.diagnostics.rejection_counts["constraint"] == 0
+
+
+def test_d_optimal_matches_the_declared_greedy_log_determinant_criterion():
+    space = Space([Parameter("x", kind="integer", bounds=(0, 4))])
+    universe = pd.DataFrame({"x": [1, 2, 3, 4]})
+    model = space.physical_to_model(universe).cpu().numpy()
+    matrix = np.column_stack((np.ones(len(model)), model, model**2))
+    information = np.eye(matrix.shape[1]) * 1e-12
+    expected = []
+    remaining = set(range(len(matrix)))
+    for _ in range(2):
+        best = max(
+            remaining,
+            key=lambda index: np.linalg.slogdet(
+                information + np.outer(matrix[index], matrix[index])
+            )[1],
+        )
+        expected.append(best)
+        information += np.outer(matrix[best], matrix[best])
+        remaining.remove(best)
+
+    selected = suggest_design(
+        space,
+        2,
+        method="d_optimal",
+        seed=1,
+        existing=pd.DataFrame({"x": [0]}),
+    )
+
+    assert selected["x"].tolist() == universe.iloc[expected]["x"].tolist()
+
+
 def test_lhs_random_uses_each_requested_stratum_once():
     space = Space([Parameter("x", bounds=(0.0, 1.0))])
 
@@ -135,6 +182,35 @@ def test_lhs_random_uses_each_requested_stratum_once():
     assert sorted(np.floor(design["x"].to_numpy() * 8).astype(int).tolist()) == list(
         range(8)
     )
+
+
+def test_valid_constrained_lhs_keeps_requested_strata():
+    space = Space(
+        [Parameter("x", bounds=(0.0, 1.0))],
+        constraints=[ExpressionConstraint("domain-safe", "x >= 0")],
+    )
+
+    design = suggest_design(space, 8, method="lhs_random", seed=6, n_restarts=2)
+
+    assert sorted(np.floor(design["x"].to_numpy() * 8).astype(int).tolist()) == list(
+        range(8)
+    )
+
+
+@pytest.mark.parametrize("method", ["lhs_random", "lhs_maximin"])
+def test_constrained_lhs_never_silently_substitutes_random_pool(method):
+    space = Space(
+        [Parameter("x", bounds=(0.0, 1.0))],
+        constraints=[ExpressionConstraint("tight", "x <= 0.1")],
+    )
+
+    with pytest.raises(EngineError) as caught:
+        suggest_design(space, 8, method=method, seed=6, n_restarts=2)
+
+    assert caught.value.code is ErrorCode.SPACE_INFEASIBLE
+    assert caught.value.details["method"] == method
+    assert caught.value.details["seed"] == 6
+    assert caught.value.details["requested"] == 8
 
 
 def test_lhs_maximin_is_distinct_from_random_lhs_for_same_seed():
@@ -165,6 +241,12 @@ def test_finite_spaces_keep_method_specific_semantics():
         pd.testing.assert_frame_equal(
             design, suggest_design(space, 4, method=method, seed=12)
         )
+        assert suggest_design(
+            space, 4, method=method, seed=12, return_diagnostics=True
+        ).diagnostics.effective_method == method
+    assert not designs["random_uniform"].equals(
+        suggest_design(space, 4, method="random_uniform", seed=13)
+    )
     assert len({tuple(map(tuple, design.to_numpy())) for design in designs.values()}) >= 3
 
 
@@ -238,14 +320,22 @@ def test_historical_existing_rows_need_only_parameter_domain_validity():
     assert design["x"].tolist() == [1.0]
 
 
-def test_soft_external_safety_constraint_is_rejected():
+def test_soft_parameter_constraints_are_recorded_without_biasing_initial_design():
     space = Space([Parameter("x", bounds=(0.0, 1.0))])
     soft = ExpressionConstraint("preference", "x >= 0.5", hard=False, penalty="hinge", weight=1.0)
 
-    with pytest.raises(EngineError) as caught:
-        suggest_design(space, 2, parameter_constraints=(soft,))
+    baseline = suggest_design(space, 8, method="sobol", seed=5, return_diagnostics=True)
+    softened = suggest_design(
+        space,
+        8,
+        method="sobol",
+        seed=5,
+        parameter_constraints=(soft,),
+        return_diagnostics=True,
+    )
 
-    assert caught.value.code is ErrorCode.CONFIG_INVALID
+    pd.testing.assert_frame_equal(baseline.frame, softened.frame)
+    assert baseline.diagnostics.constraint_digest != softened.diagnostics.constraint_digest
 
 
 def test_requested_row_limit_fails_without_sampling():

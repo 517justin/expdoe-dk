@@ -74,7 +74,7 @@ def test_campaign_finalize_notes_plain_gp():
     warnings.simplefilter("ignore")
     space = _chem_space()
     campaign = Campaign(space, knowledge=None, seed=0)
-    doe = campaign.suggest_doe(n=6, method="lhs_random", n_iterations=200)
+    doe = campaign.suggest_doe(n=6, method="sobol", n_iterations=200)
     campaign.tell(doe, _oracle(doe))
     result = campaign.finalize()
     assert any("plain GP" in n for n in result.notes)
