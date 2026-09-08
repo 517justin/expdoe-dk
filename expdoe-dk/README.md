@@ -194,11 +194,16 @@ The old import path still works via `expdoe_dk.legacy.ax_doe_bo`, but emits `Dep
 | v0.1 | Constrained DoE + Knowledge composition + Campaign loop + 1 example |
 | v0.2 | Empirical validators (Spearman monotone + frozen-mean shape) auto-running every K observations |
 | v0.3 | ε auto-rescue: combining `with_monotone` + `with_gp_prior` now transparently raises ε to the Exp-14 safe value |
-| v0.4 (this) | HTML report (`result.to_html(path)`) — self-contained file with best point, convergence chart, history table, CSV download, knowledge spec |
-| v0.5 | Claude Code skill packaging |
+| v0.4 | HTML report (`result.to_html(path)`) — self-contained file with best point, convergence chart, history table, CSV download, knowledge spec |
+| v0.5 (this) | Mixed-domain parameters, objectives, constraints, diagnostic designs, and a versioned knowledge registry with explicit provider allow-lists |
 | v0.6 | MCP server (stateless tools) |
 | v0.7 | Multi-objective (qLogEHVI, Pareto reports) |
 | v1.0 | Stable API, remove legacy shim |
+
+---
+
+Observer, laboratory-device, and platform-adapter integration remains future
+external work and is not implemented in this repository.
 
 ---
 

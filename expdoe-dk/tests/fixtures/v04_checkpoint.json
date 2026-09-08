@@ -1,0 +1,12 @@
+{
+  "space": {
+    "params": [{"name": "x", "bounds": [0.0, 1.0], "unit": "", "kind": "continuous", "step": null, "log_scale": false}],
+    "constraints": [],
+    "objectives": ["yield"],
+    "maximize": [true]
+  },
+  "knowledge": {"strict": false, "items": []},
+  "seed": 7,
+  "history": [{"x": 0.25, "y": 1.5, "kind": "doe"}],
+  "trial_kind": ["doe"]
+}

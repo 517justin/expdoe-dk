@@ -2,77 +2,151 @@
 
 # expdoe-dk
 
-**Design of Experiments (DoE) + Bayesian Optimization (BO), with optional domain-knowledge injection for chemistry, materials, and lab workflows.**
+Design of Experiments (DoE) and Bayesian optimization for physical-unit,
+mixed-variable laboratory workflows, with explicit constraints and versioned
+domain knowledge.
 
-`expdoe-dk` helps experimentalists plan a small initial design, respect real lab constraints, and continue with Gaussian-process Bayesian optimization. The package is built for physical units, discrete operating steps, linear constraints, and domain knowledge such as monotonic trends, Arrhenius-like temperature effects, and peak-shaped factors.
+## v0.5 capabilities
 
-## What It Provides
+- Continuous, integer, discrete, categorical, and ordinal parameters with
+  physical/model transforms.
+- Explicit maximize, minimize, and target objectives.
+- Declarative linear, expression, categorical-combination, and outcome
+  constraints.
+- Capability-aware LHS, Sobol, Halton, random, and D-optimal initial designs
+  with deterministic diagnostics.
+- Immutable observation/pending batches and schema-versioned space payloads.
+- A versioned knowledge-pattern registry with built-ins and an explicit,
+  distribution-name allow-list for external providers.
+- The v0.4 `Campaign`, `Knowledge`, checkpoint, report, and top-level import
+  surface remain compatible.
 
-| Capability | Summary |
-|------------|---------|
-| Constrained DoE | Generate initial points with LHS, Sobol, Halton, D-optimal, or random designs while respecting bounds, discrete steps, and linear constraints. |
-| Bayesian optimization | Continue after DoE with an ask/tell campaign loop backed by GP models. |
-| Domain knowledge | Encode expected trends with `Knowledge().with_arrhenius(...)`, `with_monotone(...)`, `with_quadratic_peak(...)`, and related helpers. |
-| Lab-facing output | Work in physical units and export shareable HTML campaign reports. |
-| Safe defaults | If no knowledge is given, the campaign uses a plain GP rather than injecting hidden assumptions. |
+## Install
 
-## Quick Example
+```bash
+pip install -e ./expdoe-dk
+```
+
+Python 3.10–3.12 is supported. Runtime dependencies are declared in
+[`expdoe-dk/pyproject.toml`](./expdoe-dk/pyproject.toml), including the direct
+`jsonschema>=4.18` dependency used to validate knowledge definitions.
+
+## Mixed-space design with objectives and constraints
+
+This example is runnable from an environment where the package is installed:
+
+```python
+import expdoe_dk as ed
+from expdoe_dk.domain import LinearConstraint
+
+space = ed.Space(
+    params=[
+        ed.Parameter("temperature", bounds=(300.0, 400.0), unit="K"),
+        ed.Parameter("cycles", kind="integer", bounds=(1, 9), step=2),
+        ed.Parameter("dose", kind="discrete", values=[0.1, 0.3, 0.8]),
+        ed.Parameter("solvent", kind="categorical", values=["water", "ethanol"]),
+        ed.Parameter("grade", kind="ordinal", values=["low", "medium", "high"]),
+    ],
+    constraints=[
+        LinearConstraint(
+            "temperature_limit",
+            coefficients={"temperature": 1.0},
+            operator="<=",
+            bound=390.0,
+        ),
+        ed.CategoricalCombinationConstraint(
+            "avoid_low_ethanol",
+            forbidden=[{"solvent": "ethanol", "grade": "low"}],
+        ),
+    ],
+    objectives=[
+        ed.Objective("yield", "maximize", unit="%", priority=0),
+        ed.Objective("waste", "minimize", unit="g", priority=1),
+    ],
+)
+
+batch = ed.suggest_design(
+    space, n=8, method="auto", seed=7, return_diagnostics=True
+)
+print(batch.frame)
+print(batch.diagnostics.effective_method)
+```
+
+`expdoe_dk.LinearConstraint` remains the v0.4 two-sided adapter. New code that
+wants the declarative one-sided form should import
+`expdoe_dk.domain.LinearConstraint`, as above.
+
+## Knowledge registry and explicit provider loading
+
+Built-ins and external providers use the same exact `(pattern, version)`
+registry. Provider discovery never runs implicitly: imports, `Knowledge`,
+validation, and compilation do not execute provider code.
+
+```python
+from expdoe_dk import Knowledge, PatternRegistry, load_pattern_providers
+from expdoe_dk.knowledge.patterns import builtin_pattern_definitions
+
+registry = PatternRegistry()
+for definition in builtin_pattern_definitions():
+    registry.register(definition)
+
+# Keep empty when no external distribution is approved. Replace with an
+# installed distribution name such as {"my-lab-patterns"} after review.
+approved_distributions: set[str] = set()
+report = load_pattern_providers(approved_distributions, registry)
+print(report.to_dict())
+
+knowledge = Knowledge(registry).with_monotone(
+    "temperature", effect="increases_objective"
+)
+print([(spec.pattern, spec.version) for spec in knowledge.specs])
+```
+
+Allow-list matching uses deterministic PEP 503-style distribution names, so
+case and `.`, `_`, or `-` punctuation variants are equivalent. Entry-point
+names are provenance only and never grant authorization. Missing requested
+distributions and malformed providers raise typed `EngineError` values before
+the registry is mutated.
+
+## Migrating from v0.4
+
+Legacy construction remains valid:
 
 ```python
 import expdoe_dk as ed
 
-space = ed.Space(
-    params=[
-        ed.Parameter("T", bounds=(60, 120), unit="degC", kind="discrete", step=1),
-        ed.Parameter("time", bounds=(10, 180), unit="min", kind="discrete", step=5),
-        ed.Parameter("pH", bounds=(4, 10), kind="discrete", step=1),
-        ed.Parameter("conc_A", bounds=(1, 10), unit="mL", kind="discrete", step=1),
-    ],
-    objectives="yield_pct",
+legacy_space = ed.Space(
+    [ed.Parameter("x", bounds=(0.0, 1.0))],
+    objectives="yield",
     maximize=True,
 )
+legacy_constraint = ed.LinearConstraint(coeffs={"x": 1.0}, upper=0.8)
+```
 
-knowledge = (
-    ed.Knowledge()
-    .with_arrhenius("T")
-    .with_monotone("time", effect="increases_objective")
-    .with_quadratic_peak("pH", center=7)
+For v0.5, prefer explicit objectives, declarative constraints, and versioned
+knowledge specs:
+
+```python
+import expdoe_dk as ed
+from expdoe_dk.domain import LinearConstraint
+
+space = ed.Space(
+    [ed.Parameter("x", bounds=(0.0, 1.0))],
+    constraints=[LinearConstraint("x_limit", {"x": 1.0}, "<=", 0.8)],
+    objectives=[ed.Objective("yield", "maximize")],
 )
-
-campaign = ed.Campaign(space, knowledge, seed=42)
-
-doe = campaign.suggest_doe(n=12)
-y_doe = run_lab_experiments(doe)
-campaign.tell(doe, y_doe)
-
-for _ in range(20):
-    x_next = campaign.ask(q=1)
-    y_next = run_lab_experiments(x_next)
-    campaign.tell(x_next, y_next)
-
-result = campaign.finalize()
-result.to_html("campaign_report.html")
+knowledge = ed.Knowledge().with_saturation(
+    "x", direction="increasing", half_response=0.4
+)
+payload = space.to_dict()
+restored = ed.Space.from_dict(payload)
+assert restored.to_dict() == payload
 ```
 
-## Install
+Observer and laboratory-device integration is future external work and is not
+implemented in this repository.
 
-For normal development from the repository root:
-
-```bash
-pip install -r requirements.txt
-pip install -e ./expdoe-dk
-```
-
-Or install directly from the package directory:
-
-```bash
-cd expdoe-dk
-pip install -e .
-```
-
-The runtime requirements are listed in [`requirements.txt`](./requirements.txt) and mirrored in [`expdoe-dk/pyproject.toml`](./expdoe-dk/pyproject.toml): Python 3.10+, PyTorch, BoTorch, GPyTorch, Ax, NumPy, SciPy, pandas, matplotlib, and pyDOE3.
-
-For development and tests:
+## Development
 
 ```bash
 cd expdoe-dk
@@ -80,69 +154,9 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-Slow integration tests can be enabled with:
-
-```bash
-pytest -q --run-slow
-```
-
-## Repository Layout
-
-```text
-expdoe-dk/                          # Publishable Python package
-  src/expdoe_dk/
-    space.py                        # Parameter, LinearConstraint, Space
-    doe/                            # DoE methods
-    knowledge/                      # Knowledge specs and frame translation
-    bo/                             # Campaign loop and HTML report
-    legacy/                         # ax_doe_bo compatibility shims
-  tests/                            # Unit and integration tests
-  pyproject.toml                    # Package metadata and dependencies
-
-examples/                           # End-to-end usage demos
-experiments/                        # Reproducible studies and result notes
-docs/superpowers/specs/              # Design specs for planned experiments
-
-ax_doe_bo.py / doe_utils.py / benchmarks.py
-                                    # Historical research framework kept for reproducibility
-```
-
-## Examples And Experiments
-
-| Path | Purpose |
-|------|---------|
-| [`examples/01_reaction_optimization.py`](./examples/01_reaction_optimization.py) | End-to-end DoE to BO reaction optimization example. |
-| [`examples/02_html_report.py`](./examples/02_html_report.py) | Demonstrates `Result.to_html(...)`. |
-| [`experiments/simulation_data1/`](./experiments/simulation_data1/) | Clean synthetic oracle studies for DoE method and knowledge comparisons. |
-| [`experiments/simulation_data2/`](./experiments/simulation_data2/) | Discrete, constrained, lab-like simulation study. |
-| [`docs/superpowers/specs/`](./docs/superpowers/specs/) | Planning documents for future simulation datasets. |
-
-The README intentionally keeps experiment results short. Detailed methods, tables, and conclusions live under [`experiments/`](./experiments/), especially [`experiments/README.md`](./experiments/README.md) and each simulation dataset README.
-
-## Practical Guidance
-
-- Start with `Campaign(space)` and no knowledge when you do not have a specific physical assumption.
-- Use domain knowledge when the assumption is strong and stated in physical terms, such as "temperature increases yield" or "pH peaks near 7".
-- Treat `with_random_augment(...)` as exploratory regularization, not a default.
-- Keep the number of active optimization factors modest when lab budget is tight.
-- Export `result.to_html(...)` when you need a compact report for a notebook or collaborator.
-
-## Roadmap
-
-| Version | Adds | Status |
-|---------|------|--------|
-| v0.1 | Constrained DoE, knowledge composition, campaign loop, first example | Released |
-| v0.2 | Empirical validators for monotonicity and frozen-mean shape checks | Released |
-| v0.3 | Epsilon auto-rescue for monotone knowledge plus GP priors | Released |
-| v0.4 | Self-contained HTML report | Released |
-| v0.5 | Claude Code skill packaging | Planned |
-| v0.6 | MCP server interface | Planned |
-| v0.7 | Multi-objective BO | Planned |
-| v0.8 | Multi-fidelity BO | Planned |
-| v1.0 | Stable API and legacy shim removal | Planned |
+Slow integration tests run only when explicitly selected with `--run-slow`.
 
 ## License
 
-Apache License, Version 2.0. See [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE).
-
-The historical files `ax_doe_bo.py`, `doe_utils.py`, and `benchmarks.py` were originally MIT-licensed. They are retained for reproducibility, and the original terms remain available in git history.
+Apache License, Version 2.0. See [`LICENSE`](./LICENSE) and
+[`NOTICE`](./NOTICE).

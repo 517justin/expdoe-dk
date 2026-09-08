@@ -14,6 +14,9 @@ venv/
 env/
 .conda/
 
+# Local Git worktrees
+.worktrees/
+
 # Outputs (large files)
 outputs/
 *.png

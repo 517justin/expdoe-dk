@@ -15,12 +15,22 @@ Lessons from DOEGP Plan 2 hard-coded as safer defaults:
 """
 from __future__ import annotations
 
+import math
 import warnings
-from dataclasses import dataclass, field, replace
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
+from expdoe_dk.domain import ExpressionConstraint
+from expdoe_dk.domain.space import ENGINE_VERSION
+from expdoe_dk.errors import EngineError, ErrorCode
+
 from ._frame import PhysicalEffect, flip_for_minimize, InternalDirection
+from .artifacts import OptimizationArtifacts
 from .monotone import epsilon_from_prior
+from .patterns import GP_PRIOR_PRESETS, builtin_pattern_definitions
+from .registry import PatternRegistry, ProviderRecord
+from .specs import KnowledgePatternSpec, KnowledgeScope, make_pattern_spec
 from .validators import (
     MonotoneCheckResult,
     MonotoneViolationWarning,
@@ -75,17 +85,60 @@ class _GPPriorItem:
     lengthscale: Literal["weak", "medium", "strong"] = "medium"
 
 
-# Map of lengthscale prior strength → (Gamma(a, b) parameters, mode).
-# Modes ((a-1)/b) used by `epsilon=auto` resolution.
-GP_PRIOR_PRESETS: dict[str, dict[str, Any]] = {
-    "weak":   {"ls": (1.5, 0.5),  "os": (2.0, 0.5), "noise": (1.0, 50.0)},
-    "medium": {"ls": (3.0, 6.0),  "os": (3.0, 1.5), "noise": (2.0, 200.0)},
-    "strong": {"ls": (6.0, 15.0), "os": (3.0, 1.5), "noise": (3.0, 500.0)},
-}
-
-
 def _gamma_mode(a: float, b: float) -> float:
     return max(0.01, (a - 1.0) / b) if a > 1 else 0.05
+
+
+_LEGACY_PATTERN_KEYS = frozenset(
+    {
+        ("arrhenius", "1.0"),
+        ("quadratic_peak", "1.0"),
+        ("monotone", "1.0"),
+        ("random_augment", "1.0"),
+        ("gp_prior", "1.0"),
+    }
+)
+
+KNOWLEDGE_SCHEMA_VERSION = "1.0"
+
+
+def _legacy_item_from_spec(spec: KnowledgePatternSpec) -> Any | None:
+    """Render one built-in declaration through the exact v0.4 item view."""
+    if (spec.pattern, spec.version) not in _LEGACY_PATTERN_KEYS:
+        return None
+    parameters = spec.parameters
+    if spec.pattern == "arrhenius":
+        return _ArrheniusItem(
+            param=spec.scope.factors[0],
+            frozen=parameters["frozen"],
+            activation_energy=parameters["activation_energy"],
+            amplitude_init=parameters["amplitude_init"],
+        )
+    if spec.pattern == "quadratic_peak":
+        return _QuadraticPeakItem(
+            param=spec.scope.factors[0],
+            center=parameters["center"],
+            direction=parameters["direction"],
+            frozen=parameters["frozen"],
+        )
+    if spec.pattern == "monotone":
+        effect: PhysicalEffect = (
+            "increases_objective"
+            if parameters["direction"] == "increasing"
+            else "decreases_objective"
+        )
+        return _MonotoneItem(
+            param=spec.scope.factors[0],
+            effect=effect,
+            n_pairs_per_dim=parameters["n_pairs_per_dim"],
+            epsilon=parameters["epsilon"],
+            delta_norm=parameters["delta_norm"],
+        )
+    if spec.pattern == "random_augment":
+        return _RandomAugmentItem(n=parameters["n"])
+    if spec.pattern == "gp_prior":
+        return _GPPriorItem(lengthscale=parameters["lengthscale"])
+    return None
 
 
 # --------------------------------------------------------------------- #
@@ -102,13 +155,211 @@ class Knowledge:
     resolves them at fit time, applying frame translation and ε auto-tune.
     """
 
-    def __init__(self) -> None:
-        self._items: list[Any] = []
+    def __init__(self, registry: PatternRegistry | None = None) -> None:
+        if registry is None:
+            registry = PatternRegistry()
+            for definition in builtin_pattern_definitions():
+                registry.register(definition)
+        self._registry = registry
+        self._specs: list[KnowledgePatternSpec] = []
+        self._restored_provider_records: tuple[ProviderRecord, ...] = ()
         self._strict = False  # legacy flag; no longer affects Campaign behaviour
+
+    def add(self, spec: KnowledgePatternSpec) -> "Knowledge":
+        """Add one immutable declaration, rejecting ambiguous provenance IDs."""
+        if not isinstance(spec, KnowledgePatternSpec):
+            raise TypeError("spec must be a KnowledgePatternSpec")
+        if any(existing.pattern_id == spec.pattern_id for existing in self._specs):
+            raise ValueError(f"Duplicate knowledge pattern_id {spec.pattern_id!r}")
+        self._specs.append(spec)
+        return self
+
+    def add_spec(self, spec: KnowledgePatternSpec) -> "Knowledge":
+        """Add a registry-backed spec through the strict public add boundary."""
+        return self.add(spec)
+
+    def _add_legacy_spec(self, spec: KnowledgePatternSpec) -> "Knowledge":
+        """Add a helper declaration with a stable occurrence-distinct ID."""
+        existing_ids = {item.pattern_id for item in self._specs}
+        base_id = spec.pattern_id
+        effective_id = base_id
+        occurrence = 1
+        while effective_id in existing_ids:
+            occurrence += 1
+            effective_id = f"{base_id}-{occurrence}"
+        if effective_id != base_id:
+            spec = make_pattern_spec(
+                pattern_id=effective_id,
+                pattern=spec.pattern,
+                version=spec.version,
+                parameters=spec.to_dict()["parameters"],
+                scope=spec.scope,
+                confidence=spec.confidence,
+                evidence=spec.evidence,
+                enabled=spec.enabled,
+            )
+        return self.add(spec)
 
     # ------------------------------------------------------------------ #
     # Composition (chainable)
     # ------------------------------------------------------------------ #
+    def with_saturation(
+        self,
+        param: str,
+        *,
+        direction: str,
+        half_response: float,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare a one-factor saturation response at ``half_response``."""
+        self._require_name(param, "param")
+        if direction not in {"increasing", "decreasing"}:
+            raise ValueError("direction must be increasing or decreasing")
+        self._require_finite(half_response, "half_response")
+        return self.add_spec(
+            make_pattern_spec(
+                pattern="saturation",
+                version="1.0",
+                parameters={"direction": direction, "half_response": half_response},
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=confidence,
+            )
+        )
+
+    def with_threshold(
+        self,
+        param: str,
+        *,
+        threshold: float,
+        below_behavior: str,
+        above_behavior: str,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare keyword-only below/above response behavior at a threshold."""
+        self._require_name(param, "param")
+        self._require_finite(threshold, "threshold")
+        allowed = {"increasing", "decreasing", "flat"}
+        if below_behavior not in allowed:
+            raise ValueError("below_behavior must be increasing, decreasing, or flat")
+        if above_behavior not in allowed:
+            raise ValueError("above_behavior must be increasing, decreasing, or flat")
+        return self.add_spec(
+            make_pattern_spec(
+                pattern="threshold",
+                version="1.0",
+                parameters={
+                    "threshold": threshold,
+                    "below_behavior": below_behavior,
+                    "above_behavior": above_behavior,
+                },
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=confidence,
+            )
+        )
+
+    def with_interaction(
+        self,
+        first: str,
+        second: str,
+        *,
+        kind: str,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare a synergy or antagonism between two distinct factors."""
+        self._require_name(first, "first")
+        self._require_name(second, "second")
+        if first == second:
+            raise ValueError("interaction factors must be distinct")
+        if kind not in {"synergy", "antagonism"}:
+            raise ValueError("kind must be synergy or antagonism")
+        return self.add_spec(
+            make_pattern_spec(
+                pattern=kind,
+                version="1.0",
+                parameters={},
+                scope=KnowledgeScope(factors=(first, second)),
+                confidence=confidence,
+            )
+        )
+
+    def with_safe_region(
+        self,
+        *,
+        expression: str,
+        factors: tuple[str, ...] = (),
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare a hard safe region using a keyword-only expression."""
+        if type(expression) is not str or not expression.strip():
+            raise ValueError("expression must be a non-empty string")
+        if type(factors) is not tuple:
+            raise TypeError("factors must be a tuple of factor names")
+        for factor in factors:
+            self._require_name(factor, "factors")
+        try:
+            constraint = ExpressionConstraint(
+                "knowledge-helper-validation",
+                expression,
+                allowed_names=factors or None,
+            )
+        except EngineError as error:
+            raise ValueError(str(error)) from error
+        return self.add_spec(
+            make_pattern_spec(
+                pattern="safe_region",
+                version="1.0",
+                parameters={
+                    "constraint": {
+                        "kind": "expression",
+                        "hard": True,
+                        "ast": constraint.ast,
+                    }
+                },
+                scope=KnowledgeScope(factors=factors),
+                confidence=confidence,
+            )
+        )
+
+    def with_tradeoff(
+        self,
+        first_objective: str,
+        second_objective: str,
+        *,
+        first_weight: float,
+        second_weight: float,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare keyword-only nonnegative weights for two objectives."""
+        self._require_name(first_objective, "first_objective")
+        self._require_name(second_objective, "second_objective")
+        if first_objective == second_objective:
+            raise ValueError("tradeoff objectives must be distinct")
+        first = self._require_finite(first_weight, "first_weight")
+        second = self._require_finite(second_weight, "second_weight")
+        if first < 0 or second < 0 or first + second <= 0:
+            raise ValueError("tradeoff weights must be nonnegative with a positive sum")
+        return self.add_spec(
+            make_pattern_spec(
+                pattern="tradeoff",
+                version="1.0",
+                parameters={"weights": [first, second]},
+                scope=KnowledgeScope(objectives=(first_objective, second_objective)),
+                confidence=confidence,
+            )
+        )
+
+    @staticmethod
+    def _require_name(value: object, context: str) -> str:
+        if type(value) is not str or not value:
+            raise TypeError(f"{context} must be a non-empty string")
+        return value
+
+    @staticmethod
+    def _require_finite(value: object, context: str) -> float:
+        if type(value) not in (int, float) or not math.isfinite(float(value)):
+            raise TypeError(f"{context} must be a finite non-boolean real number")
+        return float(value)
+
     def with_arrhenius(
         self,
         param: str,
@@ -125,15 +376,19 @@ class Knowledge:
                 "a specific reason.",
                 stacklevel=2,
             )
-        self._items.append(
-            _ArrheniusItem(
-                param=param,
-                frozen=frozen,
-                activation_energy=activation_energy,
-                amplitude_init=amplitude_init,
+        return self._add_legacy_spec(
+            make_pattern_spec(
+                pattern="arrhenius",
+                version="1.0",
+                parameters={
+                    "frozen": frozen,
+                    "activation_energy": activation_energy,
+                    "amplitude_init": amplitude_init,
+                },
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=1.0,
             )
         )
-        return self
 
     def with_quadratic_peak(
         self,
@@ -153,13 +408,19 @@ class Knowledge:
             raise ValueError(
                 f"direction must be 'peak' or 'valley', got {direction!r}."
             )
-        self._items.append(
-            _QuadraticPeakItem(
-                param=param, center=float(center), direction=direction,
-                frozen=frozen,
+        return self._add_legacy_spec(
+            make_pattern_spec(
+                pattern="quadratic_peak",
+                version="1.0",
+                parameters={
+                    "center": float(center),
+                    "direction": direction,
+                    "frozen": frozen,
+                },
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=1.0,
             )
         )
-        return self
 
     def with_monotone(
         self,
@@ -175,20 +436,32 @@ class Knowledge:
                 f"effect must be 'increases_objective' or "
                 f"'decreases_objective', got {effect!r}."
             )
-        self._items.append(
-            _MonotoneItem(
-                param=param,
-                effect=effect,
-                n_pairs_per_dim=n_pairs_per_dim,
-                epsilon=epsilon,
-                delta_norm=delta_norm,
+        direction = "increasing" if effect == "increases_objective" else "decreasing"
+        return self._add_legacy_spec(
+            make_pattern_spec(
+                pattern="monotone",
+                version="1.0",
+                parameters={
+                    "direction": direction,
+                    "n_pairs_per_dim": n_pairs_per_dim,
+                    "epsilon": epsilon,
+                    "delta_norm": delta_norm,
+                },
+                scope=KnowledgeScope(factors=(param,)),
+                confidence=1.0,
             )
         )
-        return self
 
     def with_random_augment(self, n: int = 20) -> "Knowledge":
-        self._items.append(_RandomAugmentItem(n=n))
-        return self
+        return self._add_legacy_spec(
+            make_pattern_spec(
+                pattern="random_augment",
+                version="1.0",
+                parameters={"n": n},
+                scope=KnowledgeScope(),
+                confidence=1.0,
+            )
+        )
 
     def with_gp_prior(
         self,
@@ -198,8 +471,15 @@ class Knowledge:
             raise ValueError(
                 f"lengthscale preset must be one of {list(GP_PRIOR_PRESETS)}."
             )
-        self._items.append(_GPPriorItem(lengthscale=lengthscale))
-        return self
+        return self._add_legacy_spec(
+            make_pattern_spec(
+                pattern="gp_prior",
+                version="1.0",
+                parameters={"lengthscale": lengthscale},
+                scope=KnowledgeScope(),
+                confidence=1.0,
+            )
+        )
 
     def strict(self) -> "Knowledge":
         """
@@ -223,24 +503,18 @@ class Knowledge:
         - ``drop_monotone()`` removes all monotone items.
         - ``drop_monotone("T")`` removes only items declared for parameter ``T``.
         """
-        self._items = [
-            it
-            for it in self._items
-            if not (
-                getattr(it, "kind", None) == "monotone"
-                and (param is None or getattr(it, "param", None) == param)
-            )
-        ]
-        return self
+        return self.drop("monotone", param)
 
     def drop(self, kind: str, param: str | None = None) -> "Knowledge":
         """Remove items of a given kind (and optionally a specific param)."""
-        self._items = [
-            it
-            for it in self._items
+        legacy_kind = any(pattern == kind for pattern, _ in _LEGACY_PATTERN_KEYS)
+        self._specs = [
+            spec
+            for spec in self._specs
             if not (
-                getattr(it, "kind", None) == kind
-                and (param is None or getattr(it, "param", None) == param)
+                spec.pattern == kind
+                and (not legacy_kind or spec.version == "1.0")
+                and (param is None or param in spec.scope.factors)
             )
         ]
         return self
@@ -250,13 +524,118 @@ class Knowledge:
     # ------------------------------------------------------------------ #
     @property
     def items(self) -> list[Any]:
-        return list(self._items)
+        return [
+            item
+            for spec in self._specs
+            if spec.enabled
+            if (item := _legacy_item_from_spec(spec)) is not None
+        ]
+
+    @property
+    def specs(self) -> tuple[KnowledgePatternSpec, ...]:
+        """Return the immutable declaration set without mutable container leaks."""
+        return tuple(self._specs)
+
+    @property
+    def registry(self) -> PatternRegistry:
+        return self._registry
+
+    @property
+    def provider_records(self) -> tuple[ProviderRecord, ...]:
+        """Return detached records, keeping restored expectations authoritative."""
+        current = tuple(
+            item
+            for item in self._registry.provider_records
+            if isinstance(item, ProviderRecord)
+        )
+        keyed = {
+            (
+                item.canonical_distribution_name,
+                item.entry_point_name,
+            ): item
+            for item in current
+        }
+        for item in self._restored_provider_records:
+            keyed[(item.canonical_distribution_name, item.entry_point_name)] = item
+        return tuple(keyed[key] for key in sorted(keyed))
+
+    def _verify_restored_provider_records(self) -> None:
+        """Require exact explicit reloads for providers used by enabled specs."""
+        enabled = {
+            (spec.pattern, spec.version) for spec in self._specs if spec.enabled
+        }
+        required = tuple(
+            provider
+            for provider in self._restored_provider_records
+            if any(
+                (definition.pattern, definition.version) in enabled
+                for definition in provider.definitions
+            )
+        )
+        if not required:
+            return
+
+        current = {
+            (item.canonical_distribution_name, item.entry_point_name): item
+            for item in self._registry.provider_records
+            if isinstance(item, ProviderRecord)
+        }
+        missing: list[ProviderRecord] = []
+        mismatched: list[tuple[ProviderRecord, ProviderRecord]] = []
+        for expected in required:
+            key = (
+                expected.canonical_distribution_name,
+                expected.entry_point_name,
+            )
+            actual = current.get(key)
+            if actual is None:
+                missing.append(expected)
+            elif actual != expected:
+                mismatched.append((expected, actual))
+        if not missing and not mismatched:
+            return
+
+        missing_patterns = sorted(
+            {
+                f"{definition.pattern}@{definition.version}"
+                for provider in missing
+                for definition in provider.definitions
+                if (definition.pattern, definition.version) in enabled
+            }
+        )
+        raise EngineError(
+            ErrorCode.EXTENSION_NOT_ALLOWED,
+            "Knowledge pattern providers must be explicitly reloaded with exact "
+            "recorded provenance before compilation",
+            details={
+                "missing_patterns": missing_patterns,
+                "required_providers": [item.to_dict() for item in required],
+                "missing_provider_records": [item.to_dict() for item in missing],
+                "mismatched_provider_records": [
+                    {
+                        "expected": expected.to_dict(),
+                        "actual": actual.to_dict(),
+                    }
+                    for expected, actual in mismatched
+                ],
+            },
+            hints=(
+                "Call load_pattern_providers() with the recorded distributions "
+                "and restore using that registry.",
+            ),
+        )
 
     def has_kind(self, kind: str) -> bool:
-        return any(getattr(it, "kind", None) == kind for it in self._items)
+        return bool(self.items_of(kind))
 
     def items_of(self, kind: str) -> list[Any]:
-        return [it for it in self._items if getattr(it, "kind", None) == kind]
+        return [
+            item
+            for spec in self._specs
+            if spec.enabled
+            if spec.pattern == kind
+            if (item := _legacy_item_from_spec(spec)) is not None
+        ]
 
     def is_strict(self) -> bool:
         return self._strict
@@ -291,7 +670,8 @@ class Knowledge:
             a, b = GP_PRIOR_PRESETS[preset]["ls"]
             ls_mode = _gamma_mode(a, b)
             min_eps = 0.3 * ls_mode
-            for idx, m in enumerate(list(self._items)):
+            for idx, spec in enumerate(list(self._specs)):
+                m = _legacy_item_from_spec(spec)
                 if getattr(m, "kind", None) != "monotone":
                     continue
                 if m.epsilon == "auto":
@@ -310,9 +690,22 @@ class Knowledge:
                         f"auto_rescue=True. "
                         f"See AGENT_KNOWLEDGE.md Exp-14 for the rule."
                     )
-                # Auto-rescue: replace the frozen dataclass item.
+                # Auto-rescue replaces the immutable value object while retaining
+                # the declaration's provenance identity. This also keeps IDs unique
+                # when distinct unsafe declarations converge on the same epsilon.
                 rescued_eps = round(max(min_eps, 0.05), 4)
-                self._items[idx] = replace(m, epsilon=rescued_eps)
+                parameters = spec.to_dict()["parameters"]
+                parameters["epsilon"] = rescued_eps
+                self._specs[idx] = make_pattern_spec(
+                    pattern_id=spec.pattern_id,
+                    pattern=spec.pattern,
+                    version=spec.version,
+                    parameters=parameters,
+                    scope=spec.scope,
+                    confidence=spec.confidence,
+                    evidence=spec.evidence,
+                    enabled=spec.enabled,
+                )
                 warnings.warn(
                     EpsilonAutoRescueNotice(
                         f"Auto-rescued with_monotone(param={m.param!r}): "
@@ -345,9 +738,165 @@ class Knowledge:
         return {
             "strict": self._strict,
             "items": [
-                {**it.__dict__} for it in self._items
+                {**it.__dict__} for it in self.items
             ],
         }
+
+    def to_specs_dict(self) -> dict:
+        """Serialize the versioned declarations without changing v0.4 payloads."""
+        return {"specs": [spec.to_dict() for spec in self._specs]}
+
+    def to_envelope(self) -> dict[str, object]:
+        """Serialize all declarations and provider provenance reversibly."""
+        return {
+            "schema_version": KNOWLEDGE_SCHEMA_VERSION,
+            "engine_version": ENGINE_VERSION,
+            "strict": self._strict,
+            "specs": [spec.to_dict() for spec in self._specs],
+            "providers": [item.to_dict() for item in self.provider_records],
+        }
+
+    @classmethod
+    def from_envelope(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        registry: PatternRegistry | None = None,
+    ) -> "Knowledge":
+        """Restore the current versioned envelope without loading executable code."""
+        if not isinstance(payload, Mapping):
+            raise TypeError("Knowledge envelope must be an object")
+        expected = {
+            "schema_version",
+            "engine_version",
+            "strict",
+            "specs",
+            "providers",
+        }
+        actual = set(payload)
+        if actual != expected:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Knowledge envelope has incompatible fields",
+                details={
+                    "missing": sorted(expected - actual),
+                    "unknown": sorted(actual - expected),
+                },
+            )
+        if payload["schema_version"] != KNOWLEDGE_SCHEMA_VERSION:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Unsupported Knowledge schema version {payload['schema_version']!r}",
+            )
+        if payload["engine_version"] != ENGINE_VERSION:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Unsupported Knowledge engine version {payload['engine_version']!r}",
+            )
+        if type(payload["strict"]) is not bool:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Knowledge strict flag must be a boolean",
+            )
+        raw_specs = payload["specs"]
+        raw_providers = payload["providers"]
+        if type(raw_specs) is not list or type(raw_providers) is not list:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Knowledge specs and providers must be JSON arrays",
+            )
+        try:
+            specs = tuple(KnowledgePatternSpec.from_dict(item) for item in raw_specs)
+            providers = tuple(ProviderRecord.from_dict(item) for item in raw_providers)
+        except (TypeError, ValueError) as error:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Knowledge envelope declaration is invalid: {error}",
+            ) from error
+        knowledge = cls(registry=registry)
+        knowledge._strict = payload["strict"]
+        knowledge._restored_provider_records = tuple(
+            sorted(
+                providers,
+                key=lambda item: (
+                    item.canonical_distribution_name,
+                    item.entry_point_name,
+                ),
+            )
+        )
+        try:
+            for spec in specs:
+                knowledge.add(spec)
+        except (TypeError, ValueError) as error:
+            raise EngineError(
+                ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                f"Knowledge envelope specs are invalid: {error}",
+            ) from error
+        return knowledge
+
+    def compile(self, space, observations=None) -> OptimizationArtifacts:
+        self._verify_restored_provider_records()
+        registered = {
+            (definition.pattern, definition.version)
+            for definition in self._registry.definitions()
+        }
+        missing = sorted(
+            {
+                (spec.pattern, spec.version)
+                for spec in self._specs
+                if spec.enabled and (spec.pattern, spec.version) not in registered
+            }
+        )
+        required_providers = tuple(
+            provider
+            for provider in self.provider_records
+            if any(
+                (definition.pattern, definition.version) in missing
+                for definition in provider.definitions
+            )
+        )
+        if required_providers:
+            raise EngineError(
+                ErrorCode.EXTENSION_NOT_ALLOWED,
+                "Knowledge pattern providers must be explicitly reloaded before compilation",
+                details={
+                    "missing_patterns": [
+                        f"{pattern}@{version}" for pattern, version in missing
+                    ],
+                    "required_providers": [
+                        provider.to_dict() for provider in required_providers
+                    ],
+                },
+                hints=(
+                    "Call load_pattern_providers() with the recorded distributions "
+                    "and restore using that registry.",
+                ),
+            )
+        effective_specs: list[KnowledgePatternSpec] = []
+        for spec in self._specs:
+            if not spec.enabled:
+                continue
+            if (
+                (spec.pattern, spec.version) != ("monotone", "1.0")
+                or spec.parameters["epsilon"] != "auto"
+            ):
+                effective_specs.append(spec)
+                continue
+            parameters = spec.to_dict()["parameters"]
+            parameters["epsilon"] = self.resolve_epsilon(_legacy_item_from_spec(spec))
+            effective_specs.append(
+                make_pattern_spec(
+                    pattern_id=spec.pattern_id,
+                    pattern=spec.pattern,
+                    version=spec.version,
+                    parameters=parameters,
+                    scope=spec.scope,
+                    confidence=spec.confidence,
+                    evidence=spec.evidence,
+                    enabled=spec.enabled,
+                )
+            )
+        return self._registry.compile_many(effective_specs, space, observations)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Knowledge":
@@ -408,6 +957,7 @@ class EpsilonAutoRescueNotice(UserWarning):
 
 __all__ = [
     "Knowledge",
+    "KNOWLEDGE_SCHEMA_VERSION",
     "EpsilonConflictError",
     "EpsilonAutoRescueNotice",
     "LearnableMeanAbsorptionWarning",

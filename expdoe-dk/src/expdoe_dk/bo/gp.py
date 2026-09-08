@@ -17,8 +17,8 @@ from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.priors import GammaPrior
 
 from ..space import Space
-from ..knowledge import Knowledge, GP_PRIOR_PRESETS
-from ..knowledge._frame import flip_for_minimize
+from ..knowledge import Knowledge
+from ..knowledge.artifacts import OptimizationArtifact
 from ..knowledge.monotone import MonotonicAugmenter
 from ..knowledge.shape import (
     ArrheniusMeanFrozen,
@@ -27,54 +27,27 @@ from ..knowledge.shape import (
 )
 
 
-def _resolve_dim_index(space: Space, param_name: str) -> int:
-    return space.param_names.index(param_name)
-
-
-def _build_mean_function(
-    space: Space, knowledge: Knowledge
+def build_mean_from_artifacts(
+    space: Space, artifacts: tuple[OptimizationArtifact, ...]
 ) -> nn.Module | None:
     """Combine all shape priors into a CombinedMean (or None)."""
     mean_modules: list[nn.Module] = []
-
-    for it in knowledge.items_of("arrhenius"):
-        temp_idx = _resolve_dim_index(space, it.param)
-        mean_modules.append(
-            ArrheniusMeanFrozen(
-                temp_dim_index=temp_idx,
-                activation_energy=it.activation_energy,
-                amplitude_init=it.amplitude_init,
+    for artifact in artifacts:
+        payload = artifact.payload
+        if artifact.kind == "arrhenius_mean":
+            mean_modules.append(
+                ArrheniusMeanFrozen(
+                    temp_dim_index=payload["temp_dim_index"],
+                    activation_energy=payload["activation_energy"],
+                    amplitude_init=payload["amplitude_init"],
+                )
             )
-        )
-
-    quad_items = knowledge.items_of("quadratic_peak")
-    if quad_items:
-        for it in quad_items:
-            dim = _resolve_dim_index(space, it.param)
-            # center in physical units → convert to [0,1]
-            param = space.param_by_name(it.param)
-            lo, hi = param.bounds
-            center_unit = (it.center - lo) / (hi - lo)
-            curvature_signs = [0.0] * space.n_dims
-            # peak in physical → minimum in internal frame (we minimize -y when maximize)
-            # The sign here is for the GP's Y_internal frame: a peak in user
-            # objective = a minimum in internal Y when maximize=True.
-            # CombinedMean is added directly to GP mean; positive curvature
-            # = upward parabola = valley = "GP fits low value at center".
-            # For maximize=True + user "peak": internal minimum at center
-            # → curvature_sign = +1 (upward parabola).
-            if it.direction == "peak":
-                sign_internal = +1.0 if space.maximize[0] else -1.0
-            else:  # valley in user frame
-                sign_internal = -1.0 if space.maximize[0] else +1.0
-            curvature_signs[dim] = sign_internal
-            centers = [0.5] * space.n_dims
-            centers[dim] = float(center_unit)
+        elif artifact.kind == "quadratic_mean":
             mean_modules.append(
                 QuadraticMeanFrozen(
-                    input_dim=space.n_dims,
-                    curvature_signs=curvature_signs,
-                    centers=centers,
+                    input_dim=payload["input_dim"],
+                    curvature_signs=list(payload["curvature_signs"]),
+                    centers=list(payload["centers"]),
                 )
             )
 
@@ -85,22 +58,20 @@ def _build_mean_function(
     return CombinedMean(*mean_modules)
 
 
-def _build_augmenter(
-    space: Space, knowledge: Knowledge
+def build_virtual_observation_augmenter(
+    space: Space, artifacts: tuple[OptimizationArtifact, ...]
 ) -> MonotonicAugmenter | None:
-    mono_items = knowledge.items_of("monotone")
-    if not mono_items:
+    monotone_artifacts = [item for item in artifacts if item.kind == "monotone"]
+    if not monotone_artifacts:
         return None
     internal_dims: dict[int, str] = {}
     epsilons: list[float] = []
     delta_norms: list[float] = []
-    for it in mono_items:
-        dim = _resolve_dim_index(space, it.param)
-        # Translate physical-effect → GP-frame direction.
-        direction = flip_for_minimize(it.effect, space.maximize[0])
-        internal_dims[dim] = direction
-        epsilons.append(knowledge.resolve_epsilon(it))
-        delta_norms.append(it.delta_norm)
+    for artifact in monotone_artifacts:
+        payload = artifact.payload
+        internal_dims[payload["dim"]] = payload["direction"]
+        epsilons.append(payload["epsilon"])
+        delta_norms.append(payload["delta_norm"])
     # Use the smallest ε across declared monotone params (most conservative).
     # All monotone dims share one Augmenter for simplicity in v0.1.
     return MonotonicAugmenter(
@@ -110,22 +81,22 @@ def _build_augmenter(
     )
 
 
-def _build_likelihood_and_kernel(
-    knowledge: Knowledge,
+def build_prior_modules(
+    artifacts: tuple[OptimizationArtifact, ...],
     d: int,
 ) -> tuple[GaussianLikelihood | None, Any | None]:
     """Return (likelihood, covar_module) per GP-prior preset; None if no preset."""
-    gp_prior_items = knowledge.items_of("gp_prior")
-    if not gp_prior_items:
+    prior_artifacts = [item for item in artifacts if item.kind == "gp_prior"]
+    if not prior_artifacts:
         return None, None
-    preset = GP_PRIOR_PRESETS[gp_prior_items[-1].lengthscale]
+    preset = prior_artifacts[-1].payload
     covar = ScaleKernel(
         MaternKernel(
             nu=2.5,
             ard_num_dims=d,
-            lengthscale_prior=GammaPrior(*preset["ls"]),
+            lengthscale_prior=GammaPrior(*preset["lengthscale"]),
         ),
-        outputscale_prior=GammaPrior(*preset["os"]),
+        outputscale_prior=GammaPrior(*preset["outputscale"]),
     )
     lik = GaussianLikelihood(noise_prior=GammaPrior(*preset["noise"]))
     return lik, covar
@@ -148,8 +119,9 @@ def build_gp(
         next iteration before refit. None if no monotone item.
     """
     knowledge.validate()
-    mean_function = _build_mean_function(space, knowledge)
-    lik, covar = _build_likelihood_and_kernel(knowledge, train_X_unit.shape[1])
+    artifacts = knowledge.compile(space=space, observations=None)
+    mean_function = build_mean_from_artifacts(space, artifacts.mean_components)
+    lik, covar = build_prior_modules(artifacts.priors, train_X_unit.shape[1])
 
     kwargs: dict[str, Any] = {}
     if mean_function is not None:
@@ -160,5 +132,7 @@ def build_gp(
         kwargs["likelihood"] = lik
 
     model = SingleTaskGP(train_X_unit, train_Y_norm, **kwargs)
-    augmenter = _build_augmenter(space, knowledge)
+    augmenter = build_virtual_observation_augmenter(
+        space, artifacts.virtual_observations
+    )
     return model, augmenter

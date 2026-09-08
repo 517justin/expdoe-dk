@@ -2,77 +2,135 @@
 
 # expdoe-dk
 
-**實驗設計 (DoE) + 貝葉斯優化 (BO)，支援選擇性領域知識注入，適合化學、材料與實驗室流程。**
+為實驗室的物理單位與混合變數流程提供實驗設計（DoE）與貝葉斯優化，並支援明確限制式及有版本的領域知識。
 
-`expdoe-dk` 協助實驗者規劃少量初始實驗，遵守真實實驗限制，並接著用高斯過程貝葉斯優化推進下一批條件。套件以物理單位、離散操作刻度、線性限制與領域知識為核心，例如單調趨勢、Arrhenius 溫度效應與峰值型因子。
+## v0.5 功能
 
-## 功能概覽
+- 連續、整數、離散、類別與序位參數，以及物理／模型座標轉換。
+- 明確的最大化、最小化與目標區間 objective。
+- 宣告式線性、expression、類別組合與 outcome constraints。
+- 具能力檢查與確定性 diagnostics 的 LHS、Sobol、Halton、random 與
+  D-optimal 初始設計。
+- 不可變的 observation/pending batches，以及具 schema 版本的 space payload。
+- 內建 knowledge patterns 與明確 distribution-name allow-list 的知識 registry。
+- 保留 v0.4 的 `Campaign`、`Knowledge`、checkpoint、report 與頂層 import 相容性。
 
-| 功能 | 說明 |
-|------|------|
-| 限制式 DoE | 使用 LHS、Sobol、Halton、D-optimal 或 random 產生初始點，同時遵守邊界、離散步階與線性限制。 |
-| 貝葉斯優化 | 初始 DoE 後，以 GP 模型和 ask/tell campaign loop 繼續建議實驗條件。 |
-| 領域知識 | 用 `Knowledge().with_arrhenius(...)`、`with_monotone(...)`、`with_quadratic_peak(...)` 等 helper 編碼已知趨勢。 |
-| 實驗室輸出 | 使用物理單位操作，並可輸出可分享的 HTML campaign report。 |
-| 安全預設 | 若未提供知識，Campaign 使用純 GP，不會偷偷注入假設。 |
+## 安裝
 
-## 快速範例
+```bash
+pip install -e ./expdoe-dk
+```
+
+支援 Python 3.10–3.12。執行時相依套件宣告於
+[`expdoe-dk/pyproject.toml`](./expdoe-dk/pyproject.toml)，其中包含驗證知識定義所需的直接相依 `jsonschema>=4.18`。
+
+## 混合空間、objectives 與 constraints
+
+以下範例可在已安裝套件的環境直接執行：
+
+```python
+import expdoe_dk as ed
+from expdoe_dk.domain import LinearConstraint
+
+space = ed.Space(
+    params=[
+        ed.Parameter("temperature", bounds=(300.0, 400.0), unit="K"),
+        ed.Parameter("cycles", kind="integer", bounds=(1, 9), step=2),
+        ed.Parameter("dose", kind="discrete", values=[0.1, 0.3, 0.8]),
+        ed.Parameter("solvent", kind="categorical", values=["water", "ethanol"]),
+        ed.Parameter("grade", kind="ordinal", values=["low", "medium", "high"]),
+    ],
+    constraints=[
+        LinearConstraint(
+            "temperature_limit",
+            coefficients={"temperature": 1.0},
+            operator="<=",
+            bound=390.0,
+        ),
+        ed.CategoricalCombinationConstraint(
+            "avoid_low_ethanol",
+            forbidden=[{"solvent": "ethanol", "grade": "low"}],
+        ),
+    ],
+    objectives=[
+        ed.Objective("yield", "maximize", unit="%", priority=0),
+        ed.Objective("waste", "minimize", unit="g", priority=1),
+    ],
+)
+
+batch = ed.suggest_design(
+    space, n=8, method="auto", seed=7, return_diagnostics=True
+)
+print(batch.frame)
+print(batch.diagnostics.effective_method)
+```
+
+`expdoe_dk.LinearConstraint` 仍是 v0.4 的雙側相容 adapter；新程式若要使用宣告式單側版本，請如上例 import `expdoe_dk.domain.LinearConstraint`。
+
+## Knowledge registry 與明確 provider 載入
+
+內建與外部 provider 共用同一個精確 `(pattern, version)` registry。Provider discovery 絕不會隱式執行；import、`Knowledge`、validation 與 compilation 都不會執行 provider code。
+
+```python
+from expdoe_dk import Knowledge, PatternRegistry, load_pattern_providers
+from expdoe_dk.knowledge.patterns import builtin_pattern_definitions
+
+registry = PatternRegistry()
+for definition in builtin_pattern_definitions():
+    registry.register(definition)
+
+# 沒有核准外部 distribution 時維持空集合；審查並安裝後可改為
+# {"my-lab-patterns"}。
+approved_distributions: set[str] = set()
+report = load_pattern_providers(approved_distributions, registry)
+print(report.to_dict())
+
+knowledge = Knowledge(registry).with_monotone(
+    "temperature", effect="increases_objective"
+)
+print([(spec.pattern, spec.version) for spec in knowledge.specs])
+```
+
+Allow-list 以確定性的 PEP 503 distribution 名稱比對，因此大小寫與 `.`, `_`,
+`-` 的差異視為相同。Entry-point 名稱只記錄 provenance，不能授權載入。若指定的 distribution 未安裝或 provider 格式錯誤，系統會在 registry 變動前拋出具型別的 `EngineError`。
+
+## 從 v0.4 遷移
+
+舊版建構方式仍可使用：
 
 ```python
 import expdoe_dk as ed
 
-space = ed.Space(
-    params=[
-        ed.Parameter("T", bounds=(60, 120), unit="degC", kind="discrete", step=1),
-        ed.Parameter("time", bounds=(10, 180), unit="min", kind="discrete", step=5),
-        ed.Parameter("pH", bounds=(4, 10), kind="discrete", step=1),
-        ed.Parameter("conc_A", bounds=(1, 10), unit="mL", kind="discrete", step=1),
-    ],
-    objectives="yield_pct",
+legacy_space = ed.Space(
+    [ed.Parameter("x", bounds=(0.0, 1.0))],
+    objectives="yield",
     maximize=True,
 )
+legacy_constraint = ed.LinearConstraint(coeffs={"x": 1.0}, upper=0.8)
+```
 
-knowledge = (
-    ed.Knowledge()
-    .with_arrhenius("T")
-    .with_monotone("time", effect="increases_objective")
-    .with_quadratic_peak("pH", center=7)
+v0.5 建議改用明確 objectives、宣告式 constraints 與有版本的 knowledge specs：
+
+```python
+import expdoe_dk as ed
+from expdoe_dk.domain import LinearConstraint
+
+space = ed.Space(
+    [ed.Parameter("x", bounds=(0.0, 1.0))],
+    constraints=[LinearConstraint("x_limit", {"x": 1.0}, "<=", 0.8)],
+    objectives=[ed.Objective("yield", "maximize")],
 )
-
-campaign = ed.Campaign(space, knowledge, seed=42)
-
-doe = campaign.suggest_doe(n=12)
-y_doe = run_lab_experiments(doe)
-campaign.tell(doe, y_doe)
-
-for _ in range(20):
-    x_next = campaign.ask(q=1)
-    y_next = run_lab_experiments(x_next)
-    campaign.tell(x_next, y_next)
-
-result = campaign.finalize()
-result.to_html("campaign_report.html")
+knowledge = ed.Knowledge().with_saturation(
+    "x", direction="increasing", half_response=0.4
+)
+payload = space.to_dict()
+restored = ed.Space.from_dict(payload)
+assert restored.to_dict() == payload
 ```
 
-## 安裝
+Observer 與實驗室 device integration 是未來的外部工作，本 repository 尚未實作。
 
-從 repo 根目錄進行一般開發安裝：
-
-```bash
-pip install -r requirements.txt
-pip install -e ./expdoe-dk
-```
-
-或直接從套件目錄安裝：
-
-```bash
-cd expdoe-dk
-pip install -e .
-```
-
-執行時需求列在 [`requirements.txt`](./requirements.txt)，並同步寫在 [`expdoe-dk/pyproject.toml`](./expdoe-dk/pyproject.toml)：Python 3.10+、PyTorch、BoTorch、GPyTorch、Ax、NumPy、SciPy、pandas、matplotlib、pyDOE3。
-
-開發與測試工具：
+## 開發
 
 ```bash
 cd expdoe-dk
@@ -80,69 +138,9 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-若要執行較慢的整合測試：
-
-```bash
-pytest -q --run-slow
-```
-
-## 目錄結構
-
-```text
-expdoe-dk/                          # 可發布的 Python 套件
-  src/expdoe_dk/
-    space.py                        # Parameter, LinearConstraint, Space
-    doe/                            # DoE 方法
-    knowledge/                      # 知識規格與座標翻譯
-    bo/                             # Campaign loop 與 HTML 報告
-    legacy/                         # ax_doe_bo 相容 shim
-  tests/                            # 單元與整合測試
-  pyproject.toml                    # 套件 metadata 與 dependencies
-
-examples/                           # 端對端使用範例
-experiments/                        # 可重現研究與結果說明
-docs/superpowers/specs/              # 規劃中實驗的設計文件
-
-ax_doe_bo.py / doe_utils.py / benchmarks.py
-                                    # 保留供重現的歷史研究框架
-```
-
-## 範例與實驗
-
-| 路徑 | 用途 |
-|------|------|
-| [`examples/01_reaction_optimization.py`](./examples/01_reaction_optimization.py) | DoE 到 BO 的端對端反應優化範例。 |
-| [`examples/02_html_report.py`](./examples/02_html_report.py) | 示範 `Result.to_html(...)`。 |
-| [`experiments/simulation_data1/`](./experiments/simulation_data1/) | 乾淨 synthetic oracle 的 DoE 方法與知識比較研究。 |
-| [`experiments/simulation_data2/`](./experiments/simulation_data2/) | 離散、限制式、接近實驗室情境的 simulation study。 |
-| [`docs/superpowers/specs/`](./docs/superpowers/specs/) | 未來 simulation datasets 的規劃文件。 |
-
-首頁 README 只保留實驗入口與簡短說明。詳細方法、表格與結論放在 [`experiments/`](./experiments/)，特別是 [`experiments/README.md`](./experiments/README.md) 與各 simulation dataset 的 README。
-
-## 使用建議
-
-- 沒有明確物理假設時，先使用 `Campaign(space)`，也就是純 GP。
-- 有強假設時再加入領域知識，例如「溫度提高產率」或「pH 約在 7 達峰值」。
-- `with_random_augment(...)` 視為探索性正則化，不要當作預設。
-- 實驗預算有限時，主動優化的因子數不要太多。
-- 需要放入實驗紀錄或分享給合作者時，使用 `result.to_html(...)` 輸出報告。
-
-## 路線圖
-
-| 版本 | 新增功能 | 狀態 |
-|------|----------|------|
-| v0.1 | 限制式 DoE、知識組合、Campaign loop、第一個範例 | 已發布 |
-| v0.2 | 單調性與 frozen-mean shape 的經驗驗證器 | 已發布 |
-| v0.3 | monotone knowledge + GP prior 的 epsilon 自動救援 | 已發布 |
-| v0.4 | 單檔 HTML report | 已發布 |
-| v0.5 | Claude Code skill 封裝 | 規劃中 |
-| v0.6 | MCP server 介面 | 規劃中 |
-| v0.7 | 多目標 BO | 規劃中 |
-| v0.8 | 多保真度 BO | 規劃中 |
-| v1.0 | 穩定 API 並移除 legacy shim | 規劃中 |
+慢速整合測試只有在明確指定 `--run-slow` 時才執行。
 
 ## 授權
 
-Apache License, Version 2.0。詳見 [`LICENSE`](./LICENSE) 與 [`NOTICE`](./NOTICE)。
-
-歷史檔案 `ax_doe_bo.py`、`doe_utils.py`、`benchmarks.py` 原為 MIT 授權，保留作為重現用途；原始條款可在 git 歷史中查到。
+Apache License, Version 2.0。詳見 [`LICENSE`](./LICENSE) 與
+[`NOTICE`](./NOTICE)。

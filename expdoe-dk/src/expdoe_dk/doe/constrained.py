@@ -20,7 +20,7 @@ import torch
 from scipy.spatial.distance import pdist
 from scipy.stats import qmc
 
-from ..space import LinearConstraint, Space
+from ..space import Space
 from .lhs import latin_hypercube_sample, optimize_lhs_maximin
 
 
@@ -31,33 +31,42 @@ class InfeasibleDesignError(RuntimeError):
 # ----------------------------------------------------------------------- #
 # Internal helpers
 # ----------------------------------------------------------------------- #
-def _unit_to_physical_array(U: np.ndarray, space: Space) -> np.ndarray:
-    """[0,1]^d unit array → physical units, with discrete snap."""
-    lo = space.lower.cpu().numpy()
-    hi = space.upper.cpu().numpy()
-    X = lo + U * (hi - lo)
-    for j, p in enumerate(space.params):
-        if p.kind == "discrete":
-            X[:, j] = p.snap(X[:, j])
-    return X
+def _unit_to_physical_array(U: np.ndarray, space: Space) -> pd.DataFrame:
+    """Decode a numerical unit cube into an ordered physical DataFrame."""
+    unit = np.asarray(U, dtype=np.float64)
+    model_bounds = space.model_bounds_tensor.cpu().numpy()
+    model = model_bounds[0] + unit * (model_bounds[1] - model_bounds[0])
+    return space.model_to_physical(torch.as_tensor(model, dtype=torch.float64))
 
 
-def _physical_to_unit_array(X: np.ndarray, space: Space) -> np.ndarray:
-    lo = space.lower.cpu().numpy()
-    hi = space.upper.cpu().numpy()
-    return (X - lo) / (hi - lo)
+def _physical_to_unit_array(X: pd.DataFrame, space: Space) -> np.ndarray:
+    """Encode physical rows as numeric model coordinates for distance math."""
+    return space.physical_to_model(X).cpu().numpy()
 
 
-def _feasibility_mask(X_phys: np.ndarray, space: Space) -> np.ndarray:
-    if not space.constraints:
-        return np.ones(X_phys.shape[0], dtype=bool)
-    names = space.param_names
-    mask = np.ones(X_phys.shape[0], dtype=bool)
-    for c in space.constraints:
-        coeffs = np.array([c.coeffs.get(n, 0.0) for n in names], dtype=np.float64)
-        v = X_phys @ coeffs
-        mask &= (v >= c.lower - 1e-9) & (v <= c.upper + 1e-9)
-    return mask
+def _feasibility_mask(X_phys: pd.DataFrame, space: Space) -> np.ndarray:
+    return space.feasibility_mask(X_phys).cpu().numpy()
+
+
+def _physical_frame_from_records(
+    records: list[dict[str, object]], space: Space
+) -> pd.DataFrame:
+    """Build physical rows without pandas coercing heterogeneous levels."""
+    data: dict[str, object] = {}
+    for parameter in space.params:
+        values = [record[parameter.name] for record in records]
+        data[parameter.name] = (
+            pd.Series(values, dtype=object)
+            if parameter.kind in {"categorical", "ordinal"}
+            else values
+        )
+    return pd.DataFrame(data, columns=space.param_names)
+
+
+def _model_column_weights(space: Space) -> np.ndarray:
+    bounds = space.model_bounds_tensor.cpu().numpy()
+    spans = bounds[1] - bounds[0]
+    return np.divide(1.0, spans, out=np.ones_like(spans), where=spans != 0)
 
 
 def _feasibility_diagnostic(space: Space, n: int) -> str:
@@ -100,24 +109,9 @@ def _draw_random_uniform(n: int, d: int, seed: int) -> np.ndarray:
 
 
 def _draw_d_optimal(n: int, space: Space, seed: int) -> np.ndarray:
-    """
-    D-Optimal via pyDOE3's coordinate exchange (linear model). Falls back to
-    LHS maximin if pyDOE3 is unavailable or feasibility too tight.
-    """
-    try:
-        from pyDOE3 import doe_optimal  # noqa: F401
-    except Exception:
-        warnings.warn(
-            "pyDOE3 not available for d_optimal; falling back to lhs_maximin.",
-            stacklevel=2,
-        )
-        design, _ = optimize_lhs_maximin(n, space.n_dims, seed=seed)
-        return design
-
-    # pyDOE3 expects candidate set in [-1, 1]; we sample feasible candidates
-    # in unit space, transform, run exchange.
+    """Select a deterministic D-optimal design from feasible numeric candidates."""
     rng = np.random.default_rng(seed)
-    candidates_unit = rng.uniform(size=(max(200, 50 * n), space.n_dims))
+    candidates_unit = rng.uniform(size=(max(256, 64 * n), space.n_dims))
     cand_phys = _unit_to_physical_array(candidates_unit, space)
     mask = _feasibility_mask(cand_phys, space)
     if mask.sum() < n:
@@ -127,19 +121,26 @@ def _draw_d_optimal(n: int, space: Space, seed: int) -> np.ndarray:
             + _feasibility_diagnostic(space, n)
         )
     feasible_unit = candidates_unit[mask]
-    # Pick the n most spread-out feasible candidates via simple greedy maximin
-    # (lightweight surrogate for full D-optimal exchange; acceptable for v0.1)
-    chosen_idx = [int(rng.integers(feasible_unit.shape[0]))]
-    for _ in range(n - 1):
-        dists = np.min(
-            np.linalg.norm(
-                feasible_unit[:, None, :] - feasible_unit[chosen_idx][None, :, :],
-                axis=-1,
-            ),
-            axis=1,
-        )
-        chosen_idx.append(int(np.argmax(dists)))
-    return feasible_unit[chosen_idx]
+    matrix = np.column_stack(
+        (np.ones(len(feasible_unit)), feasible_unit, feasible_unit**2)
+    )
+    information = np.eye(matrix.shape[1], dtype=np.float64) * 1e-12
+    selected: list[int] = []
+    remaining = np.ones(len(matrix), dtype=bool)
+    for _ in range(n):
+        best, best_score = -1, -np.inf
+        for index in np.flatnonzero(remaining):
+            sign, score = np.linalg.slogdet(
+                information + np.outer(matrix[index], matrix[index])
+            )
+            if sign > 0 and score > best_score:
+                best, best_score = int(index), float(score)
+        if best < 0:
+            raise InfeasibleDesignError("d_optimal: no positive determinant candidate")
+        selected.append(best)
+        information += np.outer(matrix[best], matrix[best])
+        remaining[best] = False
+    return feasible_unit[selected]
 
 
 # ----------------------------------------------------------------------- #
@@ -155,7 +156,7 @@ MethodLiteral = Literal[
 ]
 
 
-def generate(
+def _legacy_generate(
     space: Space,
     n: int,
     method: MethodLiteral = "lhs_maximin",
@@ -178,7 +179,7 @@ def generate(
     | lhs_random     | Standard LHS, no optimization.                            |
     | sobol          | Sobol low-discrepancy quasi-random.                       |
     | halton         | Halton low-discrepancy quasi-random.                      |
-    | d_optimal      | Greedy maximin over feasible candidate pool (pyDOE3 stub).|
+    | d_optimal      | Deterministic greedy maximin over a feasible candidate pool.|
     | random_uniform | Pure random uniform (baseline only).                      |
 
     Returns
@@ -247,20 +248,25 @@ def generate(
             )
 
         # SA maximin polish (preserves feasibility via rejection).
-        col_weights = 1.0 / (
-            space.upper.cpu().numpy() - space.lower.cpu().numpy()
-        )
+        model_design = _physical_to_unit_array(design_phys, space)
+        col_weights = _model_column_weights(space)
 
-        def feas_fn(design_arr: np.ndarray) -> np.ndarray:
-            return _feasibility_mask(design_arr, space)
+        def feas_fn(model_arr: np.ndarray) -> np.ndarray:
+            physical = space.model_to_physical(
+                torch.as_tensor(model_arr, dtype=torch.float64)
+            )
+            return _feasibility_mask(physical, space)
 
-        design_phys, _dist = _sa_maximin_physical(
-            design_phys,
+        model_design, _dist = _sa_maximin_physical(
+            model_design,
             space=space,
             n_iterations=n_iterations,
             column_weights=col_weights,
             feasibility_fn=feas_fn,
             seed=seed + 1000,
+        )
+        design_phys = space.model_to_physical(
+            torch.as_tensor(model_design, dtype=torch.float64)
         )
 
     elif method == "lhs_random":
@@ -287,13 +293,13 @@ def generate(
             "halton": _draw_halton,
             "random_uniform": _draw_random_uniform,
         }[method]
-        feasible = []
+        feasible: list[dict[str, object]] = []
         attempt_seed = seed
         for _ in range(max_resample):
             batch = draw(max(n * 4, 32), d, attempt_seed)
             phys = _unit_to_physical_array(batch, space)
             mask = _feasibility_mask(phys, space)
-            for row in phys[mask]:
+            for row in phys.loc[mask].to_dict(orient="records"):
                 feasible.append(row)
                 if len(feasible) >= n:
                     break
@@ -306,7 +312,7 @@ def generate(
                 f"{max_resample} accept-reject rounds. "
                 + _feasibility_diagnostic(space, n)
             )
-        design_phys = np.asarray(feasible[:n], dtype=np.float64)
+        design_phys = _physical_frame_from_records(feasible[:n], space)
 
     elif method == "d_optimal":
         design_unit = _draw_d_optimal(n, space, seed=seed)
@@ -323,8 +329,38 @@ def generate(
             f"constraints={len(space.constraints)}"
         )
 
-    df = pd.DataFrame(design_phys, columns=space.param_names)
-    return df
+    design_phys = design_phys.reset_index(drop=True)
+    if not _feasibility_mask(design_phys, space).all():
+        raise InfeasibleDesignError(
+            f"{method}: final reconstructed design contains infeasible rows."
+        )
+    return design_phys
+
+
+def generate(
+    space: Space,
+    n: int,
+    method: MethodLiteral = "lhs_maximin",
+    *,
+    n_iterations: int = 2000,
+    n_restarts: int = 10,
+    seed: int = 42,
+    max_resample: int = 50,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """Compatibility wrapper over the diagnostic initial-design engine.
+
+    Historical tuning arguments are accepted so existing callers continue to
+    run; the v0.5 deterministic selector intentionally does not vary by them.
+    """
+    del n_iterations, max_resample, verbose
+    from .design import suggest_design
+
+    result = suggest_design(
+        space, n, method=method, seed=seed, n_restarts=n_restarts
+    )
+    assert isinstance(result, pd.DataFrame)
+    return result
 
 
 # ----------------------------------------------------------------------- #
@@ -338,16 +374,16 @@ def _pool_greedy_maximin(
     pool_factor: int = 200,
     max_resample: int = 50,
     seed: int = 0,
-) -> np.ndarray:
+) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    pool: list[np.ndarray] = []
+    pool: list[dict[str, object]] = []
     attempt = 0
     target = max(pool_factor * n, 1000)
     while len(pool) < target and attempt < max_resample:
         batch_unit = rng.uniform(size=(target, space.n_dims))
         batch_phys = _unit_to_physical_array(batch_unit, space)
         mask = _feasibility_mask(batch_phys, space)
-        for row in batch_phys[mask]:
+        for row in batch_phys.loc[mask].to_dict(orient="records"):
             pool.append(row)
             if len(pool) >= target:
                 break
@@ -359,8 +395,9 @@ def _pool_greedy_maximin(
             + _feasibility_diagnostic(space, n)
         )
 
-    pool_arr = np.asarray(pool, dtype=np.float64)
-    col_weights = 1.0 / (space.upper.cpu().numpy() - space.lower.cpu().numpy())
+    pool_frame = _physical_frame_from_records(pool, space)
+    pool_arr = _physical_to_unit_array(pool_frame, space)
+    col_weights = _model_column_weights(space)
 
     # Greedy maximin selection.
     chosen = [int(rng.integers(len(pool_arr)))]
@@ -373,7 +410,7 @@ def _pool_greedy_maximin(
         ).min(axis=1)
         dists[chosen] = -1.0
         chosen.append(int(np.argmax(dists)))
-    return pool_arr[chosen]
+    return pool_frame.iloc[chosen].reset_index(drop=True)
 
 
 # ----------------------------------------------------------------------- #
@@ -381,11 +418,11 @@ def _pool_greedy_maximin(
 # preserves grid validity; for continuous dims values are real numbers.
 # ----------------------------------------------------------------------- #
 def _repair_design_physical(
-    design_phys: np.ndarray,
+    design_phys: pd.DataFrame,
     space: Space,
     max_swaps: int = 3000,
     seed: int = 0,
-) -> np.ndarray:
+) -> pd.DataFrame:
     """Best-effort row-swap repair on physical (already snapped) design."""
     rng = np.random.default_rng(seed)
     n, d = design_phys.shape
@@ -406,7 +443,9 @@ def _repair_design_physical(
         if i == j:
             continue
         proposal = arr.copy()
-        proposal[i, dim], proposal[j, dim] = proposal[j, dim], proposal[i, dim]
+        left = proposal.iat[i, dim]
+        proposal.iat[i, dim] = proposal.iat[j, dim]
+        proposal.iat[j, dim] = left
         new_mask = _feasibility_mask(proposal, space)
         # Accept if feasibility count weakly improves.
         if new_mask.sum() > mask.sum() or (
@@ -433,6 +472,8 @@ def _sa_maximin_physical(
     rng = np.random.default_rng(seed)
     n, d = initial_phys.shape
     design = initial_phys.copy()
+    if n < 2:
+        return design, math.inf
 
     def wm(arr: np.ndarray) -> float:
         return float(np.min(pdist(arr * column_weights)))

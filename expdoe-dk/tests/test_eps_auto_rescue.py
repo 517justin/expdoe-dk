@@ -53,6 +53,39 @@ def test_validate_auto_rescue_bumps_epsilon_and_warns():
     assert float(mono.epsilon) >= min_eps - 1e-9
 
 
+def test_auto_rescue_replaces_declaration_but_preserves_its_provenance_id():
+    knowledge = (
+        Knowledge()
+        .with_monotone("T", effect="increases_objective", epsilon=0.02)
+        .with_gp_prior(lengthscale="strong")
+    )
+    original_id = knowledge.specs[0].pattern_id
+
+    with pytest.warns(EpsilonAutoRescueNotice):
+        knowledge.validate(auto_rescue=True)
+
+    rescued = knowledge.specs[0]
+    assert rescued.pattern_id == original_id
+    assert rescued.parameters["epsilon"] == pytest.approx(0.1)
+
+
+def test_compile_resolves_auto_epsilon_without_mutating_declaration_or_id():
+    knowledge = (
+        Knowledge()
+        .with_monotone("x0", effect="increases_objective", epsilon="auto")
+        .with_gp_prior(lengthscale="strong")
+    )
+    declaration = knowledge.specs[0]
+
+    artifacts = knowledge.compile(_toy_space())
+
+    monotone = artifacts.virtual_observations[0]
+    assert monotone.to_dict()["payload"]["epsilon"] == pytest.approx(0.1)
+    assert monotone.source_pattern_id == declaration.pattern_id
+    assert knowledge.specs[0] is declaration
+    assert knowledge.specs[0].parameters["epsilon"] == "auto"
+
+
 def test_validate_auto_rescue_does_not_raise():
     k = (
         Knowledge()
