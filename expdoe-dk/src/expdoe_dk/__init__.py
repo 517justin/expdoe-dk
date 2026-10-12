@@ -18,6 +18,13 @@ Quick start:
 from .space import Parameter, LinearConstraint, Space
 from .knowledge import KNOWLEDGE_SCHEMA_VERSION, Knowledge
 from .bo import Campaign, Result
+from .bo.capabilities import inspect_capabilities
+from .bo.contracts import (
+    CapabilityReport,
+    EvaluationResult,
+    Prediction,
+    RecommendationResult,
+)
 from .bo.loop import CHECKPOINT_SCHEMA_VERSION
 from .doe import (
     DesignBatch,
@@ -64,6 +71,11 @@ __all__ = [
     "Knowledge",
     "Campaign",
     "Result",
+    "CapabilityReport",
+    "Prediction",
+    "EvaluationResult",
+    "RecommendationResult",
+    "inspect_capabilities",
     "suggest_design",
     "DesignBatch",
     "DesignDiagnostics",
