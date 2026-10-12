@@ -28,57 +28,49 @@ def _clone_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return cloned
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class CapabilityReport:
-    _applied: tuple[str, ...]
-    _blocked: tuple[str, ...]
-    _diagnostics: tuple[dict, ...]
+    applied: tuple[str, ...]
+    blocked: tuple[str, ...]
+    diagnostics: tuple[dict, ...]
 
-    def __init__(
-        self, applied: tuple[str, ...], blocked: tuple[str, ...],
-        diagnostics: tuple[dict, ...],
-    ) -> None:
-        for name, source in (("applied", applied), ("blocked", blocked)):
+    def __post_init__(self) -> None:
+        for name in ("applied", "blocked"):
+            source = object.__getattribute__(self, name)
             values = tuple(source)
             if any(type(value) is not str or not value for value in values):
                 raise ValueError(f"{name} must contain non-empty strings")
-            object.__setattr__(self, f"_{name}", values)
+            object.__setattr__(self, name, values)
         if set(self.applied) & set(self.blocked):
             raise ValueError("applied and blocked must be disjoint")
-        object.__setattr__(self, "_diagnostics", _json_rows(tuple(diagnostics)))
+        diagnostics = object.__getattribute__(self, "diagnostics")
+        object.__setattr__(self, "diagnostics", _json_rows(tuple(diagnostics)))
 
-    @property
-    def applied(self) -> tuple[str, ...]:
-        return self._applied
-
-    @property
-    def blocked(self) -> tuple[str, ...]:
-        return self._blocked
-
-    @property
-    def diagnostics(self) -> tuple[dict, ...]:
-        return _json_rows(self._diagnostics)
+    def __getattribute__(self, name: str):
+        value = object.__getattribute__(self, name)
+        return _json_rows(value) if name == "diagnostics" else value
 
     def to_dict(self) -> dict:
+        diagnostics = object.__getattribute__(self, "diagnostics")
         return _json_object({
-            "applied": list(self._applied), "blocked": list(self._blocked),
-            "diagnostics": list(self._diagnostics),
+            "applied": list(self.applied), "blocked": list(self.blocked),
+            "diagnostics": list(diagnostics),
         })
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class Prediction:
-    _mean: np.ndarray
-    _variance: np.ndarray
+    mean: np.ndarray
+    variance: np.ndarray
 
-    def __init__(self, mean: np.ndarray, variance: np.ndarray) -> None:
-        mean = np.array(mean, dtype=float, copy=True)
-        variance = np.array(variance, dtype=float, copy=True)
+    def __post_init__(self) -> None:
+        mean = np.array(object.__getattribute__(self, "mean"), dtype=float, copy=True)
+        variance = np.array(object.__getattribute__(self, "variance"), dtype=float, copy=True)
         self._validate_arrays(mean, variance)
         mean.setflags(write=False)
         variance.setflags(write=False)
-        object.__setattr__(self, "_mean", mean)
-        object.__setattr__(self, "_variance", variance)
+        object.__setattr__(self, "mean", mean)
+        object.__setattr__(self, "variance", variance)
 
     @staticmethod
     def _validate_arrays(mean: np.ndarray, variance: np.ndarray) -> None:
@@ -89,91 +81,79 @@ class Prediction:
         if (variance < 0).any():
             raise ValueError("Prediction variance must be non-negative")
 
-    @property
-    def mean(self) -> np.ndarray:
-        return self._mean.copy()
-
-    @property
-    def variance(self) -> np.ndarray:
-        return self._variance.copy()
+    def __getattribute__(self, name: str):
+        value = object.__getattribute__(self, name)
+        return value.copy() if name in {"mean", "variance"} else value
 
     def to_dict(self) -> dict:
-        self._validate_arrays(self._mean, self._variance)
-        return {"mean": self._mean.tolist(), "variance": self._variance.tolist()}
+        mean = object.__getattribute__(self, "mean")
+        variance = object.__getattribute__(self, "variance")
+        self._validate_arrays(mean, variance)
+        return {"mean": mean.tolist(), "variance": variance.tolist()}
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class EvaluationResult:
-    _folds: tuple[tuple[int, ...], ...]
-    _rows: tuple[dict, ...]
-    _exclusions: tuple[dict, ...]
+    folds: tuple[tuple[int, ...], ...]
+    rows: tuple[dict, ...]
+    exclusions: tuple[dict, ...]
 
-    def __init__(
-        self, folds: tuple[tuple[int, ...], ...], rows: tuple[dict, ...],
-        exclusions: tuple[dict, ...],
-    ) -> None:
-        folds = tuple(tuple(fold) for fold in folds)
+    def __post_init__(self) -> None:
+        folds = tuple(tuple(fold) for fold in object.__getattribute__(self, "folds"))
         if any(any(type(index) is not int or index < 0 for index in fold) for fold in folds):
             raise ValueError("Fold indices must be non-negative integers")
-        object.__setattr__(self, "_folds", folds)
-        object.__setattr__(self, "_rows", _json_rows(tuple(rows)))
-        object.__setattr__(self, "_exclusions", _json_rows(tuple(exclusions)))
+        object.__setattr__(self, "folds", folds)
+        for name in ("rows", "exclusions"):
+            values = object.__getattribute__(self, name)
+            object.__setattr__(self, name, _json_rows(tuple(values)))
 
-    @property
-    def folds(self) -> tuple[tuple[int, ...], ...]:
-        return self._folds
-
-    @property
-    def rows(self) -> tuple[dict, ...]:
-        return _json_rows(self._rows)
-
-    @property
-    def exclusions(self) -> tuple[dict, ...]:
-        return _json_rows(self._exclusions)
+    def __getattribute__(self, name: str):
+        value = object.__getattribute__(self, name)
+        return _json_rows(value) if name in {"rows", "exclusions"} else value
 
     def to_dict(self) -> dict:
+        rows = object.__getattribute__(self, "rows")
+        exclusions = object.__getattribute__(self, "exclusions")
         return _json_object({
-            "folds": [list(fold) for fold in self._folds],
-            "rows": list(self._rows), "exclusions": list(self._exclusions),
+            "folds": [list(fold) for fold in self.folds],
+            "rows": list(rows), "exclusions": list(exclusions),
         })
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class RecommendationResult:
-    _frame: pd.DataFrame
-    _predictions: Prediction
-    _diagnostics: dict
+    frame: pd.DataFrame
+    predictions: Prediction
+    diagnostics: dict
 
-    def __init__(
-        self, frame: pd.DataFrame, predictions: Prediction, diagnostics: dict,
-    ) -> None:
+    def __post_init__(self) -> None:
+        frame = object.__getattribute__(self, "frame")
+        predictions = object.__getattribute__(self, "predictions")
+        diagnostics = object.__getattribute__(self, "diagnostics")
         if not isinstance(frame, pd.DataFrame):
             raise TypeError("RecommendationResult.frame must be a DataFrame")
         if not isinstance(predictions, Prediction):
             raise TypeError("RecommendationResult.predictions must be a Prediction")
         if len(frame) != predictions.mean.shape[0]:
             raise ValueError("Recommendation rows and prediction rows differ")
-        object.__setattr__(self, "_frame", _clone_frame(frame))
-        object.__setattr__(self, "_predictions", predictions)
-        object.__setattr__(self, "_diagnostics", _json_object(diagnostics))
+        object.__setattr__(self, "frame", _clone_frame(frame))
+        object.__setattr__(self, "diagnostics", _json_object(diagnostics))
 
-    @property
-    def frame(self) -> pd.DataFrame:
-        return _clone_frame(self._frame)
-
-    @property
-    def predictions(self) -> Prediction:
-        return self._predictions
-
-    @property
-    def diagnostics(self) -> dict:
-        return _json_object(self._diagnostics)
+    def __getattribute__(self, name: str):
+        value = object.__getattribute__(self, name)
+        if name == "frame":
+            return _clone_frame(value)
+        if name == "diagnostics":
+            return _json_object(value)
+        return value
 
     def to_dict(self) -> dict:
+        frame = object.__getattribute__(self, "frame")
+        diagnostics = object.__getattribute__(self, "diagnostics")
         return _json_object({
-            "frame": self._frame.to_dict(orient="records"),
-            "predictions": self._predictions.to_dict(),
-            "diagnostics": self._diagnostics,
+            "frame": frame.to_dict(orient="records"),
+            "predictions": self.predictions.to_dict(),
+            "diagnostics": diagnostics,
         })
 
 

@@ -1,3 +1,5 @@
+from dataclasses import asdict, fields, is_dataclass, replace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -166,6 +168,68 @@ def test_recommendation_result_returns_detached_frame_and_diagnostics():
     assert serialized["frame"] == [{"material": ["A"]}]
     assert serialized["diagnostics"] == {"candidate_keys": ["key-A"]}
     assert serialized["predictions"] == {"mean": [[1.0]], "variance": [[0.1]]}
+
+
+def test_capability_report_standard_dataclass_operations_preserve_snapshot():
+    report = CapabilityReport(applied=("KP-1",), blocked=(), diagnostics=({"nested": [1]},))
+    assert is_dataclass(report)
+    assert tuple(field.name for field in fields(report)) == ("applied", "blocked", "diagnostics")
+    assert asdict(report) == {
+        "applied": ("KP-1",), "blocked": (), "diagnostics": ({"nested": [1]},),
+    }
+    copied = replace(report)
+    copied.diagnostics[0]["nested"].append(99)
+    assert copied.to_dict() == report.to_dict()
+
+
+def test_prediction_standard_dataclass_operations_preserve_snapshot():
+    prediction = Prediction(mean=np.array([[1.0]]), variance=np.array([[0.1]]))
+    assert is_dataclass(prediction)
+    assert tuple(field.name for field in fields(prediction)) == ("mean", "variance")
+    raw = asdict(prediction)
+    np.testing.assert_array_equal(raw["mean"], [[1.0]])
+    np.testing.assert_array_equal(raw["variance"], [[0.1]])
+    copied = replace(prediction)
+    copied.mean[0, 0] = np.nan
+    copied.variance[0, 0] = -1.0
+    assert copied.to_dict() == prediction.to_dict()
+
+
+def test_evaluation_result_standard_dataclass_operations_preserve_snapshot():
+    evaluation = EvaluationResult(
+        folds=((0,),), rows=({"track": ["plain"]},), exclusions=({"why": "none"},),
+    )
+    assert is_dataclass(evaluation)
+    assert tuple(field.name for field in fields(evaluation)) == (
+        "folds", "rows", "exclusions",
+    )
+    assert asdict(evaluation) == {
+        "folds": ((0,),), "rows": ({"track": ["plain"]},),
+        "exclusions": ({"why": "none"},),
+    }
+    copied = replace(evaluation)
+    copied.rows[0]["track"].append("altered")
+    assert copied.to_dict() == evaluation.to_dict()
+
+
+def test_recommendation_result_standard_dataclass_operations_preserve_snapshot():
+    recommendation = RecommendationResult(
+        frame=pd.DataFrame({"material": [["A"]]}),
+        predictions=Prediction(np.array([[1.0]]), np.array([[0.1]])),
+        diagnostics={"candidate_keys": ["key-A"]},
+    )
+    assert is_dataclass(recommendation)
+    assert tuple(field.name for field in fields(recommendation)) == (
+        "frame", "predictions", "diagnostics",
+    )
+    raw = asdict(recommendation)
+    assert raw["frame"].to_dict(orient="records") == [{"material": ["A"]}]
+    np.testing.assert_array_equal(raw["predictions"]["mean"], [[1.0]])
+    assert raw["diagnostics"] == {"candidate_keys": ["key-A"]}
+    copied = replace(recommendation)
+    copied.frame.at[0, "material"].append("B")
+    copied.diagnostics["candidate_keys"].append("key-B")
+    assert copied.to_dict() == recommendation.to_dict()
 
 
 @pytest.mark.parametrize("mean,variance", [
