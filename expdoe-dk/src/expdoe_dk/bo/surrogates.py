@@ -65,6 +65,9 @@ class _PhysicalFeatures(torch.nn.Module):
     GP inputs remain Space coordinates so declarative means and similarity
     kernels retain their semantics. This differentiable kernel transform decodes
     those inputs into the same features consumed by the reference models.
+    Integral numeric factors are centered as exact integer offsets before float
+    conversion. Their standardized features are physical z-scores without ever
+    reconstructing large absolute integer values in floating point.
     """
 
     def __init__(self, space, training):
@@ -72,20 +75,42 @@ class _PhysicalFeatures(torch.nn.Module):
         self.params = tuple(space.params)
         self.groups = []
         self.names = []
+        self.integral_limits = []
+        self.numeric_origins = []
+        self.physical_locations = []
         numeric_location, numeric_scale = [], []
         offset = 0
         for parameter in self.params:
+            integral_limits = None
+            if parameter.kind == "integer":
+                integral_limits = tuple(int(value) for value in parameter.bounds)
+            elif parameter.kind == "discrete":
+                levels = parameter.numeric_levels
+                if all(value == int(value) for value in levels):
+                    integral_limits = (int(min(levels)), int(max(levels)))
+            self.integral_limits.append(integral_limits)
             if parameter.kind == "categorical":
                 width = len(parameter.values)
                 self.names.extend(f"{parameter.name}={level}" for level in parameter.values)
             else:
                 width = 1
                 self.names.append(parameter.name)
-                values = (np.array(parameter.encode(training[parameter.name].tolist()))
-                          if parameter.kind == "ordinal" else training[parameter.name].to_numpy(dtype=float))
+                origin = 0 if integral_limits is None else integral_limits[0]
+                if integral_limits is not None:
+                    values = np.asarray([int(value) - origin for value in training[parameter.name].tolist()],
+                                        dtype=float)
+                else:
+                    values = (np.array(parameter.encode(training[parameter.name].tolist()))
+                              if parameter.kind == "ordinal" else training[parameter.name].to_numpy(dtype=float))
                 constant = bool(np.all(values == values[0]))
-                numeric_location.append(float(values[0] if constant else values.mean()))
+                location = float(values[0] if constant else values.mean())
+                numeric_location.append(location)
                 numeric_scale.append(1. if constant else (float(values.std()) or 1.))
+                self.numeric_origins.append(origin)
+                # Preserve an exactly representable integer center in diagnostics;
+                # origin + offset remains the authoritative decomposition otherwise.
+                self.physical_locations.append(origin + (int(location) if integral_limits is not None
+                                                          and location.is_integer() else location))
             self.groups.append(tuple(range(offset, offset + width)))
             offset += width
         self.groups = tuple(self.groups)
@@ -102,18 +127,29 @@ class _PhysicalFeatures(torch.nn.Module):
                 columns.append((values == levels).to(X.dtype))
             else:
                 if parameter.kind != "ordinal":
-                    lo, hi = parameter.bounds or (min(parameter.numeric_levels), max(parameter.numeric_levels))
-                    if parameter.transform == "log" or parameter.log_scale:
-                        values = torch.exp(math.log(lo) + values * math.log(hi / lo))
+                    integral_limits = self.integral_limits[dim]
+                    if integral_limits is not None:
+                        lo, hi = integral_limits
+                        span = hi - lo  # Exact subtraction, before float conversion.
+                        if parameter.transform == "log" or parameter.log_scale:
+                            values = float(lo) * torch.expm1(values * math.log1p(span / lo))
+                        else:
+                            values = values * float(span)
                     else:
-                        values = lo + values * (hi - lo)
+                        lo, hi = parameter.bounds or (min(parameter.numeric_levels), max(parameter.numeric_levels))
+                        if parameter.transform == "log" or parameter.log_scale:
+                            values = torch.exp(math.log(lo) + values * math.log(hi / lo))
+                        else:
+                            values = lo + values * (hi - lo)
                 columns.append((values - self.location[numeric]) / self.scale[numeric])
                 numeric += 1
         return torch.cat(columns, dim=-1)
 
     def describe(self):
         return {"input_encoding": "physical_numeric_zscore_nominal_one_hot_ordinal_rank_zscore",
-                "features": list(self.names), "numeric_location": self.location.tolist(),
+                "features": list(self.names), "numeric_location": list(self.physical_locations),
+                "numeric_origin": list(self.numeric_origins),
+                "numeric_location_offset": self.location.tolist(),
                 "numeric_scale": self.scale.tolist()}
 
 

@@ -270,3 +270,44 @@ def test_decimal_constant_training_uses_unit_scale():
     assert fit.transforms["numeric_scale"] == [1.]
     assert fit.transforms["response_scale"] == 1.
     np.testing.assert_allclose(fit.predict(batch.X).mean, .1, atol=1e-8)
+
+
+@pytest.mark.parametrize("kind,logarithmic", [
+    ("integer", False), ("integer", True), ("discrete", False), ("discrete", True),
+])
+def test_large_integer_features_and_gp_reference_predictions_remain_distinct(kind, logarithmic):
+    from expdoe_dk.bo.surrogates import _PhysicalFeatures
+    low = 2**53
+    levels = (low, low + 1, low + 2)
+    options = {"bounds": (low, low + 2)} if kind == "integer" else {"values": levels}
+    parameter = Parameter("x", kind=kind, transform="log" if logarithmic else "linear", **options)
+    space = Space([parameter], objectives="y")
+    batch = ObservationBatch(pd.DataFrame({"x": levels}), pd.DataFrame({"y": [0., 1., 2.]}))
+    features = _PhysicalFeatures(space, batch.X)(space.physical_to_model(batch.X)).numpy()
+    np.testing.assert_allclose(features[:, 0], [-np.sqrt(1.5), 0., np.sqrt(1.5)], atol=1e-14)
+    assert len(np.unique(features, axis=0)) == 3
+    fitted = fit_surrogate(space, batch)
+    prediction = fitted.predict(batch.X).mean[:, 0]
+    assert prediction[1] - prediction[0] > .2
+    # Independent hand calculation: two-point standardized ridge with alpha=1
+    # gives the following LOO predictions for physical x offsets 0, 1, and 2.
+    result = evaluate_models(space, batch, tracks={"M0": None})
+    ridge = next(row for row in result.rows if row["track"] == "ridge")
+    np.testing.assert_allclose(ridge["oof_predictions"], [.5, 1., 1.5], atol=1e-14)
+
+
+@pytest.mark.parametrize("kind,logarithmic", [
+    ("continuous", False), ("continuous", True), ("discrete", False), ("discrete", True),
+])
+def test_shared_features_preserve_physical_numeric_scaling(kind, logarithmic):
+    from expdoe_dk.bo.surrogates import _PhysicalFeatures
+    values = [1.25, 2.25, 3.25]
+    options = {"bounds": (1.25, 3.25)} if kind == "continuous" else {"values": tuple(values)}
+    parameter = Parameter("x", kind=kind, transform="log" if logarithmic else "linear", **options)
+    space = Space([parameter], objectives="y")
+    frame = pd.DataFrame({"x": values})
+    encoder = _PhysicalFeatures(space, frame)
+    np.testing.assert_allclose(encoder(space.physical_to_model(frame)).numpy()[:, 0],
+                               [-np.sqrt(1.5), 0., np.sqrt(1.5)], atol=1e-14)
+    assert encoder.describe()["numeric_location"] == [2.25]
+    assert encoder.describe()["numeric_scale"] == pytest.approx([np.sqrt(2 / 3)])
