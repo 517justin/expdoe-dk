@@ -8,7 +8,7 @@ import math
 import operator
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
-from numbers import Integral
+from numbers import Integral, Real
 from types import MappingProxyType
 
 import numpy as np
@@ -844,7 +844,18 @@ def _constraint_margin(constraint: object, row: Mapping[str, object]) -> float |
         value = _comparison_margin(ast["op"], left, right)
     else:
         return None
-    return float(value) if value is not None and math.isfinite(value) else None
+    return _finite_real_margin(value)
+
+
+def _finite_real_margin(value: object) -> float | None:
+    """Keep undefined/non-real diagnostic values out of scalar arithmetic."""
+    if not isinstance(value, Real) or isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else None
+    except (OverflowError, ValueError):
+        return None
 
 
 def _comparison_margin(op: str, left: float, right: float) -> float:
@@ -857,7 +868,7 @@ def _numeric_ast_value(node: Mapping, row: Mapping) -> float | None:
         kind = node["type"]
         if kind in {"constant", "name"}:
             value = node["value"] if kind == "constant" else row[node["name"]]
-            return float(value) if type(value) in (int, float) else None
+            return _finite_real_margin(value)
         if kind == "unary":
             value = _numeric_ast_value(node["operand"], row)
             return None if value is None else value if node["op"] == "+" else -value
@@ -865,13 +876,13 @@ def _numeric_ast_value(node: Mapping, row: Mapping) -> float | None:
             left, right = _numeric_ast_value(node["left"], row), _numeric_ast_value(node["right"], row)
             if left is None or right is None:
                 return None
-            return {"+": operator.add, "-": operator.sub, "*": operator.mul,
-                    "/": operator.truediv, "**": operator.pow}[node["op"]](left, right)
+            return _finite_real_margin({"+": operator.add, "-": operator.sub, "*": operator.mul,
+                    "/": operator.truediv, "**": operator.pow}[node["op"]](left, right))
         if kind == "call":
             args = [_numeric_ast_value(arg, row) for arg in node["args"]]
             if any(arg is None for arg in args):
                 return None
-            return {"abs": abs, "min": min, "max": max, "log": math.log, "exp": math.exp}[node["function"]](*args)
+            return _finite_real_margin({"abs": abs, "min": min, "max": max, "log": math.log, "exp": math.exp}[node["function"]](*args))
     except (ArithmeticError, ValueError, TypeError):
         return None
     return None

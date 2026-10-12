@@ -103,7 +103,11 @@ def validate_runtime_artifact(space: Space, category: str, artifact: Optimizatio
         raise _invalid(artifact, f"Invalid {artifact.kind} payload: {error}") from error
     if artifact.kind == "category_similarity_descriptor" and category == "kernel_components":
         try:
+            dimension(payload["dimension"])
             factor = space.param_by_name(payload["factor"])
+            if (space.param_names[payload["dimension"]] != payload["factor"]
+                    or factor.kind != "categorical"):
+                raise ValueError("Similarity descriptor requires the dimension of its declared categorical factor")
             parameters = payload["parameters"]
             levels = parameters["levels"]
             matrix = np.asarray(parameters["matrix"], dtype=float)

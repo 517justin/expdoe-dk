@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from expdoe_dk import (
-    EngineError, ErrorCode, Knowledge, KnowledgeScope, Parameter, Space,
+    EngineError, ErrorCode, ExpressionConstraint, Knowledge, KnowledgeScope, Parameter, Space,
     candidate_keys, inspect_capabilities, make_pattern_spec, suggest_design,
 )
 from expdoe_dk.bo.knowledge_runtime import compile_runtime
@@ -268,3 +268,65 @@ def test_large_integer_domain_diagnostics_do_not_expand_unoccupied_levels():
     assert d["coverage"]["count"]["declared"] == 100002
     assert len(d["marginal_balance"]["count"]["counts"]) <= 2
     assert d["marginal_balance"]["count"]["unoccupied_levels"] >= 100000
+
+
+def _similarity_provider_payload():
+    space = Space([Parameter("x", bounds=(0., 1.)),
+                   Parameter("material", kind="categorical", values=("A", "B", "C")),
+                   Parameter("grade", kind="ordinal", values=("A", "B", "C"))], objectives="y")
+    payload = {"factor": "material", "dimension": 1,
+               "parameters": {"levels": ["A", "B", "C"],
+                              "matrix": [[1., .3, .4], [.3, 1., .2], [.4, .2, 1.]]}}
+    return space, payload
+
+
+@pytest.mark.parametrize("malformation", ["missing", "negative", "out_of_range",
+    "boolean", "float", "string", "wrong_factor", "non_categorical"])
+def test_similarity_provider_dimension_is_validated(malformation):
+    space, payload = _similarity_provider_payload()
+    if malformation == "missing":
+        del payload["dimension"]
+    elif malformation == "non_categorical":
+        payload.update(factor="grade", dimension=2)
+    else:
+        payload["dimension"] = {"negative": -1, "out_of_range": 3,
+            "boolean": True, "float": 1., "string": "1", "wrong_factor": 0}[malformation]
+    knowledge = _provider_case(space, "kernel_components", "category_similarity_descriptor", payload)
+    assert inspect_capabilities(space, knowledge).blocked == ("provider-source",)
+    with pytest.raises(EngineError) as error:
+        compile_runtime(space, knowledge, None)
+    assert error.value.code == ErrorCode.KNOWLEDGE_INVALID
+    assert "provider-source" in str(error.value.details)
+    assert "category_similarity_descriptor" in str(error.value.details)
+
+
+def test_similarity_covariance_cannot_silently_use_another_column():
+    space, payload = _similarity_provider_payload()
+    knowledge = _provider_case(space, "kernel_components", "category_similarity_descriptor", payload)
+    runtime = compile_runtime(space, knowledge, None)
+    X = torch.tensor([[0., 0., 0.], [0., 1., 0.], [0., 2., 0.]], dtype=torch.double)
+    kernel = build_kernel_from_artifacts(space, runtime["kernel_components"])
+    torch.testing.assert_close(kernel(X).to_dense(), torch.tensor(
+        [[1., .3, .4], [.3, 1., .2], [.4, .2, 1.]], dtype=torch.double))
+    payload["dimension"] = 0  # Would silently produce an all-ones covariance.
+    wrong = OptimizationArtifact("category_similarity_descriptor", payload,
+                                 "provider-source", "test_runtime", "1.0")
+    with pytest.raises(EngineError) as error:
+        build_kernel_from_artifacts(space, (wrong,))
+    assert error.value.code == ErrorCode.KNOWLEDGE_INVALID
+
+
+@pytest.mark.parametrize("return_diagnostics", [True, False])
+@pytest.mark.parametrize("expression", ["(-x)**0.5 <= 1", "log(-x) <= 1",
+    "abs((-x)**0.5) <= 1"])
+def test_nonreal_or_domain_invalid_soft_margin_does_not_abort_design(expression, return_diagnostics):
+    constraint = ExpressionConstraint("soft-domain", expression, hard=False,
+                                      penalty="quadratic", weight=1.)
+    space = Space([Parameter("x", bounds=(.1, 1.))], objectives="y", constraints=[constraint])
+    result = suggest_design(space, 3, method="random_uniform", return_diagnostics=return_diagnostics)
+    frame = result.frame if return_diagnostics else result
+    assert len(frame) == 3
+    assert space.feasibility_mask(frame).all()
+    if return_diagnostics:
+        assert result.diagnostics.constraint_margins["soft-domain"] == (None,) * 3
+        assert result.diagnostics.to_dict()["constraint_margins"]["soft-domain"] == [None] * 3
