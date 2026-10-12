@@ -20,6 +20,8 @@ from .knowledge import KNOWLEDGE_SCHEMA_VERSION, Knowledge
 from .bo import Campaign, Result
 from .bo.capabilities import inspect_capabilities
 from .bo.knowledge_runtime import compile_runtime
+from .bo.surrogates import FittedSurrogate, fit_surrogate
+from .bo.evaluation import evaluate_models, make_folds
 from .doe.design import candidate_keys
 from .bo.contracts import (
     CapabilityReport,
@@ -79,6 +81,10 @@ __all__ = [
     "RecommendationResult",
     "inspect_capabilities",
     "compile_runtime",
+    "FittedSurrogate",
+    "fit_surrogate",
+    "evaluate_models",
+    "make_folds",
     "candidate_keys",
     "suggest_design",
     "DesignBatch",

@@ -30,6 +30,18 @@ from ..knowledge.shape import (
 )
 
 
+class _FeatureKernel(Kernel):
+    """Keep knowledge in Space coordinates while the GP uses shared features."""
+
+    def __init__(self, kernel, transform):
+        super().__init__()
+        self.kernel = kernel
+        self.transform = transform
+
+    def forward(self, x1, x2, diag=False, **params):
+        return self.kernel(self.transform(x1), self.transform(x2), diag=diag, **params)
+
+
 class _PhysicalFormulaMean(nn.Module):
     """Physical formulas, decoded before evaluation and normalized afterward.
 
@@ -205,6 +217,11 @@ def build_gp(
     train_X_unit: torch.Tensor,
     train_Y_norm: torch.Tensor,
     *, response_location: float | None = None, response_scale: float | None = None,
+    train_Yvar: torch.Tensor | None = None,
+    feature_transform: nn.Module | None = None,
+    feature_groups: tuple[tuple[int, ...], ...] | None = None,
+    runtime: dict | None = None,
+    normalize_outcome: bool = True,
 ) -> tuple[SingleTaskGP, MonotonicAugmenter | None]:
     """
     Build a SingleTaskGP given the space + knowledge + already-augmented
@@ -223,7 +240,7 @@ def build_gp(
     """
     knowledge.validate()
     from .knowledge_runtime import compile_runtime
-    artifacts = compile_runtime(space, knowledge, None)
+    artifacts = compile_runtime(space, knowledge, None) if runtime is None else runtime
     physical_means = [artifact for artifact in artifacts["mean_components"]
                       if artifact.kind.endswith("_descriptor")]
     if physical_means and (response_location is None or response_scale is None):
@@ -235,23 +252,40 @@ def build_gp(
     mean_function = build_mean_from_artifacts(space, artifacts["mean_components"],
         response_location=0. if response_location is None else response_location,
         response_scale=1. if response_scale is None else response_scale)
-    lik, covar = build_prior_modules(artifacts["priors"], train_X_unit.shape[1])
+    dimensions = (sum(map(len, feature_groups)) if feature_groups is not None
+                  else train_X_unit.shape[1])
+    lik, covar = build_prior_modules(artifacts["priors"], dimensions)
+    if train_Yvar is not None and lik is not None:
+        # A learned-noise prior must not replace supplied measurement variance.
+        lik = None
     similarity = build_kernel_from_artifacts(space, artifacts["kernel_components"])
     if similarity is not None:
         covered = {a.payload["dimension"] for a in artifacts["kernel_components"]}
-        remaining = [i for i in range(space.n_dims) if i not in covered]
+        remaining = ([j for i, group in enumerate(feature_groups) if i not in covered for j in group]
+                     if feature_groups is not None else
+                     [i for i in range(space.n_dims) if i not in covered])
         if covar is not None:
             if remaining:
                 # Rebuild the ARD prior kernel with the actual continuous dims.
                 _, covar = build_prior_modules(artifacts["priors"], len(remaining))
                 covar.base_kernel.active_dims = torch.tensor(remaining)
-                covar.base_kernel = covar.base_kernel * similarity
+                base = covar.base_kernel
+                if feature_transform is not None:
+                    base = _FeatureKernel(base, feature_transform)
+                covar.base_kernel = base * similarity
             else:
                 covar.base_kernel = similarity
         elif remaining:
-            covar = MaternKernel(nu=2.5, ard_num_dims=len(remaining), active_dims=remaining) * similarity
+            base = MaternKernel(nu=2.5, ard_num_dims=len(remaining), active_dims=remaining)
+            if feature_transform is not None:
+                base = _FeatureKernel(base, feature_transform)
+            covar = base * similarity
         else:
             covar = similarity
+    elif feature_transform is not None:
+        if covar is None:
+            covar = ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=dimensions))
+        covar = _FeatureKernel(covar, feature_transform)
 
     kwargs: dict[str, Any] = {}
     if mean_function is not None:
@@ -260,6 +294,11 @@ def build_gp(
         kwargs["covar_module"] = covar
     if lik is not None:
         kwargs["likelihood"] = lik
+    if train_Yvar is not None:
+        kwargs["train_Yvar"] = train_Yvar
+    if not normalize_outcome:
+        # Public fitting already normalized using real training outcomes only.
+        kwargs["outcome_transform"] = None
 
     model = SingleTaskGP(train_X_unit, train_Y_norm, **kwargs)
     augmenter = build_virtual_observation_augmenter(
