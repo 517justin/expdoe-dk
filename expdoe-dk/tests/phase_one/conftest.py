@@ -62,20 +62,18 @@ def pattern_cases(pattern_records, mixed_case):
     return tuple(result)
 
 
-@pytest.fixture
-def unsupported_artifact_case(mixed_case):
-    def compile_unknown(spec, space, observations=None):
-        return OptimizationArtifacts(
-            mean_components=(OptimizationArtifact(
-                kind="unknown_consumer_kind", payload={}, source_pattern_id=spec.pattern_id,
-                source_pattern=spec.pattern, source_version=spec.version,
-            ),),
+def _artifact_case(space, *, kind: str, category: str):
+    def compile_artifact(spec, space, observations=None):
+        artifact = OptimizationArtifact(
+            kind=kind, payload={}, source_pattern_id=spec.pattern_id,
+            source_pattern=spec.pattern, source_version=spec.version,
         )
+        return OptimizationArtifacts(**{category: (artifact,)})
 
     registry = PatternRegistry()
     registry.register(KnowledgePatternDefinition(
         pattern="test_unknown", version="1.0", family="test", schema={"type": "object"},
-        compiler=compile_unknown,
+        compiler=compile_artifact,
         validator=lambda spec, space, observations=None: KnowledgeValidationResult(
             pattern_id=spec.pattern_id, state="valid", summary="valid",
         ),
@@ -86,7 +84,19 @@ def unsupported_artifact_case(mixed_case):
         pattern_id="KP-unknown", pattern="test_unknown", version="1.0", parameters={},
         scope=KnowledgeScope(), confidence=0.8,
     ))
-    return mixed_case, knowledge
+    return space, knowledge
+
+
+@pytest.fixture
+def unsupported_artifact_case(mixed_case):
+    return _artifact_case(
+        mixed_case, kind="unknown_consumer_kind", category="mean_components",
+    )
+
+
+@pytest.fixture
+def wrong_category_artifact_case(mixed_case):
+    return _artifact_case(mixed_case, kind="gp_prior", category="mean_components")
 
 
 def _batch(n: int, shape: str) -> ObservationBatch:

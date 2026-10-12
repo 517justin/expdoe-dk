@@ -16,14 +16,14 @@ from .contracts import CapabilityReport
 
 # Only these kinds have a wired numerical consumer in the v0.5 baseline.
 # E2 may expand this manifest when it actually wires additional consumers.
-ARTIFACT_CONSUMERS: dict[str, str] = {
-    "arrhenius_mean": "bo.gp.build_mean_from_artifacts",
-    "quadratic_mean": "bo.gp.build_mean_from_artifacts",
-    "monotone": "bo.gp.build_virtual_observation_augmenter",
-    "random_augment": "bo.gp.build_virtual_observation_augmenter",
-    "gp_prior": "bo.gp.build_prior_modules",
-    "knowledge_validation": "bo.capabilities.inspect_capabilities",
-    "safety_feasibility": "bo.capabilities.inspect_capabilities",
+ARTIFACT_CONSUMERS: dict[tuple[str, str], str] = {
+    ("mean_components", "arrhenius_mean"): "bo.gp.build_mean_from_artifacts",
+    ("mean_components", "quadratic_mean"): "bo.gp.build_mean_from_artifacts",
+    ("virtual_observations", "monotone"): "bo.gp.build_virtual_observation_augmenter",
+    ("virtual_observations", "random_augment"): "bo.loop.Campaign.ask",
+    ("priors", "gp_prior"): "bo.gp.build_prior_modules",
+    ("diagnostics", "knowledge_validation"): "bo.capabilities.inspect_capabilities",
+    ("diagnostics", "safety_feasibility"): "bo.capabilities.inspect_capabilities",
 }
 
 
@@ -78,7 +78,7 @@ def inspect_capabilities(space: Space, knowledge: Knowledge) -> CapabilityReport
             for artifact in getattr(artifacts, category):
                 if category != "diagnostics":
                     has_numerical_artifact = True
-                consumer = ARTIFACT_CONSUMERS.get(artifact.kind)
+                consumer = ARTIFACT_CONSUMERS.get((category, artifact.kind))
                 entry = {**identity, "artifact_kind": artifact.kind,
                          "category": category}
                 if consumer is None:

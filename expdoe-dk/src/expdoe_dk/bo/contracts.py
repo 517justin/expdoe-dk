@@ -20,94 +20,160 @@ def _json_rows(rows: tuple[dict, ...]) -> tuple[dict, ...]:
     return tuple(_json_object(row) for row in rows)
 
 
-@dataclass(frozen=True)
-class CapabilityReport:
-    applied: tuple[str, ...]
-    blocked: tuple[str, ...]
-    diagnostics: tuple[dict, ...]
+def _clone_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    cloned = frame.copy(deep=True).reset_index(drop=True)
+    for column in cloned.columns:
+        if cloned[column].dtype == object:
+            cloned[column] = cloned[column].map(deepcopy)
+    return cloned
 
-    def __post_init__(self) -> None:
-        for name in ("applied", "blocked"):
-            values = tuple(getattr(self, name))
+
+@dataclass(frozen=True, init=False)
+class CapabilityReport:
+    _applied: tuple[str, ...]
+    _blocked: tuple[str, ...]
+    _diagnostics: tuple[dict, ...]
+
+    def __init__(
+        self, applied: tuple[str, ...], blocked: tuple[str, ...],
+        diagnostics: tuple[dict, ...],
+    ) -> None:
+        for name, source in (("applied", applied), ("blocked", blocked)):
+            values = tuple(source)
             if any(type(value) is not str or not value for value in values):
                 raise ValueError(f"{name} must contain non-empty strings")
-            object.__setattr__(self, name, values)
+            object.__setattr__(self, f"_{name}", values)
         if set(self.applied) & set(self.blocked):
             raise ValueError("applied and blocked must be disjoint")
-        object.__setattr__(self, "diagnostics", _json_rows(tuple(self.diagnostics)))
+        object.__setattr__(self, "_diagnostics", _json_rows(tuple(diagnostics)))
+
+    @property
+    def applied(self) -> tuple[str, ...]:
+        return self._applied
+
+    @property
+    def blocked(self) -> tuple[str, ...]:
+        return self._blocked
+
+    @property
+    def diagnostics(self) -> tuple[dict, ...]:
+        return _json_rows(self._diagnostics)
 
     def to_dict(self) -> dict:
         return _json_object({
-            "applied": list(self.applied), "blocked": list(self.blocked),
-            "diagnostics": list(self.diagnostics),
+            "applied": list(self._applied), "blocked": list(self._blocked),
+            "diagnostics": list(self._diagnostics),
         })
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Prediction:
-    mean: np.ndarray
-    variance: np.ndarray
+    _mean: np.ndarray
+    _variance: np.ndarray
 
-    def __post_init__(self) -> None:
-        mean = np.array(self.mean, dtype=float, copy=True)
-        variance = np.array(self.variance, dtype=float, copy=True)
+    def __init__(self, mean: np.ndarray, variance: np.ndarray) -> None:
+        mean = np.array(mean, dtype=float, copy=True)
+        variance = np.array(variance, dtype=float, copy=True)
+        self._validate_arrays(mean, variance)
+        mean.setflags(write=False)
+        variance.setflags(write=False)
+        object.__setattr__(self, "_mean", mean)
+        object.__setattr__(self, "_variance", variance)
+
+    @staticmethod
+    def _validate_arrays(mean: np.ndarray, variance: np.ndarray) -> None:
         if mean.ndim != 2 or mean.shape[1] != 1 or variance.shape != mean.shape:
             raise ValueError("Prediction arrays must have matching (n, 1) shape")
         if not np.isfinite(mean).all() or not np.isfinite(variance).all():
             raise ValueError("Prediction arrays must be finite")
         if (variance < 0).any():
             raise ValueError("Prediction variance must be non-negative")
-        mean.setflags(write=False)
-        variance.setflags(write=False)
-        object.__setattr__(self, "mean", mean)
-        object.__setattr__(self, "variance", variance)
+
+    @property
+    def mean(self) -> np.ndarray:
+        return self._mean.copy()
+
+    @property
+    def variance(self) -> np.ndarray:
+        return self._variance.copy()
 
     def to_dict(self) -> dict:
-        return {"mean": self.mean.tolist(), "variance": self.variance.tolist()}
+        self._validate_arrays(self._mean, self._variance)
+        return {"mean": self._mean.tolist(), "variance": self._variance.tolist()}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class EvaluationResult:
-    folds: tuple[tuple[int, ...], ...]
-    rows: tuple[dict, ...]
-    exclusions: tuple[dict, ...]
+    _folds: tuple[tuple[int, ...], ...]
+    _rows: tuple[dict, ...]
+    _exclusions: tuple[dict, ...]
 
-    def __post_init__(self) -> None:
-        folds = tuple(tuple(fold) for fold in self.folds)
+    def __init__(
+        self, folds: tuple[tuple[int, ...], ...], rows: tuple[dict, ...],
+        exclusions: tuple[dict, ...],
+    ) -> None:
+        folds = tuple(tuple(fold) for fold in folds)
         if any(any(type(index) is not int or index < 0 for index in fold) for fold in folds):
             raise ValueError("Fold indices must be non-negative integers")
-        object.__setattr__(self, "folds", folds)
-        object.__setattr__(self, "rows", _json_rows(tuple(self.rows)))
-        object.__setattr__(self, "exclusions", _json_rows(tuple(self.exclusions)))
+        object.__setattr__(self, "_folds", folds)
+        object.__setattr__(self, "_rows", _json_rows(tuple(rows)))
+        object.__setattr__(self, "_exclusions", _json_rows(tuple(exclusions)))
+
+    @property
+    def folds(self) -> tuple[tuple[int, ...], ...]:
+        return self._folds
+
+    @property
+    def rows(self) -> tuple[dict, ...]:
+        return _json_rows(self._rows)
+
+    @property
+    def exclusions(self) -> tuple[dict, ...]:
+        return _json_rows(self._exclusions)
 
     def to_dict(self) -> dict:
         return _json_object({
-            "folds": [list(fold) for fold in self.folds],
-            "rows": list(self.rows), "exclusions": list(self.exclusions),
+            "folds": [list(fold) for fold in self._folds],
+            "rows": list(self._rows), "exclusions": list(self._exclusions),
         })
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class RecommendationResult:
-    frame: pd.DataFrame
-    predictions: Prediction
-    diagnostics: dict
+    _frame: pd.DataFrame
+    _predictions: Prediction
+    _diagnostics: dict
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.frame, pd.DataFrame):
+    def __init__(
+        self, frame: pd.DataFrame, predictions: Prediction, diagnostics: dict,
+    ) -> None:
+        if not isinstance(frame, pd.DataFrame):
             raise TypeError("RecommendationResult.frame must be a DataFrame")
-        if not isinstance(self.predictions, Prediction):
+        if not isinstance(predictions, Prediction):
             raise TypeError("RecommendationResult.predictions must be a Prediction")
-        if len(self.frame) != self.predictions.mean.shape[0]:
+        if len(frame) != predictions.mean.shape[0]:
             raise ValueError("Recommendation rows and prediction rows differ")
-        object.__setattr__(self, "frame", self.frame.copy(deep=True).reset_index(drop=True))
-        object.__setattr__(self, "diagnostics", _json_object(self.diagnostics))
+        object.__setattr__(self, "_frame", _clone_frame(frame))
+        object.__setattr__(self, "_predictions", predictions)
+        object.__setattr__(self, "_diagnostics", _json_object(diagnostics))
+
+    @property
+    def frame(self) -> pd.DataFrame:
+        return _clone_frame(self._frame)
+
+    @property
+    def predictions(self) -> Prediction:
+        return self._predictions
+
+    @property
+    def diagnostics(self) -> dict:
+        return _json_object(self._diagnostics)
 
     def to_dict(self) -> dict:
         return _json_object({
-            "frame": self.frame.to_dict(orient="records"),
-            "predictions": self.predictions.to_dict(),
-            "diagnostics": self.diagnostics,
+            "frame": self._frame.to_dict(orient="records"),
+            "predictions": self._predictions.to_dict(),
+            "diagnostics": self._diagnostics,
         })
 
 

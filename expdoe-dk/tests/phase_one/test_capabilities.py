@@ -29,6 +29,32 @@ def test_unknown_consumer_blocks(unsupported_artifact_case):
     assert any(d["reason"] == "unsupported_artifact" for d in report.diagnostics)
 
 
+def test_known_kind_in_wrong_category_blocks(wrong_category_artifact_case):
+    space, knowledge = wrong_category_artifact_case
+    report = inspect_capabilities(space, knowledge)
+    assert report.applied == ()
+    assert report.blocked == ("KP-unknown",)
+    assert any(
+        d.get("reason") == "unsupported_artifact"
+        and d.get("category") == "mean_components"
+        and d.get("artifact_kind") == "gp_prior"
+        for d in report.diagnostics
+    )
+
+
+def test_random_augment_names_its_real_consumer(pattern_cases):
+    space, knowledge = next(
+        pair for pair in pattern_cases if pair[1].specs[0].pattern == "random_augment"
+    )
+    report = inspect_capabilities(space, knowledge)
+    assert any(
+        d.get("artifact_kind") == "random_augment"
+        and d.get("category") == "virtual_observations"
+        and d.get("consumer") == "bo.loop.Campaign.ask"
+        for d in report.diagnostics
+    )
+
+
 def test_golden_cases_match_compiler_kinds_and_schema(pattern_records, pattern_cases):
     assert len({record["pattern"] for record in pattern_records}) == 23
     for record, (space, knowledge) in zip(pattern_records, pattern_cases, strict=True):
@@ -99,6 +125,47 @@ def test_contracts_copy_mutable_inputs():
     assert result.frame.loc[0, "x"] == 1.0
     evaluation = EvaluationResult(((0,),), ({"track": "plain"},), ())
     assert evaluation.to_dict()["rows"][0]["track"] == "plain"
+
+
+def test_capability_report_returns_detached_diagnostics():
+    report = CapabilityReport(("KP-1",), (), ({"nested": [1]},))
+    report.diagnostics[0]["nested"].append(99)
+    assert report.to_dict()["diagnostics"] == [{"nested": [1]}]
+
+
+def test_evaluation_result_returns_detached_rows():
+    evaluation = EvaluationResult(
+        ((0,),), ({"oof_predictions": [1.0]},), ({"details": {"reason": "missing"}},),
+    )
+    evaluation.rows[0]["oof_predictions"].append(99.0)
+    evaluation.exclusions[0]["details"]["reason"] = "changed"
+    assert evaluation.to_dict()["rows"] == [{"oof_predictions": [1.0]}]
+    assert evaluation.to_dict()["exclusions"] == [{"details": {"reason": "missing"}}]
+
+
+def test_prediction_returns_detached_arrays_and_stays_finite():
+    prediction = Prediction(np.array([[1.0]]), np.array([[0.1]]))
+    leaked_mean = prediction.mean
+    leaked_variance = prediction.variance
+    leaked_mean.setflags(write=True)
+    leaked_variance.setflags(write=True)
+    leaked_mean[0, 0] = np.nan
+    leaked_variance[0, 0] = -1.0
+    assert prediction.to_dict() == {"mean": [[1.0]], "variance": [[0.1]]}
+
+
+def test_recommendation_result_returns_detached_frame_and_diagnostics():
+    prediction = Prediction(np.array([[1.0]]), np.array([[0.1]]))
+    result = RecommendationResult(
+        pd.DataFrame({"material": [["A"]]}), prediction,
+        {"candidate_keys": ["key-A"]},
+    )
+    result.frame.at[0, "material"].append("B")
+    result.diagnostics["candidate_keys"].append("key-B")
+    serialized = result.to_dict()
+    assert serialized["frame"] == [{"material": ["A"]}]
+    assert serialized["diagnostics"] == {"candidate_keys": ["key-A"]}
+    assert serialized["predictions"] == {"mean": [[1.0]], "variance": [[0.1]]}
 
 
 @pytest.mark.parametrize("mean,variance", [
