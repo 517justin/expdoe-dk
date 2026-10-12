@@ -19,6 +19,14 @@ from .contracts import CapabilityReport
 ARTIFACT_CONSUMERS: dict[tuple[str, str], str] = {
     ("mean_components", "arrhenius_mean"): "bo.gp.build_mean_from_artifacts",
     ("mean_components", "quadratic_mean"): "bo.gp.build_mean_from_artifacts",
+    ("mean_components", "power_law_descriptor"): "bo.gp.build_mean_from_artifacts",
+    ("mean_components", "exponential_descriptor"): "bo.gp.build_mean_from_artifacts",
+    ("mean_components", "quadratic_valley_descriptor"): "bo.gp.build_mean_from_artifacts",
+    ("mean_components", "periodic_descriptor"): "bo.gp.build_mean_from_artifacts",
+    ("kernel_components", "category_similarity_descriptor"): "bo.gp.build_kernel_from_artifacts",
+    ("parameter_constraints", "hard_parameter_constraint"): "bo.knowledge_runtime.RuntimeParameterConstraint",
+    ("outcome_constraints", "target_range_constraint"): "bo.knowledge_runtime.RuntimeOutcomeRange",
+    ("acquisition_preferences", "objective_priority_preference"): "bo.knowledge_runtime.RuntimePreference",
     ("virtual_observations", "monotone"): "bo.gp.build_virtual_observation_augmenter",
     ("virtual_observations", "random_augment"): "bo.loop.Campaign.ask",
     ("priors", "gp_prior"): "bo.gp.build_prior_modules",
@@ -85,8 +93,16 @@ def inspect_capabilities(space: Space, knowledge: Knowledge) -> CapabilityReport
                     unsupported = True
                     diagnostics.append({**entry, "reason": "unsupported_artifact"})
                 else:
-                    diagnostics.append({**entry, "consumer": consumer,
-                                        "validation_state": validation.state})
+                    from .knowledge_runtime import validate_runtime_artifact
+                    try:
+                        validate_runtime_artifact(space, category, artifact)
+                    except EngineError as error:
+                        unsupported = True
+                        diagnostics.append({**entry, "reason": "unsupported_artifact",
+                                            "details": str(error)})
+                    else:
+                        diagnostics.append({**entry, "consumer": consumer,
+                                            "validation_state": validation.state})
         if not has_numerical_artifact:
             unsupported = True
             diagnostics.append({**identity, "reason": "no_numerical_artifact"})

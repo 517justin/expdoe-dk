@@ -19,6 +19,8 @@ from .space import Parameter, LinearConstraint, Space
 from .knowledge import KNOWLEDGE_SCHEMA_VERSION, Knowledge
 from .bo import Campaign, Result
 from .bo.capabilities import inspect_capabilities
+from .bo.knowledge_runtime import compile_runtime
+from .doe.design import candidate_keys
 from .bo.contracts import (
     CapabilityReport,
     EvaluationResult,
@@ -76,6 +78,8 @@ __all__ = [
     "EvaluationResult",
     "RecommendationResult",
     "inspect_capabilities",
+    "compile_runtime",
+    "candidate_keys",
     "suggest_design",
     "DesignBatch",
     "DesignDiagnostics",

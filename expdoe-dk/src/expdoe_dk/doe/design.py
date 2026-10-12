@@ -5,8 +5,9 @@ import hashlib
 import itertools
 import json
 import math
+import operator
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from numbers import Integral
 from types import MappingProxyType
 
@@ -59,6 +60,22 @@ class DesignDiagnostics:
     minimum_model_distance: float | None
     rejection_counts: Mapping[str, int]
     candidate_keys: tuple[str, ...]
+    feasibility: tuple[bool, ...] = ()
+    constraint_margins: Mapping[str, tuple[float | None, ...]] = field(default_factory=dict)
+    coverage: Mapping[str, object] = field(default_factory=dict)
+    duplicates: int = 0
+    degradation_reason: str | None = None
+    marginal_balance: Mapping[str, object] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a detached JSON representation, including all legacy fields."""
+        def plain(value):
+            if isinstance(value, Mapping):
+                return {key: plain(item) for key, item in value.items()}
+            if isinstance(value, (tuple, list)):
+                return [plain(item) for item in value]
+            return value
+        return {item.name: plain(getattr(self, item.name)) for item in fields(self)}
 
 
 @dataclass(frozen=True, init=False)
@@ -128,6 +145,8 @@ def suggest_design(
     legacy = _validate_legacy_options(legacy_options)
     constraints = _validate_constraints(parameter_constraints)
     sources = _validate_knowledge_sources(knowledge_sources)
+    sources = tuple(dict.fromkeys((*sources, *(constraint.source_pattern_id
+        for constraint in constraints if hasattr(constraint, "source_pattern_id")))))
     effective, rule = resolve_design_method(space, method)
     hard_constraints = tuple(
         constraint for constraint in constraints if getattr(constraint, "hard", True)
@@ -190,7 +209,7 @@ def suggest_design(
         raise _space_infeasible(n, available, effective, seed, {**rejections, "final_infeasible": 1})
 
     diagnostics = _build_diagnostics(
-        design_space,
+        diagnostic_space,
         selected,
         method,
         effective,
@@ -199,6 +218,7 @@ def suggest_design(
         sources,
         rejections,
         constraint_digest=_constraint_digest(diagnostic_space),
+        feasible_universe=finite,
     )
     batch = DesignBatch(selected, diagnostics)
     return batch if return_diagnostics else batch.frame
@@ -744,17 +764,117 @@ def _concat_condition_frames(existing: pd.DataFrame | None, pending: pd.DataFram
 def _build_diagnostics(
     space: Space, frame: pd.DataFrame, requested: str, effective: str, selection_rule: str,
     seed: int, knowledge_sources: tuple[str, ...], rejections: dict[str, int],
-    *, constraint_digest: str | None = None,
+    *, constraint_digest: str | None = None, feasible_universe: pd.DataFrame | None = None,
 ) -> DesignDiagnostics:
     model = space.physical_to_model(frame).cpu().numpy()
     levels = _empty_level_counts([p for p in space.params if p.kind in {"categorical", "ordinal"}])
     _ = [_increment_counts(levels, row, [p for p in space.params if p.kind in {"categorical", "ordinal"}]) for row in frame.to_dict("records")]
+    coverage = {}
+    balance = {}
+    for parameter in space.params:
+        values = frame[parameter.name]
+        if parameter.kind != "continuous":
+            cardinality = parameter.cardinality
+            counts = {}
+            for value in values:
+                token = _scalar_token(value)
+                counts[token] = counts.get(token, 0) + 1
+            occupied = len(counts)
+            if feasible_universe is not None:
+                admissible = feasible_universe[parameter.name].drop_duplicates().tolist()
+                denominator = len(admissible)
+                definition = "occupied_admissible_levels_fraction"
+                counts.update({_scalar_token(level): counts.get(_scalar_token(level), 0) for level in admissible})
+            else:
+                denominator = cardinality
+                definition = "occupied_declared_levels_fraction"
+                if cardinality <= MAX_ENUMERATION_ROWS:
+                    declared = tuple(parameter.values or ()) if parameter.kind in {"categorical", "ordinal"} else parameter.numeric_levels
+                    counts.update({_scalar_token(level): counts.get(_scalar_token(level), 0) for level in declared})
+            coverage[parameter.name] = {"definition": definition,
+                                       "value": occupied / denominator,
+                                       "occupied": occupied, "declared": cardinality}
+            if feasible_universe is not None:
+                coverage[parameter.name]["admissible"] = denominator
+            deviations = [abs(count - len(frame) / denominator) for count in counts.values()]
+            if occupied < denominator:
+                deviations.append(len(frame) / denominator)
+            balance[parameter.name] = {"counts": counts,
+                "unoccupied_levels": denominator - occupied,
+                "maximum_deviation_from_uniform": max(deviations)}
+        else:
+            low, high = parameter.bounds
+            coverage[parameter.name] = {"definition": "physical_range_fraction",
+                                       "value": float((values.max() - values.min()) / (high - low))}
+    rows = frame.to_dict("records")
+    margins = {getattr(constraint, "name", "") or f"constraint-{index}":
+               tuple(_constraint_margin(constraint, row) for row in rows)
+               for index, constraint in enumerate(space.constraints)}
     return DesignDiagnostics(
         requested, effective, selection_rule, seed, constraint_digest or _constraint_digest(space), knowledge_sources,
         _freeze_mapping({p.name: _factor_encoding(p) for p in space.params}),
         _freeze_mapping(levels), _minimum_distance(model), _freeze_mapping(dict(sorted(rejections.items()))),
-        tuple(_candidate_key(row, space) for row in frame.to_dict("records")),
+        tuple(next(iter(candidate_keys(frame.iloc[[index]], space))) for index in range(len(frame))),
+        tuple(bool(value) for value in space.feasibility_mask(frame).tolist()),
+        _freeze_mapping(margins), _freeze_mapping(coverage),
+        len(frame) - len(candidate_keys(frame, space)), None, _freeze_mapping(balance),
     )
+
+
+def _constraint_margin(constraint: object, row: Mapping[str, object]) -> float | None:
+    """Signed physical residual, or None when no scalar margin is defined.
+
+    Categorical/boolean predicates have no meaningful physical distance.
+    Feasibility remains available separately, including strict boundaries.
+    """
+    payload = constraint.to_dict() if hasattr(constraint, "to_dict") else None
+    if hasattr(constraint, "coeffs"):
+        actual = sum(value * float(row[name]) for name, value in constraint.coeffs.items())
+        value = min(actual - constraint.lower, constraint.upper - actual)
+    elif payload and payload["kind"] == "linear":
+        actual = sum(value * float(row[name]) for name, value in payload["coefficients"].items())
+        value = _comparison_margin(payload["operator"], actual, payload["bound"])
+    elif payload and payload["kind"] == "expression":
+        ast = payload["ast"]
+        if ast["type"] != "compare" or ast["op"] not in {"<", "<=", ">", ">=", "=="}:
+            return None
+        left, right = _numeric_ast_value(ast["left"], row), _numeric_ast_value(ast["right"], row)
+        if left is None or right is None:
+            return None
+        value = _comparison_margin(ast["op"], left, right)
+    else:
+        return None
+    return float(value) if value is not None and math.isfinite(value) else None
+
+
+def _comparison_margin(op: str, left: float, right: float) -> float:
+    return right - left if op in {"<", "<="} else left - right if op in {">", ">="} else -abs(left - right)
+
+
+def _numeric_ast_value(node: Mapping, row: Mapping) -> float | None:
+    """Evaluate only numeric nodes of an already validated declarative AST."""
+    try:
+        kind = node["type"]
+        if kind in {"constant", "name"}:
+            value = node["value"] if kind == "constant" else row[node["name"]]
+            return float(value) if type(value) in (int, float) else None
+        if kind == "unary":
+            value = _numeric_ast_value(node["operand"], row)
+            return None if value is None else value if node["op"] == "+" else -value
+        if kind == "binary":
+            left, right = _numeric_ast_value(node["left"], row), _numeric_ast_value(node["right"], row)
+            if left is None or right is None:
+                return None
+            return {"+": operator.add, "-": operator.sub, "*": operator.mul,
+                    "/": operator.truediv, "**": operator.pow}[node["op"]](left, right)
+        if kind == "call":
+            args = [_numeric_ast_value(arg, row) for arg in node["args"]]
+            if any(arg is None for arg in args):
+                return None
+            return {"abs": abs, "min": min, "max": max, "log": math.log, "exp": math.exp}[node["function"]](*args)
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    return None
 
 
 def _minimum_distance(model: np.ndarray) -> float | None:
