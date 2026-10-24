@@ -29,6 +29,7 @@ from ._frame import PhysicalEffect, flip_for_minimize, InternalDirection
 from .artifacts import OptimizationArtifacts
 from .monotone import epsilon_from_prior
 from .patterns import GP_PRIOR_PRESETS, builtin_pattern_definitions
+from .patterns.shape import _v2_is_finite_number
 from .registry import PatternRegistry, ProviderRecord
 from .specs import KnowledgePatternSpec, KnowledgeScope, make_pattern_spec
 from .validators import (
@@ -338,7 +339,7 @@ class Knowledge:
 
     @staticmethod
     def _require_v2_number(value, context) -> None:
-        if type(value) not in (int, float) or not math.isfinite(value):
+        if not _v2_is_finite_number(value):
             raise ValueError(f"{context} must be an explicit finite non-boolean real number")
 
     def with_safe_region(

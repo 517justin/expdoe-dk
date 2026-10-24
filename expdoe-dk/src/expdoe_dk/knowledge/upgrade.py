@@ -1,12 +1,11 @@
 """Explicit, non-mutating previews; applying a candidate requires external approval."""
 from __future__ import annotations
 
-import math
-
 from expdoe_dk.domain import Space
 from expdoe_dk.errors import EngineError, ErrorCode
 
 from .patterns import builtin_pattern_definitions
+from .patterns.shape import _v2_is_finite_number
 from .registry import PatternRegistry
 from .specs import KnowledgePatternSpec
 
@@ -31,7 +30,7 @@ def preview_v2_upgrade(
         raise ValueError("An explicit objective response is required")
     parameters = spec.to_dict()["parameters"]
     if spec.pattern == "saturation":
-        if type(origin) not in (int, float) or not math.isfinite(origin):
+        if not _v2_is_finite_number(origin):
             raise ValueError("An explicit finite origin is required")
         if reference is not None or response_effect is not None:
             raise ValueError("Interaction semantics do not belong to saturation")

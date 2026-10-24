@@ -1,6 +1,7 @@
 """Version-explicit declarations stay separate from numerical consumer support."""
 import json
 
+import numpy as np
 import pytest
 
 from expdoe_dk import EngineError, ErrorCode, Knowledge, Parameter, Space, inspect_capabilities
@@ -202,6 +203,69 @@ def test_nonfinite_physical_range_is_rejected_with_structured_error(pattern):
     with pytest.raises(EngineError) as caught:
         Knowledge().add(declaration(pattern, parameters=parameters)).compile(space)
     assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+@pytest.mark.parametrize("scalar,lower,upper", [
+    (np.int64, 0, 10), (np.float32, 0., 10.),
+    (np.int64, 9007199254740993, 9007199254741003),
+])
+def test_numpy_bounds_compile_as_builtin_coordinates_without_integer_precision_loss(
+        pattern, scalar, lower, upper):
+    space = Space([Parameter("x", kind="integer" if scalar is np.int64 else "continuous",
+                             bounds=(scalar(lower), scalar(upper))),
+                   Parameter("z", bounds=(0, 1))], objectives="y")
+    parameters = declaration(pattern).to_dict()["parameters"]
+    if pattern == "saturation":
+        parameters.update(origin=lower, half_response=lower + 5)
+    elif pattern == "threshold":
+        parameters["threshold"] = lower + 5
+    artifact, = Knowledge().add(declaration(pattern, parameters=parameters)).compile(space).mean_components
+    coordinate = artifact.to_dict()["payload"]["coordinates"][0]
+    assert coordinate == {"factor": "x", "lower": lower, "upper": upper,
+                          "range": 10, "transform": "linear"}
+    expected_type = int if scalar is np.int64 else float
+    assert all(type(coordinate[key]) is expected_type for key in ("lower", "upper", "range"))
+    json.dumps(artifact.to_dict(), allow_nan=False)
+
+
+@pytest.mark.parametrize("pattern,key", [("saturation", "origin"), ("saturation", "half_response"),
+                                        ("threshold", "threshold")])
+@pytest.mark.parametrize("value", [10**400, -(10**400)])
+def test_oversized_integer_parameters_raise_structured_registry_error(pattern, key, value):
+    parameters = declaration(pattern).to_dict()["parameters"]
+    parameters[key] = value
+    with pytest.raises(EngineError) as caught:
+        Knowledge().add(declaration(pattern, parameters=parameters)).compile(numeric_space())
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_oversized_integer_bounds_raise_structured_registry_error(pattern):
+    space = Space([Parameter("x", kind="integer", bounds=(10**400, 10**400 + 10)),
+                   Parameter("z", bounds=(0, 1))], objectives="y")
+    with pytest.raises(EngineError) as caught:
+        Knowledge().add(declaration(pattern)).compile(space)
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
+
+
+@pytest.mark.parametrize("pattern,key", [
+    ("saturation", "origin"), ("saturation", "half_response"), ("saturation", "confidence"),
+    ("threshold", "threshold"), ("threshold", "confidence"),
+    ("synergy", "confidence"), ("antagonism", "confidence"),
+])
+@pytest.mark.parametrize("value", [10**400, -(10**400)])
+def test_oversized_integer_helper_arguments_raise_value_error(pattern, key, value):
+    spec = declaration(pattern)
+    kwargs = dict(spec.to_dict()["parameters"], version="2.0", objective="y")
+    kwargs[key] = value
+    with pytest.raises(ValueError):
+        if pattern == "saturation":
+            Knowledge().with_saturation("x", **kwargs)
+        elif pattern == "threshold":
+            Knowledge().with_threshold("x", **kwargs)
+        else:
+            Knowledge().with_interaction("x", "z", kind=pattern, **kwargs)
 
 
 @pytest.mark.parametrize("method,args,kwargs", [

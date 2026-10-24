@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from numbers import Integral
 
 from ..artifacts import OptimizationArtifact, OptimizationArtifacts
 from ..guard import CompatibilityResult, KnowledgeValidationResult
@@ -316,8 +317,23 @@ def threshold_definition() -> KnowledgePatternDefinition:
 def _v2_numeric_limits(parameter):
     """Keep physical integer anchors exact, including when forming the range."""
     if parameter.bounds is not None:
-        return parameter.bounds
-    return min(parameter.numeric_levels), max(parameter.numeric_levels)
+        limits = parameter.bounds
+    else:
+        limits = min(parameter.numeric_levels), max(parameter.numeric_levels)
+    # Parameter accepts NumPy real scalars, but artifacts require built-in JSON
+    # scalars. Convert before subtraction to avoid NumPy integer overflow too.
+    return tuple(int(value) if isinstance(value, Integral) else float(value)
+                 for value in limits)
+
+
+def _v2_is_finite_number(value) -> bool:
+    """Reject magnitudes outside the numerical route without leaking overflow."""
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _v2_common_errors(spec, space, *, factor_count: int) -> tuple[str, ...]:
@@ -329,7 +345,7 @@ def _v2_common_errors(spec, space, *, factor_count: int) -> tuple[str, ...]:
     elif spec.scope.objectives[0] not in space.objectives:
         errors.append(f"Unknown response {spec.scope.objectives[0]!r}")
     confidence = spec.confidence
-    if (type(confidence) not in (int, float) or not math.isfinite(confidence)
+    if (not _v2_is_finite_number(confidence)
             or not 0 <= confidence <= 1):
         errors.append("confidence must be finite and in [0, 1]")
     elif spec.enabled and confidence == 0:
@@ -347,8 +363,8 @@ def _v2_common_errors(spec, space, *, factor_count: int) -> tuple[str, ...]:
             errors.append(f"Factor {name!r} must be numeric")
             continue
         lower, upper = _v2_numeric_limits(parameter)
-        if not (math.isfinite(lower) and math.isfinite(upper)
-                and math.isfinite(upper - lower) and upper > lower):
+        if not (_v2_is_finite_number(lower) and _v2_is_finite_number(upper)
+                and _v2_is_finite_number(upper - lower) and upper > lower):
             errors.append(f"Factor {name!r} requires finite bounds and a finite positive range")
     return tuple(errors)
 
@@ -380,11 +396,11 @@ def _v2_shape_errors(spec, space) -> tuple[str, ...]:
     parameters = spec.parameters
     location_name = "half_response" if spec.pattern == "saturation" else "threshold"
     location = parameters[location_name]
-    if not math.isfinite(location) or not lower < location < upper:
+    if not _v2_is_finite_number(location) or not lower < location < upper:
         errors.append(f"{location_name} must be finite and strictly inside factor bounds")
     if spec.pattern == "saturation":
         origin = parameters["origin"]
-        if not math.isfinite(origin) or origin != lower:
+        if not _v2_is_finite_number(origin) or origin != lower:
             errors.append("origin must be finite and equal the approved lower-bound anchor")
     elif parameters["below_behavior"] == parameters["above_behavior"]:
         errors.append("Threshold behaviors must differ; use a simpler pattern for equal behaviors")

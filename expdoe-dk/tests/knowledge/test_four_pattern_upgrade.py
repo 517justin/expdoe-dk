@@ -87,3 +87,21 @@ def test_preview_rejects_semantics_which_do_not_belong_to_pattern():
     from expdoe_dk.knowledge.upgrade import preview_v2_upgrade
     with pytest.raises(ValueError):
         preview_v2_upgrade(legacy_spec("threshold"), space(), objective="y", origin=0)
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400)])
+def test_preview_oversized_integer_origin_raises_value_error(value):
+    from expdoe_dk.knowledge.upgrade import preview_v2_upgrade
+    with pytest.raises(ValueError):
+        preview_v2_upgrade(legacy_spec("saturation"), space(), objective="y", origin=value)
+
+
+@pytest.mark.parametrize("pattern,key", [("saturation", "half_response"), ("threshold", "threshold")])
+def test_preview_oversized_integer_source_location_raises_structured_error(pattern, key):
+    from expdoe_dk.knowledge.upgrade import preview_v2_upgrade
+    parameters = legacy_spec(pattern).to_dict()["parameters"]
+    parameters[key] = 10**400
+    semantics = {"origin": 0} if pattern == "saturation" else {}
+    with pytest.raises(EngineError) as caught:
+        preview_v2_upgrade(legacy_spec(pattern, parameters=parameters), space(), objective="y", **semantics)
+    assert caught.value.code is ErrorCode.KNOWLEDGE_INVALID
