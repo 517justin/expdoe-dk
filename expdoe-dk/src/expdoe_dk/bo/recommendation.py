@@ -40,9 +40,10 @@ def _invalid(message, **details):
 def _check_precision(space):
     """Reject known non-injective finite codecs before keys can alias inputs.
 
-    Small finite factors are checked exhaustively. Large integer grids must
-    satisfy a conservative binary64 cardinality bound and endpoint/midpoint
-    round trips. This is a restriction, not a redesign of Space's codec.
+    Small finite factors are checked exhaustively. Larger log-integer grids
+    are unsupported: sparse probes cannot certify their interior precision.
+    Large linear integer grids must satisfy a conservative binary64 cardinality
+    bound and endpoint/midpoint round trips. This does not redesign Space's codec.
     """
     for parameter in space.params:
         if parameter.kind == "ordinal" and any(value is None for value in parameter.values):
@@ -51,6 +52,10 @@ def _check_precision(space):
         if parameter.kind not in {"integer", "discrete"}:
             continue
         count = parameter.cardinality
+        if (parameter.kind == "integer" and count > MAX_ENUMERATION_ROWS
+                and (parameter.transform == "log" or parameter.log_scale)):
+            raise _invalid("Large log-integer domain precision cannot be validated exhaustively",
+                           parameter=parameter.name, cardinality=count, limit=MAX_ENUMERATION_ROWS)
         if parameter.kind == "integer" and count > 2**52:
             raise _invalid("Integer domain exceeds certified model-coordinate precision; values may alias",
                            parameter=parameter.name, cardinality=count)

@@ -141,9 +141,11 @@ def test_exhaustion_never_returns_partial_batch():
     assert error.value.code == ErrorCode.NO_FEASIBLE_CANDIDATE
 
 
-def test_large_exact_integer_values_remain_distinct():
+@pytest.mark.parametrize("transform", ["linear", "log"])
+def test_large_exact_integer_values_remain_distinct(transform):
     base = 2**53 + 10
-    space = Space([Parameter("n", kind="integer", bounds=(base, base + 8), step=2)], objectives="y")
+    space = Space([Parameter("n", kind="integer", bounds=(base, base + 8), step=2,
+        transform=transform)], objectives="y")
     observations = ObservationBatch(pd.DataFrame({"n": [base, base + 2, base + 4]}),
         pd.DataFrame({"y": [0., 1., 2.]}))
     out = recommend(space, observations, q=2)
@@ -160,6 +162,26 @@ def test_wide_integer_codec_alias_fails_closed():
         recommend(space, observations)
     assert error.value.code == ErrorCode.CONFIG_INVALID
     assert "precision" in str(error.value).lower() or "alias" in str(error.value).lower()
+
+
+@pytest.mark.parametrize("log_options", [{"transform": "log"}, {"log_scale": True}])
+def test_large_log_integer_interior_alias_fails_closed(log_options):
+    space = Space([Parameter("n", kind="integer",
+        bounds=(100000000000000, 2351799813685247), **log_options)], objectives="y")
+    adjacent = pd.DataFrame({"n": [2350065940924071, 2350065940924072]})
+    # The existing codec aliases this interior pair despite distinct endpoints
+    # and midpoint probes. Recommendation must reject before using those keys.
+    encoded = space.physical_to_model(adjacent)
+    assert encoded[0, 0].item() == encoded[1, 0].item() == 0.9997664407516406
+    assert space.model_to_physical(encoded).n.tolist() == [2350065940924072] * 2
+    assert len(candidate_keys(adjacent, space)) == 1
+    observations = ObservationBatch(pd.DataFrame({"n": [100000000000000,
+        2350065940924071, 2350065940924072]}), pd.DataFrame({"y": [0., 1., 2.]}))
+    with pytest.raises(EngineError) as error:
+        recommend(space, observations)
+    assert error.value.code == ErrorCode.CONFIG_INVALID
+    assert "log" in str(error.value).lower()
+    assert "precision" in str(error.value).lower()
 
 
 def test_seeded_bounded_pool_scores_large_discrete_space():
