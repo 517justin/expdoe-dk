@@ -9,6 +9,8 @@ import pandas as pd
 import torch
 from botorch import settings
 from botorch.fit import fit_gpytorch_mll
+from botorch.models.model import Model
+from botorch.posteriors.transformed import TransformedPosterior
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from ..domain import ObservationBatch, Space
@@ -153,10 +155,39 @@ class _PhysicalFeatures(torch.nn.Module):
                 "numeric_scale": self.scale.tolist()}
 
 
+class _PhysicalAcquisitionModel(Model):
+    """Posterior-only adapter; no fitting or internal response-frame access."""
+
+    def __init__(self, model, location, scale, sign):
+        super().__init__()
+        self._source = model
+        self._location, self._scale, self._sign = location, scale, sign
+
+    @property
+    def num_outputs(self):
+        return 1
+
+    @property
+    def batch_shape(self):
+        return self._source.batch_shape
+
+    def posterior(self, X, output_indices=None, observation_noise=False, posterior_transform=None):
+        if output_indices not in (None, [0]) or observation_noise is not False:
+            raise EngineError(ErrorCode.CONFIG_INVALID,
+                "Acquisition adapter supports only the single latent response")
+        posterior = self._source.posterior(X)
+        multiplier = self._sign * self._scale
+        physical = TransformedPosterior(posterior,
+            sample_transform=lambda samples: samples * multiplier + self._location,
+            mean_transform=lambda mean, variance: mean * multiplier + self._location,
+            variance_transform=lambda mean, variance: variance * self._scale**2)
+        return physical if posterior_transform is None else posterior_transform(physical)
+
+
 class FittedSurrogate:
     """Fitted production GP; predict returns physical means and latent variances.
 
-    Only ``predict``, ``transforms`` and ``exclusions`` are public. Reference
+    ``predict``, ``acquisition_model``, ``transforms`` and ``exclusions`` are public. Reference
     estimators are evaluation-only and cannot construct this public contract.
     """
 
@@ -173,6 +204,18 @@ class FittedSurrogate:
     @property
     def exclusions(self):
         return deepcopy(self._exclusions)
+
+    def acquisition_model(self) -> Model:
+        """Return a posterior-only BoTorch adapter for acquisition evaluation.
+
+        Inputs are differentiable ``(..., q, d)`` Space model coordinates, as
+        produced by ``Space.physical_to_model`` (NOT physical values or expanded
+        kernel features). Joint latent posterior means, variances and samples
+        are in physical response units, exactly like ``predict``. Use MC
+        acquisitions with ``cache_root=False`` for this transformed posterior.
+        The raw fitted GP and its internal response frame are not public.
+        """
+        return _PhysicalAcquisitionModel(self._model, self._location, self._scale, self._sign)
 
     def predict(self, X: pd.DataFrame) -> Prediction:
         inputs = _model_inputs(self._space, X)

@@ -123,7 +123,7 @@ def test_campaign_checkpoint_roundtrip(tmp_path):
 
 def test_ask_batch_deduplicates_repeated_acquisition_candidates(monkeypatch):
     """Repeated q=1 acquisition optima should not duplicate a lab run."""
-    from expdoe_dk.bo import loop as loop_mod
+    from expdoe_dk.bo import recommendation as recommendation_mod
 
     space = Space(
         params=[
@@ -138,14 +138,9 @@ def test_ask_batch_deduplicates_repeated_acquisition_candidates(monkeypatch):
     campaign.tell(X, [0.0, 1.0, 0.0])
 
     repeated = torch.tensor([[0.25, 0.75]], dtype=torch.float64)
-    monkeypatch.setattr(loop_mod, "fit_gpytorch_mll", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(loop_mod, "optimize_acqf", lambda *_args, **_kwargs: (repeated, None))
     monkeypatch.setattr(
-        loop_mod,
-        "generate_doe",
-        lambda space, n, **_kwargs: pd.DataFrame(
-            {"x0": np.linspace(0.4, 0.4 + 0.1 * (n - 1), n), "x1": np.full(n, 0.2)}
-        ),
+        recommendation_mod, "optimize_acqf",
+        lambda *_args, **_kwargs: (repeated, torch.tensor(0.0)),
     )
 
     batch = campaign.ask(q=2)

@@ -17,20 +17,12 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 import torch
-from botorch.acquisition import LogExpectedImprovement
-from botorch.fit import fit_gpytorch_mll
-from botorch.optim import optimize_acqf
-from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from ..space import Space
 from ..knowledge import Knowledge
 from ..domain.space import ENGINE_VERSION
 from ..errors import EngineError, ErrorCode
-from ..knowledge._frame import (
-    flip_for_minimize,
-    internal_to_physical,
-    physical_to_internal_best,
-)
+from ..knowledge._frame import physical_to_internal_best
 from ..knowledge.validators import (
     check_monotone_assumption,
     check_shape_prior_fit,
@@ -40,7 +32,7 @@ from ..knowledge.shape import (
     QuadraticMeanFrozen,
 )
 from ..doe import generate as generate_doe
-from .gp import build_gp
+from .contracts import RecommendationResult
 
 log = logging.getLogger("expdoe_dk.bo.Campaign")
 
@@ -247,147 +239,25 @@ class Campaign:
     # Step 3: ask — propose next experiments
     # ------------------------------------------------------------------ #
     def ask(self, q: int = 1, iteration: int | None = None) -> pd.DataFrame:
+        """Return physical candidates through the public diagnostic boundary."""
+        return self.ask_with_diagnostics(q=q, iteration=iteration).frame
+
+    def ask_with_diagnostics(self, q: int = 1, iteration: int | None = None) -> RecommendationResult:
+        """Fit the production GP and return candidates plus truthful diagnostics."""
+        from ..domain import ObservationBatch
+        from .recommendation import recommend
+
+        if iteration is not None and (type(iteration) is not int or iteration < 0):
+            raise EngineError(ErrorCode.CONFIG_INVALID, "iteration must be a non-negative integer")
         if not self._X_phys:
-            raise RuntimeError(
-                "Campaign.ask() called before any tell(). Provide initial "
-                "data via tell(suggest_doe(n), y_observed) first."
-            )
-
-        # Build tensors in unit / Y_norm space.
-        X_phys_df = pd.concat(self._X_phys, axis=0).reset_index(drop=True)
-        X_phys_t = self.space.to_tensor(X_phys_df)
-        X_unit = self.space.physical_to_unit(X_phys_t)
-        y_int = torch.tensor(self._y_internal, dtype=torch.float64).unsqueeze(-1)
-        y_mean = y_int.mean()
-        y_std = y_int.std().clamp(min=1e-6)
-        y_norm = (y_int - y_mean) / y_std
-
-        # Augment with virtual points if knowledge has monotone.
-        iter_idx = iteration if iteration is not None else len(self._y_internal)
-        virtual_artifacts = self.knowledge.compile(
-            space=self.space, observations=None
-        ).virtual_observations
-        model, augmenter = build_gp(self.space, self.knowledge, X_unit, y_norm)
-        if augmenter is not None:
-            n_pairs = max(
-                (
-                    artifact.payload["n_pairs_per_dim"]
-                    for artifact in virtual_artifacts
-                    if artifact.kind == "monotone"
-                ),
-                default=5,
-            )
-            X_aug, Y_aug = augmenter.augment(
-                X_unit, y_norm,
-                n_pairs_per_dim=n_pairs,
-                iteration=iter_idx,
-                bo_seed=self.seed,
-            )
-            # Rebuild model with augmented data (same kernel / mean / lik).
-            model, _ = build_gp(self.space, self.knowledge, X_aug, Y_aug)
-
-        # Random augment (Cat ②): append zero-Y_norm anchor points.
-        random_artifacts = [
-            artifact
-            for artifact in virtual_artifacts
-            if artifact.kind == "random_augment"
-        ]
-        if random_artifacts:
-            n_ra = random_artifacts[-1].payload["n"]
-            torch.manual_seed(self.seed * 10000 + iter_idx)
-            X_ra = torch.rand(n_ra, self.space.n_dims, dtype=torch.float64)
-            Y_ra = torch.full((n_ra, 1), float(y_norm.mean()), dtype=torch.float64)
-            if model.train_inputs is None:
-                X_all, Y_all = X_unit, y_norm
-            else:
-                X_all = torch.cat([model.train_inputs[0], X_ra], dim=0)
-                Y_all = torch.cat([model.train_targets.unsqueeze(-1), Y_ra], dim=0)
-            model, _ = build_gp(self.space, self.knowledge, X_all, Y_all)
-
-        # Fit hyperparameters.
-        mll = ExactMarginalLogLikelihood(model.likelihood, model)
-        try:
-            fit_gpytorch_mll(mll)
-        except Exception as e:
-            log.warning(f"GP fit fallback (continuing with defaults): {e}")
-
-        # Acquisition: minimize internal y_norm.
-        best_f = y_norm.min()
-        acqf = LogExpectedImprovement(model=model, best_f=best_f, maximize=False)
-        unit_bounds = torch.stack(
-            [
-                torch.zeros(self.space.n_dims, dtype=torch.float64),
-                torch.ones(self.space.n_dims, dtype=torch.float64),
-            ]
+            raise EngineError(ErrorCode.INSUFFICIENT_DATA,
+                "Campaign.ask requires initial observations via tell()")
+        observations = ObservationBatch(
+            pd.concat(self._X_phys, ignore_index=True),
+            pd.DataFrame({self.space.objectives[0]: self._y_physical}),
         )
-
-        def row_key(row: pd.Series) -> tuple[float, ...]:
-            return tuple(round(float(row[p]), 12) for p in self.space.param_names)
-
-        seen_keys = {row_key(row) for _, row in X_phys_df.iterrows()}
-
-        # Optimize acquisition with rejection sampling for constraints.
-        candidates: list[pd.DataFrame] = []
-        tries = 0
-        max_tries = max(20, q * 10)
-        while len(candidates) < q and tries < max_tries:
-            tries += 1
-            try:
-                cand_unit, _ = optimize_acqf(
-                    acqf,
-                    bounds=unit_bounds,
-                    q=1,
-                    num_restarts=10,
-                    raw_samples=256,
-                )
-            except Exception as e:
-                log.warning(f"optimize_acqf failed: {e}; random fallback.")
-                cand_unit = torch.rand(1, self.space.n_dims, dtype=torch.float64)
-
-            cand_phys = self.space.unit_to_physical(cand_unit)
-            df_cand = self.space.to_dataframe(cand_phys)
-            if not bool(self.space.feasibility_mask(df_cand).all().item()):
-                # Try one local random nudge.
-                continue
-            key = row_key(df_cand.iloc[0])
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            candidates.append(df_cand)
-
-        if len(candidates) < q:
-            # Fallback: random feasible sample to fill the batch.
-            fallback_tries = 0
-            while len(candidates) < q and fallback_tries < max_tries:
-                missing = q - len(candidates)
-                extra = generate_doe(
-                    self.space,
-                    n=max(missing * 3, missing),
-                    method="random_uniform",
-                    seed=self.seed + tries + fallback_tries,
-                )
-                unique_rows = []
-                for _, row in extra.iterrows():
-                    key = row_key(row)
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-                    unique_rows.append(row)
-                    if len(unique_rows) >= missing:
-                        break
-                if unique_rows:
-                    candidates.append(
-                        pd.DataFrame(unique_rows, columns=self.space.param_names)
-                    )
-                fallback_tries += 1
-
-        if len(candidates) < q:
-            raise RuntimeError(
-                f"Campaign.ask(q={q}) could not find enough unique feasible "
-                "candidates. Consider reducing q or relaxing constraints."
-            )
-
-        return pd.concat(candidates, axis=0).reset_index(drop=True).head(q)
+        iteration_seed = self.seed + (len(self._y_physical) if iteration is None else iteration)
+        return recommend(self.space, observations, knowledge=self.knowledge, q=q, seed=iteration_seed)
 
     # ------------------------------------------------------------------ #
     # Step 4: run — full DoE + BO automation

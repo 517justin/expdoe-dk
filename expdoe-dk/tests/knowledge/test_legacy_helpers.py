@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 import torch
 import pandas as pd
 from jsonschema import Draft202012Validator
@@ -499,9 +500,8 @@ def test_gp_build_preserves_builtin_numerical_components():
     assert augmenter.delta_norm == pytest.approx(0.7)
 
 
-def test_campaign_consumes_provider_compiled_virtual_observations(monkeypatch):
+def test_campaign_consumes_provider_compiled_virtual_observations():
     from expdoe_dk import Campaign
-    from expdoe_dk.bo import loop as loop_mod
 
     def compiler(spec, space, observations=None):
         provenance = {
@@ -563,24 +563,12 @@ def test_campaign_consumes_provider_compiled_virtual_observations(monkeypatch):
         Space([Parameter("x", bounds=(0.0, 1.0))]), knowledge, seed=11
     )
     campaign.tell(pd.DataFrame({"x": [0.1, 0.5, 0.9]}), [0.0, 1.0, 0.0])
-    training_rows: list[int] = []
-    real_build_gp = loop_mod.build_gp
-
-    def recording_build_gp(space, knowledge, train_x, train_y):
-        training_rows.append(len(train_x))
-        return real_build_gp(space, knowledge, train_x, train_y)
-
-    monkeypatch.setattr(loop_mod, "build_gp", recording_build_gp)
-    monkeypatch.setattr(loop_mod, "fit_gpytorch_mll", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        loop_mod,
-        "optimize_acqf",
-        lambda *_args, **_kwargs: (
-            torch.tensor([[0.25]], dtype=torch.float64),
-            None,
-        ),
-    )
-
-    campaign.ask(q=1, iteration=4)
-
-    assert training_rows == [3, 7, 10]
+    result = campaign.ask_with_diagnostics(q=1, iteration=4)
+    # Two monotone pairs (four rows) and three random anchors must reach the
+    # production GP, regardless of how many internal model rebuilds it uses.
+    assert result.diagnostics["transforms"]["virtual_rows"] == 7
+    assert result.diagnostics["transforms"]["response_location"] == pytest.approx(1 / 3)
+    assert campaign.space.feasibility_mask(result.frame).all()
+    assert len(result.frame) == 1
+    assert np.isfinite(result.predictions.mean).all()
+    pd.testing.assert_frame_equal(campaign.ask(q=1, iteration=4), result.frame)

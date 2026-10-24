@@ -130,3 +130,11 @@ def smooth_batch() -> ObservationBatch:
 @pytest.fixture
 def interaction_batch() -> ObservationBatch:
     return _batch(20, "interaction")
+
+
+@pytest.fixture
+def mixed_observations(mixed_case) -> ObservationBatch:
+    """Twelve feasible measured conditions for mixed-space recommendation."""
+    batch = _batch(12, "smooth")
+    assert mixed_case.feasibility_mask(batch.X).all()
+    return batch
