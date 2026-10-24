@@ -265,7 +265,7 @@ def _validate_v04(state):
     required = {"arrhenius": ("param",), "quadratic_peak": ("param", "center"), "monotone": ("param", "effect")}
     for item in state["knowledge"].get("items", []):
         kind = item.get("kind")
-        if kind not in legacy_items:
+        if type(kind) is not str or kind not in legacy_items:
             raise _invalid(f"Unknown legacy knowledge kind {kind!r}")
         fields = legacy_items[kind]
         _validate_schema(item, _object({"kind": {"const": kind}, **fields},
@@ -286,8 +286,15 @@ def batch_to_state(batch):
 
 
 def batch_from_state(raw, space):
+    # Object dtype prevents initial numeric inference; pd.NA also prevents the
+    # ObservationBatch object-column deepcopy/map from inferring float64 for
+    # integers plus missing values. JSON serialization maps pd.NA back to null.
+    outcomes = pd.DataFrame(
+        [[pd.NA if value is None else value for value in row] for row in raw["Y"]],
+        columns=space.objectives, dtype=object,
+    )
     return ObservationBatch(pd.DataFrame(raw["X"], columns=space.param_names),
-        pd.DataFrame(raw["Y"], columns=space.objectives),
+        outcomes,
         Yvar=None if raw["Yvar"] is None else pd.DataFrame(raw["Yvar"], columns=space.objectives, dtype=float),
         status=None if raw["status"] is None else pd.Series(raw["status"], dtype=object), ids=raw["ids"])
 

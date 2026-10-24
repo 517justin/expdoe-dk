@@ -389,3 +389,39 @@ def test_v04_reader_keeps_optional_trial_kind_migration():
         "knowledge": {}, "seed": 0, "history": [{"x": 0.5, "y": 1.}]}
     campaign = Campaign.from_state(state)
     assert campaign.history_df().to_dict("records") == [{"x": 0.5, "y": 1., "kind": "doe"}]
+
+
+@pytest.mark.parametrize("boundary", ["state", "file"])
+@pytest.mark.parametrize("exact,dtype", [(2**53 + 1, "Int64"), (2**63 + 1, "UInt64"), (2**80 + 1, object)])
+def test_nullable_integer_outcomes_keep_exact_physical_values(tmp_path, boundary, exact, dtype):
+    campaign = Campaign(Space([Parameter("x", bounds=(0., 1.))]))
+    campaign.tell_batch(ObservationBatch(
+        pd.DataFrame({"x": [0., 1.]}),
+        pd.DataFrame({"y": pd.Series([exact, pd.NA], dtype=dtype)}),
+        status=pd.Series(["success", "failed"]),
+    ))
+    state = campaign.to_state()
+    assert state["observations"][0]["Y"] == [[exact], [None]]
+    if boundary == "state":
+        restored = Campaign.from_state(state)
+    else:
+        path = tmp_path / "nullable-integer.json"
+        campaign.save_checkpoint(path)
+        restored = Campaign.load_checkpoint(path)
+    assert restored.to_state()["observations"][0]["Y"] == [[exact], [None]]
+    assert restored.to_state() == state
+
+
+@pytest.mark.parametrize("kind", [[], {}])
+@pytest.mark.parametrize("boundary", ["state", "file"])
+def test_legacy_knowledge_discriminator_requires_string(tmp_path, kind, boundary):
+    state = {"space": {"params": [{"name": "x", "bounds": [0., 1.]}]},
+        "knowledge": {"items": [{"kind": kind}]}, "seed": 0, "history": []}
+    with pytest.raises(EngineError) as caught:
+        if boundary == "state":
+            Campaign.from_state(state)
+        else:
+            path = tmp_path / "bad-legacy.json"
+            path.write_text(json.dumps(state))
+            Campaign.load_checkpoint(path)
+    assert caught.value.code is ErrorCode.CHECKPOINT_INCOMPATIBLE
