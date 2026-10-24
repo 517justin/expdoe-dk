@@ -215,18 +215,30 @@ class Knowledge:
         direction: str,
         half_response: float,
         confidence: float = 1.0,
+        version: str = "1.0",
+        objective: str | None = None,
+        origin: float | None = None,
     ) -> "Knowledge":
-        """Declare a one-factor saturation response at ``half_response``."""
+        """Opt in to v2 with an explicit response and physical lower-bound origin."""
+        objectives = self._four_pattern_objectives(version, objective, confidence)
+        if version == "1.0" and origin is not None:
+            raise ValueError("origin is a v2-only argument")
         self._require_name(param, "param")
         if direction not in {"increasing", "decreasing"}:
             raise ValueError("direction must be increasing or decreasing")
-        self._require_finite(half_response, "half_response")
+        parameters = {"direction": direction, "half_response": half_response}
+        if version == "2.0":
+            self._require_v2_number(half_response, "half_response")
+            self._require_v2_number(origin, "origin")
+            parameters["origin"] = origin
+        else:
+            self._require_finite(half_response, "half_response")
         return self.add_spec(
             make_pattern_spec(
                 pattern="saturation",
-                version="1.0",
-                parameters={"direction": direction, "half_response": half_response},
-                scope=KnowledgeScope(factors=(param,)),
+                version=version,
+                parameters=parameters,
+                scope=KnowledgeScope(factors=(param,), objectives=objectives),
                 confidence=confidence,
             )
         )
@@ -239,10 +251,18 @@ class Knowledge:
         below_behavior: str,
         above_behavior: str,
         confidence: float = 1.0,
+        version: str = "1.0",
+        objective: str | None = None,
     ) -> "Knowledge":
         """Declare keyword-only below/above response behavior at a threshold."""
+        objectives = self._four_pattern_objectives(version, objective, confidence)
         self._require_name(param, "param")
-        self._require_finite(threshold, "threshold")
+        if version == "2.0":
+            self._require_v2_number(threshold, "threshold")
+            if below_behavior == above_behavior:
+                raise ValueError("v2 threshold behaviors must differ; use a simpler pattern")
+        else:
+            self._require_finite(threshold, "threshold")
         allowed = {"increasing", "decreasing", "flat"}
         if below_behavior not in allowed:
             raise ValueError("below_behavior must be increasing, decreasing, or flat")
@@ -251,13 +271,13 @@ class Knowledge:
         return self.add_spec(
             make_pattern_spec(
                 pattern="threshold",
-                version="1.0",
+                version=version,
                 parameters={
                     "threshold": threshold,
                     "below_behavior": below_behavior,
                     "above_behavior": above_behavior,
                 },
-                scope=KnowledgeScope(factors=(param,)),
+                scope=KnowledgeScope(factors=(param,), objectives=objectives),
                 confidence=confidence,
             )
         )
@@ -269,8 +289,22 @@ class Knowledge:
         *,
         kind: str,
         confidence: float = 1.0,
+        version: str = "1.0",
+        objective: str | None = None,
+        reference: str | None = None,
+        response_effect: str | None = None,
     ) -> "Knowledge":
         """Declare a synergy or antagonism between two distinct factors."""
+        objectives = self._four_pattern_objectives(version, objective, confidence)
+        if version == "1.0" and (reference is not None or response_effect is not None):
+            raise ValueError("reference and response_effect are v2-only arguments")
+        parameters = {}
+        if version == "2.0":
+            if reference != "anchored_additive":
+                raise ValueError("v2 reference must explicitly be anchored_additive")
+            if response_effect not in {"higher", "lower"}:
+                raise ValueError("v2 response_effect must explicitly be higher or lower")
+            parameters = {"reference": reference, "response_effect": response_effect}
         self._require_name(first, "first")
         self._require_name(second, "second")
         if first == second:
@@ -280,12 +314,32 @@ class Knowledge:
         return self.add_spec(
             make_pattern_spec(
                 pattern=kind,
-                version="1.0",
-                parameters={},
-                scope=KnowledgeScope(factors=(first, second)),
+                version=version,
+                parameters=parameters,
+                scope=KnowledgeScope(factors=(first, second), objectives=objectives),
                 confidence=confidence,
             )
         )
+
+    @staticmethod
+    def _four_pattern_objectives(version, objective, confidence) -> tuple[str, ...]:
+        if version not in ("1.0", "2.0"):
+            raise ValueError(f"Unsupported knowledge version {version!r}; no automatic downgrade")
+        if version == "1.0":
+            if objective is not None:
+                raise ValueError("objective is a v2-only argument")
+            return ()
+        if type(objective) is not str or not objective.strip():
+            raise ValueError("v2 requires an explicit objective response")
+        Knowledge._require_v2_number(confidence, "confidence")
+        if not 0 < confidence <= 1:
+            raise ValueError("Enabled v2 confidence must be in (0, 1]; disable the declaration for zero confidence")
+        return (objective,)
+
+    @staticmethod
+    def _require_v2_number(value, context) -> None:
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError(f"{context} must be an explicit finite non-boolean real number")
 
     def with_safe_region(
         self,

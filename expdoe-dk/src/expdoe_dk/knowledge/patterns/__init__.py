@@ -4,9 +4,11 @@ from .categorical import category_similarity_definition, ordinal_categories_defi
 from .feasibility import forbidden_region_definition, safe_region_definition
 from .interaction import (
     antagonism_definition,
+    antagonism_v2_definition,
     conditional_effect_definition,
     ratio_optimum_definition,
     synergy_definition,
+    synergy_v2_definition,
 )
 from .multiobjective import (
     objective_priority_definition,
@@ -24,7 +26,9 @@ from .shape import (
     quadratic_valley_definition,
     random_augment_definition,
     saturation_definition,
+    saturation_v2_definition,
     threshold_definition,
+    threshold_v2_definition,
 )
 
 
@@ -33,6 +37,7 @@ def builtin_pattern_definitions():
     return (
         arrhenius_definition(),
         antagonism_definition(),
+        antagonism_v2_definition(),
         category_similarity_definition(),
         conditional_effect_definition(),
         exponential_definition(),
@@ -50,9 +55,12 @@ def builtin_pattern_definitions():
         ratio_optimum_definition(),
         safe_region_definition(),
         saturation_definition(),
+        saturation_v2_definition(),
         synergy_definition(),
+        synergy_v2_definition(),
         target_range_definition(),
         threshold_definition(),
+        threshold_v2_definition(),
         tradeoff_definition(),
     )
 

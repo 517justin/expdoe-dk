@@ -313,6 +313,157 @@ def threshold_definition() -> KnowledgePatternDefinition:
     )
 
 
+def _v2_numeric_limits(parameter):
+    """Keep physical integer anchors exact, including when forming the range."""
+    if parameter.bounds is not None:
+        return parameter.bounds
+    return min(parameter.numeric_levels), max(parameter.numeric_levels)
+
+
+def _v2_common_errors(spec, space, *, factor_count: int) -> tuple[str, ...]:
+    errors: list[str] = []
+    if len(space.objectives) != 1:
+        errors.append("v2 requires exactly one physical response in Space")
+    if len(spec.scope.objectives) != 1:
+        errors.append("v2 requires exactly one explicit scoped response")
+    elif spec.scope.objectives[0] not in space.objectives:
+        errors.append(f"Unknown response {spec.scope.objectives[0]!r}")
+    confidence = spec.confidence
+    if (type(confidence) not in (int, float) or not math.isfinite(confidence)
+            or not 0 <= confidence <= 1):
+        errors.append("confidence must be finite and in [0, 1]")
+    elif spec.enabled and confidence == 0:
+        errors.append("Enabled v2 confidence must be positive; disable the declaration or provide positive confidence")
+    if len(spec.scope.factors) != factor_count:
+        errors.append(f"{spec.pattern} requires exactly {factor_count} scoped factors")
+    if len(set(spec.scope.factors)) != len(spec.scope.factors):
+        errors.append("Interaction factors must be distinct")
+    for name in spec.scope.factors:
+        if name not in space.param_names:
+            errors.append(f"Unknown factor {name!r}")
+            continue
+        parameter = space.param_by_name(name)
+        if parameter.kind not in _NUMERIC_KINDS:
+            errors.append(f"Factor {name!r} must be numeric")
+            continue
+        lower, upper = _v2_numeric_limits(parameter)
+        if not (math.isfinite(lower) and math.isfinite(upper)
+                and math.isfinite(upper - lower) and upper > lower):
+            errors.append(f"Factor {name!r} requires finite bounds and a finite positive range")
+    return tuple(errors)
+
+
+def _v2_payload(spec, space, factors) -> dict:
+    coordinates = []
+    for name in factors:
+        parameter = space.param_by_name(name)
+        lower, upper = _v2_numeric_limits(parameter)
+        coordinates.append({
+            "factor": name, "lower": lower, "upper": upper, "range": upper - lower,
+            "transform": "log" if parameter.transform == "log" or parameter.log_scale else "linear",
+        })
+    return {
+        "factors": list(factors),
+        "dimensions": [space.param_names.index(name) for name in factors],
+        "objectives": list(spec.scope.objectives),
+        "parameters": spec.to_dict()["parameters"],
+        "confidence": spec.confidence,
+        "coordinates": coordinates,
+    }
+
+
+def _v2_shape_errors(spec, space) -> tuple[str, ...]:
+    errors = list(_v2_common_errors(spec, space, factor_count=1))
+    if errors:
+        return tuple(errors)
+    lower, upper = _v2_numeric_limits(space.param_by_name(spec.scope.factors[0]))
+    parameters = spec.parameters
+    location_name = "half_response" if spec.pattern == "saturation" else "threshold"
+    location = parameters[location_name]
+    if not math.isfinite(location) or not lower < location < upper:
+        errors.append(f"{location_name} must be finite and strictly inside factor bounds")
+    if spec.pattern == "saturation":
+        origin = parameters["origin"]
+        if not math.isfinite(origin) or origin != lower:
+            errors.append("origin must be finite and equal the approved lower-bound anchor")
+    elif parameters["below_behavior"] == parameters["above_behavior"]:
+        errors.append("Threshold behaviors must differ; use a simpler pattern for equal behaviors")
+    return tuple(errors)
+
+
+def _v2_validation_result(spec, errors) -> KnowledgeValidationResult:
+    return KnowledgeValidationResult(
+        pattern_id=spec.pattern_id,
+        state="invalid" if errors else "insufficient_data",
+        summary=(f"Invalid {spec.pattern} v2 declaration" if errors else
+                 f"{spec.pattern} v2 is structurally valid; empirical evidence is not evaluated"),
+        errors=tuple(errors),
+        effective_confidence=None if errors else spec.confidence,
+    )
+
+
+def _validate_v2_shape(spec, space, observations=None) -> KnowledgeValidationResult:
+    return _v2_validation_result(spec, _v2_shape_errors(spec, space))
+
+
+def _compatible_v2_shape(spec, space) -> CompatibilityResult:
+    errors = _v2_shape_errors(spec, space)
+    return CompatibilityResult(compatible=not errors, reasons=errors)
+
+
+def _compile_v2_shape(spec, space, observations=None) -> OptimizationArtifacts:
+    return OptimizationArtifacts(mean_components=(
+        _artifact(spec, f"{spec.pattern}_mean_v2", _v2_payload(spec, space, spec.scope.factors)),
+    ))
+
+
+def _render_v2_shape(spec, space) -> str:
+    factor, = spec.scope.factors
+    objective, = spec.scope.objectives
+    parameters = spec.parameters
+    if spec.pattern == "saturation":
+        meaning = (
+            f"{parameters['direction']} physical {objective}; half-response at "
+            f"{parameters['half_response']} is half the asymptotic response change, not onset. "
+            f"The contribution is zero at anchor {parameters['origin']}; the asymptote is a "
+            "change relative to one shared baseline, not an absolute plateau."
+        )
+    else:
+        lower, _ = _v2_numeric_limits(space.param_by_name(factor))
+        meaning = (
+            f"Physical {objective} is {parameters['below_behavior']} below and "
+            f"{parameters['above_behavior']} above {parameters['threshold']}, the midpoint "
+            "of a smooth slope transition, not an onset or discontinuous jump. "
+            "Flat means asymptotically flat, with a smoothing tail near the transition. "
+            f"The contribution is zero at anchor {lower}, relative to one shared baseline."
+        )
+    return f"{spec.pattern} v2 on {factor}: {meaning} Pending user confirmation."
+
+
+def _v2_shape_definition(pattern, properties):
+    return KnowledgePatternDefinition(
+        pattern=pattern, version="2.0", family="shape",
+        schema={"type": "object", "properties": properties, "required": list(properties),
+                "additionalProperties": False},
+        compiler=_compile_v2_shape, validator=_validate_v2_shape,
+        renderer=_render_v2_shape, compatibility=_compatible_v2_shape,
+    )
+
+
+def saturation_v2_definition() -> KnowledgePatternDefinition:
+    return _v2_shape_definition("saturation", {
+        "direction": {"enum": ["increasing", "decreasing"]},
+        "half_response": {"type": "number"}, "origin": {"type": "number"},
+    })
+
+
+def threshold_v2_definition() -> KnowledgePatternDefinition:
+    behavior = {"enum": ["increasing", "decreasing", "flat"]}
+    return _v2_shape_definition("threshold", {
+        "threshold": {"type": "number"}, "below_behavior": behavior, "above_behavior": behavior,
+    })
+
+
 def quadratic_valley_definition() -> KnowledgePatternDefinition:
     return _shape_definition(
         "quadratic_valley",
@@ -404,5 +555,7 @@ __all__ = [
     "quadratic_valley_definition",
     "random_augment_definition",
     "saturation_definition",
+    "saturation_v2_definition",
     "threshold_definition",
+    "threshold_v2_definition",
 ]

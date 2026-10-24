@@ -4,6 +4,7 @@ from __future__ import annotations
 from ..artifacts import OptimizationArtifact, OptimizationArtifacts
 from ..guard import CompatibilityResult, KnowledgeValidationResult
 from ..registry import KnowledgePatternDefinition
+from .shape import _v2_common_errors, _v2_payload, _v2_validation_result
 
 
 _NUMERIC_KINDS = frozenset({"continuous", "integer", "discrete"})
@@ -174,6 +175,57 @@ def antagonism_definition() -> KnowledgePatternDefinition:
     return _definition("antagonism", {}, [])
 
 
+def _validate_v2(spec, space, observations=None) -> KnowledgeValidationResult:
+    return _v2_validation_result(spec, _v2_common_errors(spec, space, factor_count=2))
+
+
+def _compatible_v2(spec, space) -> CompatibilityResult:
+    errors = _v2_common_errors(spec, space, factor_count=2)
+    return CompatibilityResult(compatible=not errors, reasons=errors)
+
+
+def _compile_v2(spec, space, observations=None) -> OptimizationArtifacts:
+    factors = tuple(sorted(spec.scope.factors, key=space.param_names.index))
+    return OptimizationArtifacts(mean_components=(
+        _artifact(spec, "signed_interaction_mean_v2", _v2_payload(spec, space, factors)),
+    ))
+
+
+def _render_v2(spec, space) -> str:
+    effect = spec.parameters["response_effect"]
+    sign = (1 if effect == "higher" else -1) * (1 if spec.pattern == "synergy" else -1)
+    deviation = "higher" if sign > 0 else "lower"
+    return (
+        f"{spec.pattern} v2 between {' and '.join(spec.scope.factors)} for physical "
+        f"{spec.scope.objectives[0]}: the discussed response effect is {effect}; "
+        f"the joint response is {deviation} than the anchored additive reference "
+        "(one shared baseline plus both main effects, other factors held fixed). "
+        "The interaction is zero at either approved lower-bound anchor. "
+        "This orientation is independent of optimization intent, not a causal claim. "
+        "Pending user confirmation."
+    )
+
+
+def _v2_definition(pattern) -> KnowledgePatternDefinition:
+    return KnowledgePatternDefinition(
+        pattern=pattern, version="2.0", family="interaction",
+        schema={"type": "object", "properties": {
+            "reference": {"enum": ["anchored_additive"]},
+            "response_effect": {"enum": ["higher", "lower"]},
+        }, "required": ["reference", "response_effect"], "additionalProperties": False},
+        compiler=_compile_v2, validator=_validate_v2, renderer=_render_v2,
+        compatibility=_compatible_v2,
+    )
+
+
+def synergy_v2_definition() -> KnowledgePatternDefinition:
+    return _v2_definition("synergy")
+
+
+def antagonism_v2_definition() -> KnowledgePatternDefinition:
+    return _v2_definition("antagonism")
+
+
 def conditional_effect_definition() -> KnowledgePatternDefinition:
     return _definition(
         "conditional_effect",
@@ -198,7 +250,9 @@ def ratio_optimum_definition() -> KnowledgePatternDefinition:
 
 __all__ = [
     "antagonism_definition",
+    "antagonism_v2_definition",
     "conditional_effect_definition",
     "ratio_optimum_definition",
     "synergy_definition",
+    "synergy_v2_definition",
 ]
