@@ -40,6 +40,11 @@ from .validators import (
     check_shape_prior_fit,
 )
 
+# Exact, reviewed wire compatibility table. 0.5.0 declarations use Space 1.0,
+# Knowledge 1.0 and Campaign 2.0/2.1. E6 must explicitly add its released patch
+# version here after its release gates; no major/minor or future-version match.
+COMPATIBLE_ENGINE_VERSIONS = frozenset({"0.5.0"})
+
 # --------------------------------------------------------------------- #
 # Knowledge item dataclasses (JSON-serializable, no torch tensors stored)
 # --------------------------------------------------------------------- #
@@ -788,7 +793,8 @@ class Knowledge:
                 ErrorCode.CHECKPOINT_INCOMPATIBLE,
                 f"Unsupported Knowledge schema version {payload['schema_version']!r}",
             )
-        if payload["engine_version"] != ENGINE_VERSION:
+        if (type(payload["engine_version"]) is not str or
+                payload["engine_version"] not in COMPATIBLE_ENGINE_VERSIONS):
             raise EngineError(
                 ErrorCode.CHECKPOINT_INCOMPATIBLE,
                 f"Unsupported Knowledge engine version {payload['engine_version']!r}",

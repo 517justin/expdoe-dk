@@ -19,10 +19,10 @@ import pandas as pd
 import torch
 
 from ..space import Space
+from ..domain import ObservationBatch, PendingBatch
 from ..knowledge import Knowledge
 from ..domain.space import ENGINE_VERSION
 from ..errors import EngineError, ErrorCode
-from ..knowledge._frame import physical_to_internal_best
 from ..knowledge.validators import (
     check_monotone_assumption,
     check_shape_prior_fit,
@@ -33,11 +33,12 @@ from ..knowledge.shape import (
 )
 from ..doe import generate as generate_doe
 from .contracts import RecommendationResult
+from .checkpoint import (
+    CHECKPOINT_SCHEMA_VERSION, atomic_save, batch_to_state, read_json, restore,
+    validate_frame, validate_state,
+)
 
 log = logging.getLogger("expdoe_dk.bo.Campaign")
-
-CHECKPOINT_SCHEMA_VERSION = "2.0"
-
 
 # --------------------------------------------------------------------- #
 # Result container
@@ -162,6 +163,9 @@ class Campaign:
         self._y_internal: list[float] = []
         self._y_physical: list[float] = []
         self._trial_kind: list[str] = []  # "doe" / "bo"
+        self._observation_batches: list[ObservationBatch] = []
+        self._pending: PendingBatch | None = None
+        self._ask_iteration = 0
 
         # v0.2 — empirical validators (run on tell, throttled by interval).
         self.validate_active = bool(validate)
@@ -220,20 +224,89 @@ class Campaign:
                 f"len(y)={len(y_arr)} must match len(X_phys)={len(X_phys)}."
             )
 
-        kind = "doe" if not self._X_phys else "bo"
-        for i in range(len(X_phys)):
-            self._X_phys.append(X_phys.iloc[[i]].reset_index(drop=True))
-            y_user = float(y_arr[i])
-            self._y_physical.append(y_user)
-            y_int = float(
-                physical_to_internal_best(y_user, self.space.maximize[0])
-            )
-            self._y_internal.append(y_int)
-            self._trial_kind.append(kind)
+        observations = ObservationBatch(X_phys, pd.DataFrame({self.space.objectives[0]: y_arr}))
+        if self.space.n_objectives == 1:
+            self.tell_batch(observations)
+        else:
+            # The historical first-objective archive remains readable/writable;
+            # new Phase-1 entry points explicitly refuse this interpretation.
+            validate_frame(self.space, observations.X)
+            self._record_observations(observations)
 
-        # v0.2: run empirical validators (Spearman monotone, shape fit) on a
-        # cadence so each warning surfaces at most ~once until new data comes.
+    def tell_batch(self, observations: ObservationBatch) -> None:
+        """Record physical outcomes, preserving every status and audit field.
+
+        Only successful rows enter legacy history/results or model training;
+        all rows remain visible to recommendation duplicate exclusion.
+        """
+        if self.space.n_objectives != 1:
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Phase-1 Campaign requires exactly one objective")
+        if not isinstance(observations, ObservationBatch):
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Expected ObservationBatch")
+        if list(observations.Y.columns) != self.space.objectives:
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Response columns must exactly match space.objectives")
+        validate_frame(self.space, observations.X)
+        previous_ids = {identifier for batch in self._observation_batches for identifier in batch.ids}
+        if previous_ids.intersection(observations.ids):
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Observation IDs must be unique across batches")
+        # Validate serializability before mutation, including unsuccessful values.
+        from .checkpoint import _strict_json
+        _strict_json(batch_to_state(observations))
+        self._record_observations(observations)
+
+    def _record_observations(self, observations: ObservationBatch) -> None:
+        successful = observations.successful()
+        X, Y = successful.X, successful.Y
+        kind = "doe" if not self._X_phys else "bo"
+        self._observation_batches.append(observations)
+        for i in range(len(X)):
+            self._X_phys.append(X.iloc[[i]].reset_index(drop=True))
+            y_user = float(Y.iloc[i, 0])
+            self._y_physical.append(y_user)
+            self._y_internal.append(float(-self.space.objective_specs[0].to_utility(np.array([y_user]))[0]))
+            self._trial_kind.append(kind)
         self._maybe_run_validators()
+
+    def set_pending(self, pending: PendingBatch | None) -> None:
+        """Replace pending work; repeated conditions remain auditable and excluded."""
+        if self.space.n_objectives != 1:
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Phase-1 Campaign requires exactly one objective")
+        if pending is not None:
+            if not isinstance(pending, PendingBatch):
+                raise EngineError(ErrorCode.CONFIG_INVALID, "Expected PendingBatch or None")
+            validate_frame(self.space, pending.X)
+        self._pending = pending
+
+    def _combined_observations(self) -> ObservationBatch:
+        batches = self._observation_batches
+        # A partially known noise vector cannot be represented by ObservationBatch.
+        # Preserve all input variances in state and fail explicitly at fit time,
+        # rather than silently discarding known variances or inventing them.
+        successful_batches = [b for b in batches if len(b.successful().X)]
+        known = [b.Yvar is not None for b in successful_batches]
+        if any(known) and not all(known):
+            raise EngineError(ErrorCode.CONFIG_INVALID,
+                "Mixed missing variance across successful batches is unsupported")
+        variance = None
+        if known and all(known):
+            variance = pd.concat([b.Yvar if b.Yvar is not None else
+                pd.DataFrame(0., index=range(len(b.X)), columns=self.space.objectives)
+                for b in batches], ignore_index=True)
+        status = pd.concat([b.status if b.status is not None else
+            pd.Series(["success"] * len(b.X), dtype=object) for b in batches], ignore_index=True)
+        identifiers = []
+        used = {identifier for b in batches for identifier in b.ids}
+        for index, batch in enumerate(batches):
+            for row in range(len(batch.X)):
+                identifier = batch.ids[row] if batch.ids else f"unidentified:{index}:{row}"
+                if not batch.ids:
+                    while identifier in used:
+                        identifier += ":"
+                    used.add(identifier)
+                identifiers.append(identifier)
+        return ObservationBatch(pd.concat([b.X for b in batches], ignore_index=True),
+            pd.concat([b.Y for b in batches], ignore_index=True), Yvar=variance,
+            status=status, ids=identifiers)
 
     # ------------------------------------------------------------------ #
     # Step 3: ask — propose next experiments
@@ -244,7 +317,6 @@ class Campaign:
 
     def ask_with_diagnostics(self, q: int = 1, iteration: int | None = None) -> RecommendationResult:
         """Fit the production GP and return candidates plus truthful diagnostics."""
-        from ..domain import ObservationBatch
         from .recommendation import recommend
 
         if iteration is not None and (type(iteration) is not int or iteration < 0):
@@ -252,12 +324,12 @@ class Campaign:
         if not self._X_phys:
             raise EngineError(ErrorCode.INSUFFICIENT_DATA,
                 "Campaign.ask requires initial observations via tell()")
-        observations = ObservationBatch(
-            pd.concat(self._X_phys, ignore_index=True),
-            pd.DataFrame({self.space.objectives[0]: self._y_physical}),
-        )
-        iteration_seed = self.seed + (len(self._y_physical) if iteration is None else iteration)
-        return recommend(self.space, observations, knowledge=self.knowledge, q=q, seed=iteration_seed)
+        observations = self._combined_observations()
+        iteration_seed = self.seed + (len(self._y_physical) + self._ask_iteration if iteration is None else iteration)
+        result = recommend(self.space, observations, knowledge=self.knowledge,
+            pending=self._pending, q=q, seed=iteration_seed)
+        self._ask_iteration = self._ask_iteration + 1 if iteration is None else iteration + 1
+        return result
 
     # ------------------------------------------------------------------ #
     # Step 4: run — full DoE + BO automation
@@ -399,13 +471,11 @@ class Campaign:
         if not self._X_phys:
             raise RuntimeError("Campaign has no data; cannot finalize.")
         history = self.history_df()
-        # Best in user frame:
-        if self.space.maximize[0]:
-            idx = int(history["y"].idxmax())
-        else:
-            idx = int(history["y"].idxmin())
+        # Utilities choose the best; reports retain the measured physical value.
+        idx = int(np.argmax(self.space.objective_specs[0].to_utility(history["y"].to_numpy())))
         best_row = history.iloc[idx]
-        best_x_phys = {p: float(best_row[p]) for p in self.space.param_names}
+        best_x_phys = {p: best_row[p].item() if isinstance(best_row[p], np.generic)
+                       else best_row[p] for p in self.space.param_names}
         result = Result(
             best_x_physical=best_x_phys,
             best_y_physical=float(best_row["y"]),
@@ -437,78 +507,62 @@ class Campaign:
         return df
 
     def save_checkpoint(self, path: str | Path) -> None:
-        p = Path(path)
-        state = {
-            "schema_version": CHECKPOINT_SCHEMA_VERSION,
-            "engine_version": ENGINE_VERSION,
-            "space": self.space.to_dict(),
-            "knowledge": self.knowledge.to_envelope(),
-            "seed": self.seed,
-            "history": self.history_df().to_dict(orient="records"),
-            "trial_kind": list(self._trial_kind),
-        }
-        p.write_text(json.dumps(state, indent=2))
+        """Save 2.1 atomically, or the explicit lossless legacy archive route.
+
+        Legacy multiobjective/opaque-provider archives retain schema 2.0 only
+        while no 2.1-only metadata, pending work or RNG progression would be lost.
+        """
+        if self._requires_legacy_archive():
+            state = self._legacy_archive_state()
+            warnings.warn("Saving legacy archival schema 2.0; Phase-1 restore is unavailable for this declaration", stacklevel=2)
+        else:
+            state = self.to_state()
+        atomic_save(path, state)
+
+    def _requires_legacy_archive(self) -> bool:
+        from ..knowledge.patterns import builtin_pattern_definitions
+        builtins = {(d.pattern, d.version) for d in builtin_pattern_definitions()}
+        provider_keys = {(d.pattern, d.version) for p in self.knowledge.provider_records for d in p.definitions}
+        return self.space.n_objectives != 1 or any(
+            s.enabled and (s.pattern, s.version) not in builtins and
+            (s.pattern, s.version) in provider_keys for s in self.knowledge.specs)
+
+    def _legacy_archive_state(self) -> dict:
+        if (self._pending is not None or self._ask_iteration != 0 or
+                self._rng.bit_generator.state != np.random.default_rng(self.seed).bit_generator.state or
+                not self.validate_active or not self.auto_rescue or
+                self.validation_interval != 5 or self.validation_min_obs != 10 or
+                self._last_validation_n != 0 or self._validation_emitted or
+                any(b.Yvar is not None or b.status is not None or b.ids for b in self._observation_batches)):
+            raise EngineError(ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Cannot downgrade 2.1 observation/pending/RNG metadata to a legacy 2.0 archive")
+        return {"schema_version": "2.0", "engine_version": ENGINE_VERSION,
+            "space": self.space.to_dict(), "knowledge": self.knowledge.to_envelope(),
+            "seed": self.seed, "history": self.history_df().to_dict(orient="records"),
+            "trial_kind": list(self._trial_kind)}
+
+    def to_state(self) -> dict:
+        """Return detached, validated, single-objective schema-2.1 JSON state."""
+        if self.space.n_objectives != 1:
+            raise EngineError(ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                "Phase-1 Campaign state requires exactly one objective")
+        pending = None if self._pending is None else {
+            "ids": list(self._pending.ids), "X": self._pending.X.astype(object).values.tolist()}
+        return validate_state({"schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "engine_version": ENGINE_VERSION, "space": self.space.to_dict(),
+            "knowledge": self.knowledge.to_envelope(), "seed": self.seed,
+            "observations": [batch_to_state(b) for b in self._observation_batches],
+            "pending": pending, "trial_kind": list(self._trial_kind),
+            "rng_state": self._rng.bit_generator.state, "ask_iteration": self._ask_iteration,
+            "validation": {"active": self.validate_active, "interval": self.validation_interval,
+                "min_obs": self.validation_min_obs, "auto_rescue": self.auto_rescue,
+                "last_n": self._last_validation_n, "emitted": [list(x) for x in sorted(self._validation_emitted)]}})
+
+    @classmethod
+    def from_state(cls, state: dict) -> "Campaign":
+        """Restore declarative 2.1 state, or migrate a known legacy wire format."""
+        return restore(state, cls)
 
     @classmethod
     def load_checkpoint(cls, path: str | Path) -> "Campaign":
-        state = json.loads(Path(path).read_text())
-        if not isinstance(state, dict):
-            raise EngineError(
-                ErrorCode.CHECKPOINT_INCOMPATIBLE,
-                "Campaign checkpoint must be a JSON object",
-            )
-        if "schema_version" not in state:
-            return cls._load_v04_checkpoint(state)
-        expected = {
-            "schema_version",
-            "engine_version",
-            "space",
-            "knowledge",
-            "seed",
-            "history",
-            "trial_kind",
-        }
-        actual = set(state)
-        if actual != expected:
-            raise EngineError(
-                ErrorCode.CHECKPOINT_INCOMPATIBLE,
-                "Campaign checkpoint has incompatible fields",
-                details={
-                    "missing": sorted(expected - actual),
-                    "unknown": sorted(actual - expected),
-                },
-            )
-        if state["schema_version"] != CHECKPOINT_SCHEMA_VERSION:
-            raise EngineError(
-                ErrorCode.CHECKPOINT_INCOMPATIBLE,
-                f"Unsupported Campaign schema version {state['schema_version']!r}",
-            )
-        if state["engine_version"] != ENGINE_VERSION:
-            raise EngineError(
-                ErrorCode.CHECKPOINT_INCOMPATIBLE,
-                f"Unsupported Campaign engine version {state['engine_version']!r}",
-            )
-        space = Space.from_dict(state["space"])
-        knowledge = Knowledge.from_envelope(state["knowledge"])
-        return cls._restore_checkpoint_state(state, space, knowledge)
-
-    @classmethod
-    def _load_v04_checkpoint(cls, state: dict) -> "Campaign":
-        """Preserve the exact unversioned v0.4 checkpoint migration path."""
-        space = Space.from_dict(state["space"])
-        knowledge = Knowledge.from_dict(state["knowledge"])
-        return cls._restore_checkpoint_state(state, space, knowledge)
-
-    @classmethod
-    def _restore_checkpoint_state(
-        cls, state: dict, space: Space, knowledge: Knowledge
-    ) -> "Campaign":
-        c = cls(space=space, knowledge=knowledge, seed=state["seed"])
-        # Re-tell from history.
-        history = pd.DataFrame(state["history"])
-        if not history.empty:
-            X_phys = history[list(space.param_names)]
-            y = history["y"].to_numpy()
-            c.tell(X_phys, y)
-            c._trial_kind = list(state.get("trial_kind", c._trial_kind))
-        return c
+        return cls.from_state(read_json(path))

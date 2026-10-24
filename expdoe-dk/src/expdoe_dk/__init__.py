@@ -30,7 +30,7 @@ from .bo.contracts import (
     Prediction,
     RecommendationResult,
 )
-from .bo.loop import CHECKPOINT_SCHEMA_VERSION
+from .bo.checkpoint import CHECKPOINT_SCHEMA_VERSION
 from .doe import (
     DesignBatch,
     DesignDiagnostics,
