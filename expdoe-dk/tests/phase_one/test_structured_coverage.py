@@ -235,18 +235,15 @@ def test_unknown_response_in_structured_artifact_is_invalid(space):
         validate_runtime_artifact(space, "mean_components", bad)
 
 
-def test_valid_v2_stays_blocked_before_consumer_wiring(space):
+def test_valid_v2_is_wired_without_discovery_claiming_coverage(space):
     declarations = knowledge(declaration())
-    pre_wiring_report = inspect_capabilities(space, declarations)
-    assert pre_wiring_report.applied == ()
-    assert pre_wiring_report.blocked == ("shape",)
-    assert any(d["reason"] == "unsupported_artifact" for d in pre_wiring_report.diagnostics)
-    structured = next(d for d in pre_wiring_report.diagnostics if d.get("artifact_kind") == "saturation_mean_v2")
+    report = inspect_capabilities(space, declarations)
+    assert report.applied == ("shape",)
+    assert report.blocked == ()
+    structured = next(d for d in report.diagnostics if d.get("artifact_kind") == "saturation_mean_v2")
     assert structured["coverage_status"] == "not_evaluated"
     assert structured["empirical_evidence"] == "not_evaluated"
-    with pytest.raises(EngineError) as caught:
-        compile_runtime(space, declarations, batch(space))
-    assert caught.value.code == ErrorCode.KNOWLEDGE_INVALID
+    assert compile_runtime(space, declarations, None)["mean_components"][0].kind == "saturation_mean_v2"
 
 
 def test_hard_safety_route_is_independent_of_empirical_coverage(space):

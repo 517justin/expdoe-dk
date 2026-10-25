@@ -128,9 +128,16 @@ def build_mean_from_artifacts(
     space: Space, artifacts: tuple[OptimizationArtifact, ...], *,
     response_location: float = 0., response_scale: float = 1.,
 ) -> nn.Module | None:
-    """Combine all shape priors into a CombinedMean (or None)."""
+    """Build one structured mean, or combine supported legacy shape priors."""
     if not math.isfinite(response_location) or not math.isfinite(response_scale) or response_scale <= 0:
         raise EngineError(ErrorCode.CONFIG_INVALID, "Response normalization must have finite location and positive scale")
+    from .structured_coverage import STRUCTURED_KINDS, check_structured_composition
+    if any(artifact.kind in STRUCTURED_KINDS for artifact in artifacts):
+        from ..knowledge.artifacts import OptimizationArtifacts
+        from .structured_mean import StructuredMean
+        check_structured_composition(space, OptimizationArtifacts(mean_components=artifacts))
+        return StructuredMean(space, artifacts, response_location=response_location,
+                              response_scale=response_scale)
     mean_modules: list[nn.Module] = []
     physical_location_applied = False
     for artifact in artifacts:
@@ -240,9 +247,10 @@ def build_gp(
     """
     knowledge.validate()
     from .knowledge_runtime import compile_runtime
+    from .structured_coverage import STRUCTURED_KINDS
     artifacts = compile_runtime(space, knowledge, None) if runtime is None else runtime
     physical_means = [artifact for artifact in artifacts["mean_components"]
-                      if artifact.kind.endswith("_descriptor")]
+                      if artifact.kind.endswith("_descriptor") or artifact.kind in STRUCTURED_KINDS]
     if physical_means and (response_location is None or response_scale is None):
         raise EngineError(ErrorCode.CONFIG_INVALID,
             "Physical mean formulas require the physical response_location and response_scale used to normalize training outcomes",

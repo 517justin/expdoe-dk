@@ -52,11 +52,13 @@ def test_helpers_opt_in_to_v2_without_changing_the_v1_default(v2_knowledge):
     assert len(builtin_pattern_definitions()) == 27
 
 
-def test_each_v2_artifact_is_still_capability_blocked(v2_knowledge):
+def test_each_v2_artifact_has_a_wired_consumer_without_claiming_empirical_support(v2_knowledge):
     report = inspect_capabilities(numeric_space(), v2_knowledge)
-    assert report.applied == ()
-    assert report.blocked == (v2_knowledge.specs[0].pattern_id,)
-    assert any(item.get("reason") == "unsupported_artifact" for item in report.diagnostics)
+    assert report.applied == (v2_knowledge.specs[0].pattern_id,)
+    assert report.blocked == ()
+    numerical = next(item for item in report.diagnostics if item.get("category") == "mean_components")
+    assert numerical["consumer"] == "bo.gp.build_mean_from_artifacts"
+    assert numerical["coverage_status"] == numerical["empirical_evidence"] == "not_evaluated"
 
 
 @pytest.mark.parametrize("pattern,kind", [("saturation", "saturation_mean_v2"),

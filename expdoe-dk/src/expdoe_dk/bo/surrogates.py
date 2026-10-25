@@ -187,7 +187,7 @@ class _PhysicalAcquisitionModel(Model):
 class FittedSurrogate:
     """Fitted production GP; predict returns physical means and latent variances.
 
-    ``predict``, ``acquisition_model``, ``transforms`` and ``exclusions`` are public. Reference
+    ``predict``, ``acquisition_model``, ``transforms``, ``diagnostics`` and ``exclusions`` are public. Reference
     estimators are evaluation-only and cannot construct this public contract.
     """
 
@@ -196,6 +196,11 @@ class FittedSurrogate:
         self._model = model
         self._location, self._scale, self._sign = location, scale, sign
         self._transforms, self._exclusions = deepcopy(transforms), deepcopy(exclusions)
+        self._diagnostics = {"structured_mean": {}}
+
+    @property
+    def diagnostics(self):
+        return deepcopy(self._diagnostics)
 
     @property
     def transforms(self):
@@ -263,6 +268,7 @@ def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
                   "known_variance": variance is not None,
                   "normalized_yvar": None if variance is None else variance[:, 0].tolist(),
                   "virtual_rows": 0}
+    structured_diagnostics = {}
     try:
         with torch.random.fork_rng(devices=[]), settings.validate_input_scaling(False):
             torch.manual_seed(seed)
@@ -289,12 +295,21 @@ def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
                     variance = torch.cat((variance, variance.mean().expand(extra_count, 1)))
                 transforms.update(virtual_rows=extra_count,
                     virtual_variance="mean_training_known_variance" if variance is not None else "learned_noise")
-            model, _ = build_gp(space, knowledge, X, Y, response_location=location, response_scale=scale,
-                train_Yvar=variance, feature_transform=features, feature_groups=features.groups,
-                runtime=runtime, normalize_outcome=False)
-            fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))
+            from .structured_coverage import STRUCTURED_KINDS
+            if any(a.kind in STRUCTURED_KINDS for a in runtime["mean_components"]):
+                from .structured_fit import fit_structured_gp
+                model, structured_diagnostics = fit_structured_gp(space, knowledge, batch,
+                    runtime=runtime, X=X, Y=Y, Yvar=variance, feature_transform=features,
+                    feature_groups=features.groups, response_location=location,
+                    response_scale=scale, seed=seed)
+            else:
+                model, _ = build_gp(space, knowledge, X, Y, response_location=location, response_scale=scale,
+                    train_Yvar=variance, feature_transform=features, feature_groups=features.groups,
+                    runtime=runtime, normalize_outcome=False)
+                fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))
             model.eval()
         fitted = FittedSurrogate(space, model, location, scale, sign, transforms, exclusions)
+        fitted._diagnostics = {"structured_mean": deepcopy(structured_diagnostics)}
         fitted.predict(batch.X)  # Reject non-finite fits before exposing a fitted object.
         return fitted
     except EngineError:
