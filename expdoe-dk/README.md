@@ -72,9 +72,10 @@ The difference between the two is one sign flip the user can't see. `expdoe-dk` 
 
 ## Precision and integer domains
 
-Physical integer parameters, pending/history/checkpoint JSON, and candidate
-identities preserve exact Python integers instead of silently converting them
-to binary64. Fit and evaluation support tested adjacent physical levels above
+Physical integer parameters and pending/history/checkpoint JSON preserve exact
+Python integers instead of silently converting them to binary64. Candidate
+identities preserve exact integers within supported, precision-certified
+domains. Fit and evaluation support tested adjacent physical levels above
 `2**53` when the relevant model coordinates are certifiably distinct.
 
 Public `recommend` fails closed with a typed configuration error, not rounded
