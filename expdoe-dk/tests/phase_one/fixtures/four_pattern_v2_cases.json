@@ -1,0 +1,38 @@
+[
+  {
+    "id": "golden-v2-saturation", "pattern": "saturation", "version": "2.0",
+    "factors": ["x"], "parameters": {"direction": "increasing", "origin": 0.0, "half_response": 5.0},
+    "artifact_kind": "saturation_mean_v2", "consumer": "bo.gp.build_mean_from_artifacts",
+    "response_values": [4, 4, 4.333333333333333, 4.333333333333333, 4.571428571428571, 4.571428571428571, 4.75, 4.75, 4.888888888888889, 4.888888888888889, 5.090909090909091, 5.090909090909091, 5.166666666666667, 5.166666666666667, 5.230769230769231, 5.230769230769231, 5.285714285714286, 5.285714285714286, 5.333333333333333, 5.333333333333333],
+    "probe": {"x": 5.0, "z": 0.5}, "expected_response": 5.0,
+    "malformed_parameters": {"direction": "sideways", "origin": 0.0, "half_response": 5.0},
+    "insufficient_rows": 4, "conflict_id": "conflicting-v2-saturation"
+  },
+  {
+    "id": "golden-v2-threshold", "pattern": "threshold", "version": "2.0",
+    "factors": ["x"], "parameters": {"threshold": 5.0, "below_behavior": "increasing", "above_behavior": "flat"},
+    "artifact_kind": "threshold_mean_v2", "consumer": "bo.gp.build_mean_from_artifacts",
+    "response_values": [4, 4, 4.2, 4.2, 4.4, 4.4, 4.6, 4.6, 4.8, 4.8, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+    "probe": {"x": 5.0, "z": 0.5}, "expected_response": 5.0,
+    "malformed_parameters": {"threshold": 5.0, "below_behavior": "sideways", "above_behavior": "flat"},
+    "insufficient_rows": 4, "conflict_id": "conflicting-v2-threshold"
+  },
+  {
+    "id": "golden-v2-synergy", "pattern": "synergy", "version": "2.0",
+    "factors": ["x", "z"], "parameters": {"reference": "anchored_additive", "response_effect": "higher"},
+    "artifact_kind": "signed_interaction_mean_v2", "consumer": "bo.gp.build_mean_from_artifacts",
+    "response_values": [4, 4, 4, 4.2, 4, 4.4, 4, 4.6, 4, 4.8, 4, 5.2, 4, 5.4, 4, 5.6, 4, 5.8, 4, 6],
+    "probe": {"x": 5.0, "z": 0.5}, "expected_response": 4.5,
+    "malformed_parameters": {"reference": "unanchored", "response_effect": "higher"},
+    "insufficient_rows": 4, "conflict_id": "conflicting-v2-synergy"
+  },
+  {
+    "id": "golden-v2-antagonism", "pattern": "antagonism", "version": "2.0",
+    "factors": ["x", "z"], "parameters": {"reference": "anchored_additive", "response_effect": "higher"},
+    "artifact_kind": "signed_interaction_mean_v2", "consumer": "bo.gp.build_mean_from_artifacts",
+    "response_values": [4, 4, 4, 3.8, 4, 3.6, 4, 3.4, 4, 3.2, 4, 2.8, 4, 2.6, 4, 2.4, 4, 2.2, 4, 2],
+    "probe": {"x": 5.0, "z": 0.5}, "expected_response": 3.5,
+    "malformed_parameters": {"reference": "anchored_additive", "response_effect": "sideways"},
+    "insufficient_rows": 4, "conflict_id": "conflicting-v2-antagonism"
+  }
+]

@@ -41,6 +41,12 @@ def pattern_records() -> list[dict]:
 
 
 @pytest.fixture
+def golden_v2_cases() -> list[dict]:
+    path = Path(__file__).parent / "fixtures" / "four_pattern_v2_cases.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.fixture
 def pattern_cases(pattern_records, mixed_case):
     multi = Space(
         mixed_case.params,

@@ -1,6 +1,8 @@
 """Deterministic pooled out-of-fold evaluation; references never recommend."""
 from __future__ import annotations
 
+import json
+
 import numpy as np
 
 from ..domain import ObservationBatch, Space
@@ -39,12 +41,23 @@ def _subset(batch, indices):
         ids=tuple(batch.ids[i] for i in indices))
 
 
+def _fold_failure(error, *, name, fold_index, key, context, diagnostics):
+    diagnostics[name][key] = {**context, "status": "failed", "reason": {
+        "code": error.code.value, "message": error.message, "details": error.details}}
+    return EngineError(error.code, error.message, details={**error.details,
+        "track": name, "fold": fold_index, "fold_diagnostics": diagnostics,
+        "oof_complete": False}, hints=error.hints)
+
+
 def evaluate_models(space: Space, observations: ObservationBatch, *,
                     tracks: dict[str, Knowledge | None], seed: int = 0) -> EvaluationResult:
     """Compare production GP tracks plus ridge/RF on identical physical OOF rows.
 
     Folds index the success-only row sequence; observation_ids retain the source
-    mapping. Every row records fold-local transforms and pooled physical metrics.
+    mapping. Every row records fold-local transforms, fitted diagnostics keyed by
+    canonical JSON validation-index lists (e.g. "[3,7]"), and pooled physical
+    metrics. A failed fold raises its typed error with the available diagnostics;
+    it never exposes incomplete predictions as complete OOF metrics.
     Ridge/RF are always appended internally and are not production track options.
     """
     if (not isinstance(tracks, dict) or not tracks or any(
@@ -59,19 +72,32 @@ def evaluate_models(space: Space, observations: ObservationBatch, *,
     names = [*tracks, "ridge", "random_forest"]
     predictions = {name: np.empty(len(batch.X)) for name in names}
     transforms = {name: [] for name in names}
+    diagnostics = {name: {} for name in names}
     y = batch.Y.to_numpy(dtype=float)[:, 0]
     for fold_index, test in enumerate(folds):
         training_indices = [i for i in range(len(y)) if i not in test]
         training = _subset(batch, training_indices)
         test_X = batch.X.iloc[list(test)]
+        training_y = training.Y.to_numpy(dtype=float)[:, 0]
+        constant_training = bool(np.all(training_y == training_y[0]))
+        key = json.dumps(list(test), separators=(",", ":"))
+        context = {"training_indices": training_indices, "training_ids": list(training.ids),
+            "validation_indices": list(test), "validation_ids": [batch.ids[i] for i in test],
+            "response_location": float(training_y[0] if constant_training else training_y.mean()),
+            "response_scale": 1. if constant_training else (float(training_y.std()) or 1.)}
         for name, knowledge in tracks.items():
             try:
                 fitted = _fit_surrogate(space, training, knowledge=knowledge, seed=seed)
                 predictions[name][list(test)] = fitted.predict(test_X).mean[:, 0]
                 transforms[name].append(fitted.transforms)
+                fitted_diagnostics = fitted.diagnostics
+                diagnostics[name][key] = {**context, "status": "fitted",
+                    "fitted_diagnostics": fitted_diagnostics,
+                    "uncertainty": fitted_diagnostics["structured_mean"].get(
+                        "uncertainty", "conditional_on_fitted_hyperparameters")}
             except EngineError as error:
-                raise EngineError(error.code, error.message,
-                    details={**error.details, "track": name, "fold": fold_index}, hints=error.hints) from error
+                raise _fold_failure(error, name=name, fold_index=fold_index, key=key,
+                    context=context, diagnostics=diagnostics) from error
         features = _PhysicalFeatures(space, training.X)
         train_features = features(_model_inputs(space, training.X)).numpy()
         test_features = features(_model_inputs(space, test_X)).numpy()
@@ -84,9 +110,13 @@ def evaluate_models(space: Space, observations: ObservationBatch, *,
                     raise ValueError("Reference produced non-finite predictions")
                 predictions[name][list(test)] = output
                 transforms[name].append({**features.describe(), "response_transform": "physical_identity"})
+                diagnostics[name][key] = {**context, "status": "fitted", "fitted_diagnostics": {},
+                    "uncertainty": "unavailable",
+                    "uncertainty_reason": "Reference evaluation provides point predictions only"}
             except Exception as error:
-                raise EngineError(ErrorCode.MODEL_FIT_FAILED, f"{name} fitting failed: {error}",
-                    details={"track": name, "fold": fold_index}) from error
+                failure = EngineError(ErrorCode.MODEL_FIT_FAILED, f"{name} fitting failed: {error}")
+                raise _fold_failure(failure, name=name, fold_index=fold_index, key=key,
+                    context=context, diagnostics=diagnostics) from error
     constant = bool(np.all(y == y[0]))
     total = float(np.sum((y - y.mean())**2))
     rows = []
@@ -97,7 +127,8 @@ def evaluate_models(space: Space, observations: ObservationBatch, *,
             "r2": None if constant else float(1 - np.sum(residual**2) / total),
             "r2_reason": "constant target: pooled R2 is undefined" if constant else None,
             "objective": space.objectives[0], "units": "physical", "observation_ids": list(batch.ids),
-            "oof_predictions": predictions[name].tolist(), "fold_transforms": transforms[name]})
+            "oof_predictions": predictions[name].tolist(), "fold_transforms": transforms[name],
+            "fold_diagnostics": diagnostics[name]})
     return EvaluationResult(folds, tuple(rows), exclusions)
 
 
