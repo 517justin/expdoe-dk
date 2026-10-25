@@ -9,7 +9,7 @@ import torch
 from scipy.special import ndtr
 
 from expdoe_dk import (
-    Campaign, EngineError, ErrorCode, ExpressionConstraint, Knowledge, KnowledgeScope,
+    Campaign, EngineError, ErrorCode, ExpressionConstraint, Knowledge, KnowledgePatternSpec, KnowledgeScope,
     ObservationBatch, OutcomeConstraint, Parameter, PendingBatch, Space, candidate_keys,
     evaluate_models, fit_surrogate, inspect_capabilities, make_folds, make_pattern_spec, recommend,
 )
@@ -28,22 +28,29 @@ def small_matrix_threads():
 
 
 def _spec(case, **changes):
-    fields = dict(pattern_id=case["id"], pattern=case["pattern"], version=case["version"],
-        parameters=case["parameters"], confidence=.8,
-        scope=KnowledgeScope(factors=tuple(case["factors"]), objectives=("response",)))
-    fields.update(changes)
-    return make_pattern_spec(**fields)
+    return KnowledgePatternSpec.from_dict(case["knowledge"]["specs"][0] | changes)
+
+
+def _observations(payload):
+    return ObservationBatch(pd.DataFrame(payload["X"]), pd.DataFrame(payload["Y"]),
+        ids=payload["ids"],
+        Yvar=None if payload.get("Yvar") is None else pd.DataFrame(payload["Yvar"]),
+        status=None if payload.get("status") is None else pd.Series(payload["status"]))
+
+
+def _public_inputs(case):
+    return (Space.from_dict(case["space"]), _observations(case["observations"]),
+            Knowledge.from_envelope(case["knowledge"]))
 
 
 def _case(cases, pattern):
     case = next(case for case in cases if case["pattern"] == pattern)
-    space = Space([Parameter("x", bounds=(0., 10.)), Parameter("z", bounds=(0., 1.))],
-                  objectives="response")
-    X = pd.DataFrame([(x, z) for x in (0., 1., 2., 3., 4., 6., 7., 8., 9., 10.)
-                      for z in (0., 1.)], columns=["x", "z"])
-    batch = ObservationBatch(X, pd.DataFrame({"response": case["response_values"]}),
-                             ids=tuple(f"measured-{i}" for i in range(len(X))))
-    return case, space, batch, Knowledge().add_spec(_spec(case))
+    return case, *_public_inputs(case)
+
+
+def _negative_case(cases, pattern, kind):
+    positive = next(case for case in cases if case["pattern"] == pattern)
+    return next(case for case in positive["negative_cases"] if case["kind"] == kind)
 
 
 def _fold_key(indices):
@@ -56,65 +63,88 @@ def test_golden_cases_are_exactly_the_four_v2_patterns(golden_v2_cases):
     assert all(case["version"] == "2.0" for case in golden_v2_cases)
 
 
+def test_golden_fixtures_are_self_contained_public_payloads(golden_v2_cases):
+    for case in golden_v2_cases:
+        space, batch, knowledge = _public_inputs(case)
+        assert space.to_dict() == case["space"]
+        assert knowledge.to_envelope() == case["knowledge"]
+        assert batch.X.to_dict(orient="list") == case["observations"]["X"]
+        assert batch.Y.to_dict(orient="list") == case["observations"]["Y"]
+        assert list(batch.ids) == case["observations"]["ids"]
+        assert {negative["kind"] for negative in case["negative_cases"]} >= {
+            "malformed_declaration", "insufficient_rows", "conflicting_declarations"}
+    json.dumps(golden_v2_cases, allow_nan=False)
+
+
 @pytest.mark.parametrize("pattern", PATTERNS)
 def test_golden_public_consumer_fit_and_physical_prediction(golden_v2_cases, pattern):
     case, space, batch, knowledge = _case(golden_v2_cases, pattern)
     capability = inspect_capabilities(space, knowledge)
-    assert capability.applied == (case["id"],)
-    assert capability.blocked == ()
+    expected = case["expected"]
+    assert list(capability.applied) == expected["capability"]["applied"]
+    assert list(capability.blocked) == expected["capability"]["blocked"]
     route, = [d for d in capability.diagnostics if d.get("category") == "mean_components"]
-    assert route["artifact_kind"] == case["artifact_kind"]
-    assert route["consumer"] == case["consumer"]
-    assert route["coverage_status"] == route["empirical_evidence"] == "not_evaluated"
-    fitted = fit_surrogate(space, batch, knowledge=knowledge, seed=17)
+    for key, value in expected["capability"]["route"].items():
+        assert route[key] == value
+    fitted = fit_surrogate(space, batch, knowledge=knowledge, seed=case["seed"])
+    for key, value in expected["response_normalization"].items():
+        assert fitted.diagnostics[key] == pytest.approx(value)
     audit = fitted.diagnostics["structured_mean"]
-    assert audit["pattern_ids"] == [case["id"]]
-    assert audit["coverage_status"] == "passed"
-    assert audit["uncertainty"] == "conditional_on_MAP"
-    assert audit["parameter_identifiability"] == "not_certified"
-    prediction = fitted.predict(pd.DataFrame([case["probe"]]))
-    assert prediction.mean.item() == pytest.approx(case["expected_response"], abs=.2)
-    assert np.isfinite(prediction.mean).all() and np.isfinite(prediction.variance).all()
-    assert (prediction.variance >= 0).all()
+    for key, value in expected["structured_mean"].items():
+        assert audit[key] == value
+    prediction = fitted.predict(pd.DataFrame(case["prediction_X"]))
+    assert prediction.mean.item() == pytest.approx(expected["prediction"]["mean"],
+                                                  abs=expected["prediction"]["absolute_tolerance"])
+    assert bool(np.isfinite(prediction.mean).all()) == expected["prediction"]["finite_mean"]
+    assert bool(np.isfinite(prediction.variance).all()) == expected["prediction"]["finite_variance"]
+    assert bool((prediction.variance >= 0).all()) == expected["prediction"]["nonnegative_variance"]
     json.dumps(audit, allow_nan=False)
 
 
 @pytest.mark.parametrize("pattern", PATTERNS)
 def test_golden_malformed_declaration_is_never_applied(golden_v2_cases, pattern):
-    case, space, batch, _ = _case(golden_v2_cases, pattern)
-    knowledge = Knowledge().add_spec(_spec(case, parameters=case["malformed_parameters"]))
+    case = _negative_case(golden_v2_cases, pattern, "malformed_declaration")
+    space, batch, knowledge = _public_inputs(case)
     capability = inspect_capabilities(space, knowledge)
-    assert capability.applied == ()
-    assert capability.blocked == (case["id"],)
+    assert list(capability.applied) == case["expected"]["capability"]["applied"]
+    assert list(capability.blocked) == case["expected"]["capability"]["blocked"]
     with pytest.raises(EngineError) as caught:
         fit_surrogate(space, batch, knowledge=knowledge)
-    assert caught.value.code == ErrorCode.KNOWLEDGE_INVALID
+    assert caught.value.code.value == case["expected"]["error_code"]
 
 
 @pytest.mark.parametrize("pattern", PATTERNS)
 def test_golden_insufficient_rows_fail_despite_wired_consumer(golden_v2_cases, pattern):
-    case, space, batch, knowledge = _case(golden_v2_cases, pattern)
-    n = case["insufficient_rows"]
-    sparse = ObservationBatch(batch.X.iloc[:n], batch.Y.iloc[:n], ids=batch.ids[:n])
-    assert inspect_capabilities(space, knowledge).applied == (case["id"],)
+    case = _negative_case(golden_v2_cases, pattern, "insufficient_rows")
+    space, batch, knowledge = _public_inputs(case)
+    capability = inspect_capabilities(space, knowledge)
+    assert list(capability.applied) == case["expected"]["capability"]["applied"]
+    assert list(capability.blocked) == case["expected"]["capability"]["blocked"]
     with pytest.raises(EngineError) as caught:
-        fit_surrogate(space, sparse, knowledge=knowledge)
-    assert caught.value.code == ErrorCode.INSUFFICIENT_DATA
-    assert caught.value.details["coverage_status"] == "deficient"
-    assert caught.value.details["pattern_ids"] == [case["id"]]
+        fit_surrogate(space, batch, knowledge=knowledge)
+    assert caught.value.code.value == case["expected"]["error_code"]
+    for key, value in case["expected"]["error_details"].items():
+        assert caught.value.details[key] == value
 
 
 @pytest.mark.parametrize("pattern", PATTERNS)
 def test_golden_conflicting_declarations_cannot_reach_fitting(golden_v2_cases, pattern):
-    case, space, batch, knowledge = _case(golden_v2_cases, pattern)
-    knowledge.add_spec(_spec(case, pattern_id=case["conflict_id"]))
+    case = _negative_case(golden_v2_cases, pattern, "conflicting_declarations")
+    space, batch, knowledge = _public_inputs(case)
     capability = inspect_capabilities(space, knowledge)
-    assert capability.applied == ()
-    assert set(capability.blocked) == {case["id"], case["conflict_id"]}
+    assert list(capability.applied) == case["expected"]["capability"]["applied"]
+    assert set(capability.blocked) == set(case["expected"]["capability"]["blocked"])
     with pytest.raises(EngineError) as caught:
         fit_surrogate(space, batch, knowledge=knowledge)
-    assert caught.value.code == ErrorCode.KNOWLEDGE_CONFLICT
-    assert set(caught.value.details["pattern_ids"]) == {case["id"], case["conflict_id"]}
+    assert caught.value.code.value == case["expected"]["error_code"]
+    assert set(caught.value.details["pattern_ids"]) == set(case["expected"]["error_details"]["pattern_ids"])
+
+
+def test_golden_malformed_public_payload_fails_at_deserialization(golden_v2_cases):
+    case = _negative_case(golden_v2_cases, "saturation", "malformed_public_payload")
+    with pytest.raises(EngineError) as caught:
+        _public_inputs(case)
+    assert caught.value.code.value == case["expected"]["error_code"]
 
 
 @pytest.mark.parametrize("pattern", PATTERNS)
@@ -304,7 +334,7 @@ def test_mixed_recommendation_preserves_hard_safety_pending_and_seed(golden_v2_c
     # exact covariates, not declarations about categorical/ordinal effects.
     X = batch.X.assign(x=batch.X.x + 1., count=[0, 1] * 10,
                       dose=[1., 3., 3., 1.] * 5, material=["A", "B", "B", "A"] * 5)
-    params = deepcopy(case["parameters"])
+    params = deepcopy(case["knowledge"]["specs"][0]["parameters"])
     if pattern == "saturation":
         params.update(origin=1., half_response=6.)
     elif pattern == "threshold":

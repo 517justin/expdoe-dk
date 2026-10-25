@@ -127,7 +127,32 @@ slow run; it is still red and cannot approve release.
 
 The separate public golden fixtures are
 `expdoe-dk/tests/phase_one/fixtures/four_pattern_v2_cases.json`; historical v1
-storage cases remain in `contract_cases.json`. The public evaluation contract
+storage cases remain in `contract_cases.json`.
+
+The golden file is a canonical, sorted-key JSON array of four positive v2
+cases. Each case is independently consumable: `space` loads with
+`Space.from_dict`, `knowledge` loads with `Knowledge.from_envelope`, and
+`observations.X` / `observations.Y` are column-oriented dictionaries for pandas
+DataFrames passed to the public `ObservationBatch` constructor with the stored
+`ids`, optional `Yvar`, and optional `status`. The knowledge envelope contains
+the complete serialized spec, including confidence, scope, evidence, and ID.
+`seed`, `prediction_X`, and `expected` supply the numerical probe, tolerance,
+capability route, response normalization, and structured-fit diagnostic
+expectations; no live model or private object is encoded.
+
+The nested `negative_cases` contain 13 complete, standalone input payloads:
+four malformed declarations, four conflicting declarations, four runtime
+coverage failures, and one malformed public Space payload. Each records its
+failure stage and expected public error code (plus applicable capability and
+error-detail expectations). Tests load these payloads directly rather than
+reconstructing their bounds, response data, confidence, or observation IDs.
+
+Current golden-file SHA-256:
+`bd13faecc06455fbb526149defb916775ef5f640d9cdabee9d6eb884bc40acd0`.
+This supersedes the fixture content hashed by the earlier E6 artifact smoke
+report; a new artifact gate is required after this fixture and engine fix wave.
+
+The public evaluation contract
 adds `fold_diagnostics` keyed by canonical JSON validation-index lists (for
 example `"[3,7]"`). Entries contain training/validation indices and IDs,
 training-only response location/scale, fit status and `fitted_diagnostics`.

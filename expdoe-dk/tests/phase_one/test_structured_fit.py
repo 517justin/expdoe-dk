@@ -336,3 +336,46 @@ def test_diagnostics_are_defensive_and_legacy_section_is_empty():
     assert fitted.diagnostics["structured_mean"]["components"][0]["parameters"]["direction"] == "increasing"
     assert len(fitted.diagnostics["structured_mean"]["starts"]) == 3
     assert fit_surrogate(space, data).diagnostics["structured_mean"] == {}
+
+
+def test_public_saturation_prediction_does_not_collapse_on_huge_finite_domain():
+    lower, upper = -6e307, 1.1e308
+    span = upper - lower
+    space = Space([Parameter("x", bounds=(lower, upper))], objectives="response")
+    physical = np.array([-5., 5., -6., 6., -1., 1.]) * 1e307
+    fractions = (physical - lower) / span
+    data = ObservationBatch(pd.DataFrame({"x": physical}),
+        pd.DataFrame({"response": 4. + fractions / (.6 + fractions)}))
+    knowledge = Knowledge().with_saturation("x", direction="increasing", origin=lower,
+        half_response=lower + .6 * span, version="2.0", objective="response")
+    artifact, = knowledge.compile(space).mean_components
+    assert artifact.kind == "saturation_mean_v2"
+    fitted = fit_surrogate(space, data, knowledge=knowledge, seed=13)
+    predictions = fitted.predict(pd.DataFrame({"x": lower + np.array([0., .6, 1.]) * span}))
+    assert np.isfinite(predictions.mean).all() and np.isfinite(predictions.variance).all()
+    # A positive saturating response remains increasing at the terminal point;
+    # this shape contract does not depend on any optimizer's chosen amplitude.
+    assert np.all(np.diff(predictions.mean[:, 0]) > 0)
+    assert predictions.mean[-1, 0] > fitted.diagnostics["structured_mean"]["baseline"]
+    # Centered huge physical features have a common (neutral) residual prediction.
+    # Subtracting the anchor removes it and the baseline, leaving the analytic
+    # .625/.5 shape ratio independently of the fitted positive amplitude.
+    contribution = predictions.mean[:, 0] - predictions.mean[0, 0]
+    assert contribution[-1] == pytest.approx(1.25 * contribution[1], rel=1e-10, abs=1e-12)
+
+
+@pytest.mark.parametrize("structured", [False, True], ids=["legacy", "structured"])
+def test_top_level_diagnostics_expose_physical_response_normalization(structured):
+    space, data, knowledge = case()
+    fitted = fit_surrogate(space, data, knowledge=knowledge if structured else None, seed=13)
+    diagnostics = fitted.diagnostics
+    assert diagnostics["response_location"] == pytest.approx(data.Y.response.mean())
+    assert diagnostics["response_scale"] == pytest.approx(data.Y.response.std(ddof=0))
+    if structured:
+        assert diagnostics["response_location"] == diagnostics["structured_mean"]["response_location"]
+        assert diagnostics["response_scale"] == diagnostics["structured_mean"]["response_scale"]
+    else:
+        assert diagnostics["structured_mean"] == {}
+    diagnostics["response_scale"] = -1.
+    assert fitted.diagnostics["response_scale"] > 0.
+    json.dumps(fitted.diagnostics, allow_nan=False)

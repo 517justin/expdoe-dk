@@ -1,38 +1,3118 @@
 [
   {
-    "id": "golden-v2-saturation", "pattern": "saturation", "version": "2.0",
-    "factors": ["x"], "parameters": {"direction": "increasing", "origin": 0.0, "half_response": 5.0},
-    "artifact_kind": "saturation_mean_v2", "consumer": "bo.gp.build_mean_from_artifacts",
-    "response_values": [4, 4, 4.333333333333333, 4.333333333333333, 4.571428571428571, 4.571428571428571, 4.75, 4.75, 4.888888888888889, 4.888888888888889, 5.090909090909091, 5.090909090909091, 5.166666666666667, 5.166666666666667, 5.230769230769231, 5.230769230769231, 5.285714285714286, 5.285714285714286, 5.333333333333333, 5.333333333333333],
-    "probe": {"x": 5.0, "z": 0.5}, "expected_response": 5.0,
-    "malformed_parameters": {"direction": "sideways", "origin": 0.0, "half_response": 5.0},
-    "insufficient_rows": 4, "conflict_id": "conflicting-v2-saturation"
+    "expected": {
+      "capability": {
+        "applied": [
+          "golden-v2-saturation"
+        ],
+        "blocked": [],
+        "route": {
+          "artifact_kind": "saturation_mean_v2",
+          "consumer": "bo.gp.build_mean_from_artifacts",
+          "coverage_status": "not_evaluated",
+          "empirical_evidence": "not_evaluated"
+        }
+      },
+      "prediction": {
+        "absolute_tolerance": 0.2,
+        "finite_mean": true,
+        "finite_variance": true,
+        "mean": 5,
+        "nonnegative_variance": true
+      },
+      "response_normalization": {
+        "response_location": 4.86510434010434,
+        "response_scale": 0.4246216721844921
+      },
+      "structured_mean": {
+        "coverage_status": "passed",
+        "parameter_identifiability": "not_certified",
+        "pattern_ids": [
+          "golden-v2-saturation"
+        ],
+        "uncertainty": "conditional_on_MAP"
+      }
+    },
+    "id": "golden-v2-saturation",
+    "knowledge": {
+      "engine_version": "0.5.1",
+      "providers": [],
+      "schema_version": "1.0",
+      "specs": [
+        {
+          "confidence": 0.8,
+          "enabled": true,
+          "evidence": [],
+          "parameters": {
+            "direction": "increasing",
+            "half_response": 5,
+            "origin": 0
+          },
+          "pattern": "saturation",
+          "pattern_id": "golden-v2-saturation",
+          "scope": {
+            "conditions": null,
+            "factors": [
+              "x"
+            ],
+            "objectives": [
+              "response"
+            ],
+            "region": null
+          },
+          "version": "2.0"
+        }
+      ],
+      "strict": false
+    },
+    "negative_cases": [
+      {
+        "expected": {
+          "capability": {
+            "applied": [],
+            "blocked": [
+              "golden-v2-saturation"
+            ]
+          },
+          "error_code": "KNOWLEDGE_INVALID"
+        },
+        "id": "golden-v2-saturation-malformed_declaration",
+        "kind": "malformed_declaration",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "direction": "sideways",
+                "half_response": 5,
+                "origin": 0
+              },
+              "pattern": "saturation",
+              "pattern_id": "golden-v2-saturation",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4.333333333333333,
+              4.333333333333333,
+              4.571428571428571,
+              4.571428571428571,
+              4.75,
+              4.75,
+              4.888888888888889,
+              4.888888888888889,
+              5.090909090909091,
+              5.090909090909091,
+              5.166666666666667,
+              5.166666666666667,
+              5.230769230769231,
+              5.230769230769231,
+              5.285714285714286,
+              5.285714285714286,
+              5.333333333333333,
+              5.333333333333333
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "declaration"
+      },
+      {
+        "expected": {
+          "capability": {
+            "applied": [
+              "golden-v2-saturation"
+            ],
+            "blocked": []
+          },
+          "error_code": "INSUFFICIENT_DATA",
+          "error_details": {
+            "coverage_status": "deficient",
+            "pattern_ids": [
+              "golden-v2-saturation"
+            ]
+          }
+        },
+        "id": "golden-v2-saturation-insufficient_rows",
+        "kind": "insufficient_rows",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "direction": "increasing",
+                "half_response": 5,
+                "origin": 0
+              },
+              "pattern": "saturation",
+              "pattern_id": "golden-v2-saturation",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4.333333333333333,
+              4.333333333333333
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "runtime"
+      },
+      {
+        "expected": {
+          "capability": {
+            "applied": [],
+            "blocked": [
+              "golden-v2-saturation",
+              "conflicting-v2-saturation"
+            ]
+          },
+          "error_code": "KNOWLEDGE_CONFLICT",
+          "error_details": {
+            "pattern_ids": [
+              "golden-v2-saturation",
+              "conflicting-v2-saturation"
+            ]
+          }
+        },
+        "id": "golden-v2-saturation-conflicting_declarations",
+        "kind": "conflicting_declarations",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "direction": "increasing",
+                "half_response": 5,
+                "origin": 0
+              },
+              "pattern": "saturation",
+              "pattern_id": "golden-v2-saturation",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            },
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "direction": "increasing",
+                "half_response": 5,
+                "origin": 0
+              },
+              "pattern": "saturation",
+              "pattern_id": "conflicting-v2-saturation",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4.333333333333333,
+              4.333333333333333,
+              4.571428571428571,
+              4.571428571428571,
+              4.75,
+              4.75,
+              4.888888888888889,
+              4.888888888888889,
+              5.090909090909091,
+              5.090909090909091,
+              5.166666666666667,
+              5.166666666666667,
+              5.230769230769231,
+              5.230769230769231,
+              5.285714285714286,
+              5.285714285714286,
+              5.333333333333333,
+              5.333333333333333
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "declaration"
+      },
+      {
+        "expected": {
+          "error_code": "CHECKPOINT_INCOMPATIBLE"
+        },
+        "id": "golden-v2-saturation-malformed_public_payload",
+        "kind": "malformed_public_payload",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "direction": "increasing",
+                "half_response": 5,
+                "origin": 0
+              },
+              "pattern": "saturation",
+              "pattern_id": "golden-v2-saturation",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4.333333333333333,
+              4.333333333333333,
+              4.571428571428571,
+              4.571428571428571,
+              4.75,
+              4.75,
+              4.888888888888889,
+              4.888888888888889,
+              5.090909090909091,
+              5.090909090909091,
+              5.166666666666667,
+              5.166666666666667,
+              5.230769230769231,
+              5.230769230769231,
+              5.285714285714286,
+              5.285714285714286,
+              5.333333333333333,
+              5.333333333333333
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "unsupported"
+        },
+        "stage": "deserialize"
+      }
+    ],
+    "observations": {
+      "X": {
+        "x": [
+          0,
+          0,
+          1,
+          1,
+          2,
+          2,
+          3,
+          3,
+          4,
+          4,
+          6,
+          6,
+          7,
+          7,
+          8,
+          8,
+          9,
+          9,
+          10,
+          10
+        ],
+        "z": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ]
+      },
+      "Y": {
+        "response": [
+          4,
+          4,
+          4.333333333333333,
+          4.333333333333333,
+          4.571428571428571,
+          4.571428571428571,
+          4.75,
+          4.75,
+          4.888888888888889,
+          4.888888888888889,
+          5.090909090909091,
+          5.090909090909091,
+          5.166666666666667,
+          5.166666666666667,
+          5.230769230769231,
+          5.230769230769231,
+          5.285714285714286,
+          5.285714285714286,
+          5.333333333333333,
+          5.333333333333333
+        ]
+      },
+      "Yvar": null,
+      "ids": [
+        "measured-0",
+        "measured-1",
+        "measured-2",
+        "measured-3",
+        "measured-4",
+        "measured-5",
+        "measured-6",
+        "measured-7",
+        "measured-8",
+        "measured-9",
+        "measured-10",
+        "measured-11",
+        "measured-12",
+        "measured-13",
+        "measured-14",
+        "measured-15",
+        "measured-16",
+        "measured-17",
+        "measured-18",
+        "measured-19"
+      ],
+      "status": null
+    },
+    "pattern": "saturation",
+    "prediction_X": {
+      "x": [
+        5
+      ],
+      "z": [
+        0.5
+      ]
+    },
+    "seed": 17,
+    "space": {
+      "constraints": [],
+      "engine_version": "0.5.1",
+      "objectives": [
+        {
+          "direction": "maximize",
+          "name": "response",
+          "priority": 0,
+          "target": null,
+          "unit": ""
+        }
+      ],
+      "outcome_constraints": [],
+      "params": [
+        {
+          "bounds": [
+            0,
+            10
+          ],
+          "kind": "continuous",
+          "name": "x",
+          "step": null,
+          "transform": "linear",
+          "unit": "",
+          "values": null
+        },
+        {
+          "bounds": [
+            0,
+            1
+          ],
+          "kind": "continuous",
+          "name": "z",
+          "step": null,
+          "transform": "linear",
+          "unit": "",
+          "values": null
+        }
+      ],
+      "schema_version": "1.0"
+    },
+    "version": "2.0"
   },
   {
-    "id": "golden-v2-threshold", "pattern": "threshold", "version": "2.0",
-    "factors": ["x"], "parameters": {"threshold": 5.0, "below_behavior": "increasing", "above_behavior": "flat"},
-    "artifact_kind": "threshold_mean_v2", "consumer": "bo.gp.build_mean_from_artifacts",
-    "response_values": [4, 4, 4.2, 4.2, 4.4, 4.4, 4.6, 4.6, 4.8, 4.8, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
-    "probe": {"x": 5.0, "z": 0.5}, "expected_response": 5.0,
-    "malformed_parameters": {"threshold": 5.0, "below_behavior": "sideways", "above_behavior": "flat"},
-    "insufficient_rows": 4, "conflict_id": "conflicting-v2-threshold"
+    "expected": {
+      "capability": {
+        "applied": [
+          "golden-v2-threshold"
+        ],
+        "blocked": [],
+        "route": {
+          "artifact_kind": "threshold_mean_v2",
+          "consumer": "bo.gp.build_mean_from_artifacts",
+          "coverage_status": "not_evaluated",
+          "empirical_evidence": "not_evaluated"
+        }
+      },
+      "prediction": {
+        "absolute_tolerance": 0.2,
+        "finite_mean": true,
+        "finite_variance": true,
+        "mean": 5,
+        "nonnegative_variance": true
+      },
+      "response_normalization": {
+        "response_location": 4.7,
+        "response_scale": 0.36055512754639885
+      },
+      "structured_mean": {
+        "coverage_status": "passed",
+        "parameter_identifiability": "not_certified",
+        "pattern_ids": [
+          "golden-v2-threshold"
+        ],
+        "uncertainty": "conditional_on_MAP"
+      }
+    },
+    "id": "golden-v2-threshold",
+    "knowledge": {
+      "engine_version": "0.5.1",
+      "providers": [],
+      "schema_version": "1.0",
+      "specs": [
+        {
+          "confidence": 0.8,
+          "enabled": true,
+          "evidence": [],
+          "parameters": {
+            "above_behavior": "flat",
+            "below_behavior": "increasing",
+            "threshold": 5
+          },
+          "pattern": "threshold",
+          "pattern_id": "golden-v2-threshold",
+          "scope": {
+            "conditions": null,
+            "factors": [
+              "x"
+            ],
+            "objectives": [
+              "response"
+            ],
+            "region": null
+          },
+          "version": "2.0"
+        }
+      ],
+      "strict": false
+    },
+    "negative_cases": [
+      {
+        "expected": {
+          "capability": {
+            "applied": [],
+            "blocked": [
+              "golden-v2-threshold"
+            ]
+          },
+          "error_code": "KNOWLEDGE_INVALID"
+        },
+        "id": "golden-v2-threshold-malformed_declaration",
+        "kind": "malformed_declaration",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "above_behavior": "flat",
+                "below_behavior": "sideways",
+                "threshold": 5
+              },
+              "pattern": "threshold",
+              "pattern_id": "golden-v2-threshold",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4.2,
+              4.2,
+              4.4,
+              4.4,
+              4.6,
+              4.6,
+              4.8,
+              4.8,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "declaration"
+      },
+      {
+        "expected": {
+          "capability": {
+            "applied": [
+              "golden-v2-threshold"
+            ],
+            "blocked": []
+          },
+          "error_code": "INSUFFICIENT_DATA",
+          "error_details": {
+            "coverage_status": "deficient",
+            "pattern_ids": [
+              "golden-v2-threshold"
+            ]
+          }
+        },
+        "id": "golden-v2-threshold-insufficient_rows",
+        "kind": "insufficient_rows",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "above_behavior": "flat",
+                "below_behavior": "increasing",
+                "threshold": 5
+              },
+              "pattern": "threshold",
+              "pattern_id": "golden-v2-threshold",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4.2,
+              4.2
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "runtime"
+      },
+      {
+        "expected": {
+          "capability": {
+            "applied": [],
+            "blocked": [
+              "golden-v2-threshold",
+              "conflicting-v2-threshold"
+            ]
+          },
+          "error_code": "KNOWLEDGE_CONFLICT",
+          "error_details": {
+            "pattern_ids": [
+              "golden-v2-threshold",
+              "conflicting-v2-threshold"
+            ]
+          }
+        },
+        "id": "golden-v2-threshold-conflicting_declarations",
+        "kind": "conflicting_declarations",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "above_behavior": "flat",
+                "below_behavior": "increasing",
+                "threshold": 5
+              },
+              "pattern": "threshold",
+              "pattern_id": "golden-v2-threshold",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            },
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "above_behavior": "flat",
+                "below_behavior": "increasing",
+                "threshold": 5
+              },
+              "pattern": "threshold",
+              "pattern_id": "conflicting-v2-threshold",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4.2,
+              4.2,
+              4.4,
+              4.4,
+              4.6,
+              4.6,
+              4.8,
+              4.8,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5,
+              5
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "declaration"
+      }
+    ],
+    "observations": {
+      "X": {
+        "x": [
+          0,
+          0,
+          1,
+          1,
+          2,
+          2,
+          3,
+          3,
+          4,
+          4,
+          6,
+          6,
+          7,
+          7,
+          8,
+          8,
+          9,
+          9,
+          10,
+          10
+        ],
+        "z": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ]
+      },
+      "Y": {
+        "response": [
+          4,
+          4,
+          4.2,
+          4.2,
+          4.4,
+          4.4,
+          4.6,
+          4.6,
+          4.8,
+          4.8,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5
+        ]
+      },
+      "Yvar": null,
+      "ids": [
+        "measured-0",
+        "measured-1",
+        "measured-2",
+        "measured-3",
+        "measured-4",
+        "measured-5",
+        "measured-6",
+        "measured-7",
+        "measured-8",
+        "measured-9",
+        "measured-10",
+        "measured-11",
+        "measured-12",
+        "measured-13",
+        "measured-14",
+        "measured-15",
+        "measured-16",
+        "measured-17",
+        "measured-18",
+        "measured-19"
+      ],
+      "status": null
+    },
+    "pattern": "threshold",
+    "prediction_X": {
+      "x": [
+        5
+      ],
+      "z": [
+        0.5
+      ]
+    },
+    "seed": 17,
+    "space": {
+      "constraints": [],
+      "engine_version": "0.5.1",
+      "objectives": [
+        {
+          "direction": "maximize",
+          "name": "response",
+          "priority": 0,
+          "target": null,
+          "unit": ""
+        }
+      ],
+      "outcome_constraints": [],
+      "params": [
+        {
+          "bounds": [
+            0,
+            10
+          ],
+          "kind": "continuous",
+          "name": "x",
+          "step": null,
+          "transform": "linear",
+          "unit": "",
+          "values": null
+        },
+        {
+          "bounds": [
+            0,
+            1
+          ],
+          "kind": "continuous",
+          "name": "z",
+          "step": null,
+          "transform": "linear",
+          "unit": "",
+          "values": null
+        }
+      ],
+      "schema_version": "1.0"
+    },
+    "version": "2.0"
   },
   {
-    "id": "golden-v2-synergy", "pattern": "synergy", "version": "2.0",
-    "factors": ["x", "z"], "parameters": {"reference": "anchored_additive", "response_effect": "higher"},
-    "artifact_kind": "signed_interaction_mean_v2", "consumer": "bo.gp.build_mean_from_artifacts",
-    "response_values": [4, 4, 4, 4.2, 4, 4.4, 4, 4.6, 4, 4.8, 4, 5.2, 4, 5.4, 4, 5.6, 4, 5.8, 4, 6],
-    "probe": {"x": 5.0, "z": 0.5}, "expected_response": 4.5,
-    "malformed_parameters": {"reference": "unanchored", "response_effect": "higher"},
-    "insufficient_rows": 4, "conflict_id": "conflicting-v2-synergy"
+    "expected": {
+      "capability": {
+        "applied": [
+          "golden-v2-synergy"
+        ],
+        "blocked": [],
+        "route": {
+          "artifact_kind": "signed_interaction_mean_v2",
+          "consumer": "bo.gp.build_mean_from_artifacts",
+          "coverage_status": "not_evaluated",
+          "empirical_evidence": "not_evaluated"
+        }
+      },
+      "prediction": {
+        "absolute_tolerance": 0.2,
+        "finite_mean": true,
+        "finite_variance": true,
+        "mean": 4.5,
+        "nonnegative_variance": true
+      },
+      "response_normalization": {
+        "response_location": 4.499999999999999,
+        "response_scale": 0.6855654600401043
+      },
+      "structured_mean": {
+        "coverage_status": "passed",
+        "parameter_identifiability": "not_certified",
+        "pattern_ids": [
+          "golden-v2-synergy"
+        ],
+        "uncertainty": "conditional_on_MAP"
+      }
+    },
+    "id": "golden-v2-synergy",
+    "knowledge": {
+      "engine_version": "0.5.1",
+      "providers": [],
+      "schema_version": "1.0",
+      "specs": [
+        {
+          "confidence": 0.8,
+          "enabled": true,
+          "evidence": [],
+          "parameters": {
+            "reference": "anchored_additive",
+            "response_effect": "higher"
+          },
+          "pattern": "synergy",
+          "pattern_id": "golden-v2-synergy",
+          "scope": {
+            "conditions": null,
+            "factors": [
+              "x",
+              "z"
+            ],
+            "objectives": [
+              "response"
+            ],
+            "region": null
+          },
+          "version": "2.0"
+        }
+      ],
+      "strict": false
+    },
+    "negative_cases": [
+      {
+        "expected": {
+          "capability": {
+            "applied": [],
+            "blocked": [
+              "golden-v2-synergy"
+            ]
+          },
+          "error_code": "KNOWLEDGE_INVALID"
+        },
+        "id": "golden-v2-synergy-malformed_declaration",
+        "kind": "malformed_declaration",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "reference": "unanchored",
+                "response_effect": "higher"
+              },
+              "pattern": "synergy",
+              "pattern_id": "golden-v2-synergy",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x",
+                  "z"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4,
+              4.2,
+              4,
+              4.4,
+              4,
+              4.6,
+              4,
+              4.8,
+              4,
+              5.2,
+              4,
+              5.4,
+              4,
+              5.6,
+              4,
+              5.8,
+              4,
+              6
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "declaration"
+      },
+      {
+        "expected": {
+          "capability": {
+            "applied": [
+              "golden-v2-synergy"
+            ],
+            "blocked": []
+          },
+          "error_code": "INSUFFICIENT_DATA",
+          "error_details": {
+            "coverage_status": "deficient",
+            "pattern_ids": [
+              "golden-v2-synergy"
+            ]
+          }
+        },
+        "id": "golden-v2-synergy-insufficient_rows",
+        "kind": "insufficient_rows",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "reference": "anchored_additive",
+                "response_effect": "higher"
+              },
+              "pattern": "synergy",
+              "pattern_id": "golden-v2-synergy",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x",
+                  "z"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4,
+              4.2
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "runtime"
+      },
+      {
+        "expected": {
+          "capability": {
+            "applied": [],
+            "blocked": [
+              "golden-v2-synergy",
+              "conflicting-v2-synergy"
+            ]
+          },
+          "error_code": "KNOWLEDGE_CONFLICT",
+          "error_details": {
+            "pattern_ids": [
+              "golden-v2-synergy",
+              "conflicting-v2-synergy"
+            ]
+          }
+        },
+        "id": "golden-v2-synergy-conflicting_declarations",
+        "kind": "conflicting_declarations",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "reference": "anchored_additive",
+                "response_effect": "higher"
+              },
+              "pattern": "synergy",
+              "pattern_id": "golden-v2-synergy",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x",
+                  "z"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            },
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "reference": "anchored_additive",
+                "response_effect": "higher"
+              },
+              "pattern": "synergy",
+              "pattern_id": "conflicting-v2-synergy",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x",
+                  "z"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4,
+              4.2,
+              4,
+              4.4,
+              4,
+              4.6,
+              4,
+              4.8,
+              4,
+              5.2,
+              4,
+              5.4,
+              4,
+              5.6,
+              4,
+              5.8,
+              4,
+              6
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "declaration"
+      }
+    ],
+    "observations": {
+      "X": {
+        "x": [
+          0,
+          0,
+          1,
+          1,
+          2,
+          2,
+          3,
+          3,
+          4,
+          4,
+          6,
+          6,
+          7,
+          7,
+          8,
+          8,
+          9,
+          9,
+          10,
+          10
+        ],
+        "z": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ]
+      },
+      "Y": {
+        "response": [
+          4,
+          4,
+          4,
+          4.2,
+          4,
+          4.4,
+          4,
+          4.6,
+          4,
+          4.8,
+          4,
+          5.2,
+          4,
+          5.4,
+          4,
+          5.6,
+          4,
+          5.8,
+          4,
+          6
+        ]
+      },
+      "Yvar": null,
+      "ids": [
+        "measured-0",
+        "measured-1",
+        "measured-2",
+        "measured-3",
+        "measured-4",
+        "measured-5",
+        "measured-6",
+        "measured-7",
+        "measured-8",
+        "measured-9",
+        "measured-10",
+        "measured-11",
+        "measured-12",
+        "measured-13",
+        "measured-14",
+        "measured-15",
+        "measured-16",
+        "measured-17",
+        "measured-18",
+        "measured-19"
+      ],
+      "status": null
+    },
+    "pattern": "synergy",
+    "prediction_X": {
+      "x": [
+        5
+      ],
+      "z": [
+        0.5
+      ]
+    },
+    "seed": 17,
+    "space": {
+      "constraints": [],
+      "engine_version": "0.5.1",
+      "objectives": [
+        {
+          "direction": "maximize",
+          "name": "response",
+          "priority": 0,
+          "target": null,
+          "unit": ""
+        }
+      ],
+      "outcome_constraints": [],
+      "params": [
+        {
+          "bounds": [
+            0,
+            10
+          ],
+          "kind": "continuous",
+          "name": "x",
+          "step": null,
+          "transform": "linear",
+          "unit": "",
+          "values": null
+        },
+        {
+          "bounds": [
+            0,
+            1
+          ],
+          "kind": "continuous",
+          "name": "z",
+          "step": null,
+          "transform": "linear",
+          "unit": "",
+          "values": null
+        }
+      ],
+      "schema_version": "1.0"
+    },
+    "version": "2.0"
   },
   {
-    "id": "golden-v2-antagonism", "pattern": "antagonism", "version": "2.0",
-    "factors": ["x", "z"], "parameters": {"reference": "anchored_additive", "response_effect": "higher"},
-    "artifact_kind": "signed_interaction_mean_v2", "consumer": "bo.gp.build_mean_from_artifacts",
-    "response_values": [4, 4, 4, 3.8, 4, 3.6, 4, 3.4, 4, 3.2, 4, 2.8, 4, 2.6, 4, 2.4, 4, 2.2, 4, 2],
-    "probe": {"x": 5.0, "z": 0.5}, "expected_response": 3.5,
-    "malformed_parameters": {"reference": "anchored_additive", "response_effect": "sideways"},
-    "insufficient_rows": 4, "conflict_id": "conflicting-v2-antagonism"
+    "expected": {
+      "capability": {
+        "applied": [
+          "golden-v2-antagonism"
+        ],
+        "blocked": [],
+        "route": {
+          "artifact_kind": "signed_interaction_mean_v2",
+          "consumer": "bo.gp.build_mean_from_artifacts",
+          "coverage_status": "not_evaluated",
+          "empirical_evidence": "not_evaluated"
+        }
+      },
+      "prediction": {
+        "absolute_tolerance": 0.2,
+        "finite_mean": true,
+        "finite_variance": true,
+        "mean": 3.5,
+        "nonnegative_variance": true
+      },
+      "response_normalization": {
+        "response_location": 3.5,
+        "response_scale": 0.6855654600401043
+      },
+      "structured_mean": {
+        "coverage_status": "passed",
+        "parameter_identifiability": "not_certified",
+        "pattern_ids": [
+          "golden-v2-antagonism"
+        ],
+        "uncertainty": "conditional_on_MAP"
+      }
+    },
+    "id": "golden-v2-antagonism",
+    "knowledge": {
+      "engine_version": "0.5.1",
+      "providers": [],
+      "schema_version": "1.0",
+      "specs": [
+        {
+          "confidence": 0.8,
+          "enabled": true,
+          "evidence": [],
+          "parameters": {
+            "reference": "anchored_additive",
+            "response_effect": "higher"
+          },
+          "pattern": "antagonism",
+          "pattern_id": "golden-v2-antagonism",
+          "scope": {
+            "conditions": null,
+            "factors": [
+              "x",
+              "z"
+            ],
+            "objectives": [
+              "response"
+            ],
+            "region": null
+          },
+          "version": "2.0"
+        }
+      ],
+      "strict": false
+    },
+    "negative_cases": [
+      {
+        "expected": {
+          "capability": {
+            "applied": [],
+            "blocked": [
+              "golden-v2-antagonism"
+            ]
+          },
+          "error_code": "KNOWLEDGE_INVALID"
+        },
+        "id": "golden-v2-antagonism-malformed_declaration",
+        "kind": "malformed_declaration",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "reference": "anchored_additive",
+                "response_effect": "sideways"
+              },
+              "pattern": "antagonism",
+              "pattern_id": "golden-v2-antagonism",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x",
+                  "z"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4,
+              3.8,
+              4,
+              3.6,
+              4,
+              3.4,
+              4,
+              3.2,
+              4,
+              2.8,
+              4,
+              2.6,
+              4,
+              2.4,
+              4,
+              2.2,
+              4,
+              2
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "declaration"
+      },
+      {
+        "expected": {
+          "capability": {
+            "applied": [
+              "golden-v2-antagonism"
+            ],
+            "blocked": []
+          },
+          "error_code": "INSUFFICIENT_DATA",
+          "error_details": {
+            "coverage_status": "deficient",
+            "pattern_ids": [
+              "golden-v2-antagonism"
+            ]
+          }
+        },
+        "id": "golden-v2-antagonism-insufficient_rows",
+        "kind": "insufficient_rows",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "reference": "anchored_additive",
+                "response_effect": "higher"
+              },
+              "pattern": "antagonism",
+              "pattern_id": "golden-v2-antagonism",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x",
+                  "z"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4,
+              3.8
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "runtime"
+      },
+      {
+        "expected": {
+          "capability": {
+            "applied": [],
+            "blocked": [
+              "golden-v2-antagonism",
+              "conflicting-v2-antagonism"
+            ]
+          },
+          "error_code": "KNOWLEDGE_CONFLICT",
+          "error_details": {
+            "pattern_ids": [
+              "golden-v2-antagonism",
+              "conflicting-v2-antagonism"
+            ]
+          }
+        },
+        "id": "golden-v2-antagonism-conflicting_declarations",
+        "kind": "conflicting_declarations",
+        "knowledge": {
+          "engine_version": "0.5.1",
+          "providers": [],
+          "schema_version": "1.0",
+          "specs": [
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "reference": "anchored_additive",
+                "response_effect": "higher"
+              },
+              "pattern": "antagonism",
+              "pattern_id": "golden-v2-antagonism",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x",
+                  "z"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            },
+            {
+              "confidence": 0.8,
+              "enabled": true,
+              "evidence": [],
+              "parameters": {
+                "reference": "anchored_additive",
+                "response_effect": "higher"
+              },
+              "pattern": "antagonism",
+              "pattern_id": "conflicting-v2-antagonism",
+              "scope": {
+                "conditions": null,
+                "factors": [
+                  "x",
+                  "z"
+                ],
+                "objectives": [
+                  "response"
+                ],
+                "region": null
+              },
+              "version": "2.0"
+            }
+          ],
+          "strict": false
+        },
+        "observations": {
+          "X": {
+            "x": [
+              0,
+              0,
+              1,
+              1,
+              2,
+              2,
+              3,
+              3,
+              4,
+              4,
+              6,
+              6,
+              7,
+              7,
+              8,
+              8,
+              9,
+              9,
+              10,
+              10
+            ],
+            "z": [
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1,
+              0,
+              1
+            ]
+          },
+          "Y": {
+            "response": [
+              4,
+              4,
+              4,
+              3.8,
+              4,
+              3.6,
+              4,
+              3.4,
+              4,
+              3.2,
+              4,
+              2.8,
+              4,
+              2.6,
+              4,
+              2.4,
+              4,
+              2.2,
+              4,
+              2
+            ]
+          },
+          "Yvar": null,
+          "ids": [
+            "measured-0",
+            "measured-1",
+            "measured-2",
+            "measured-3",
+            "measured-4",
+            "measured-5",
+            "measured-6",
+            "measured-7",
+            "measured-8",
+            "measured-9",
+            "measured-10",
+            "measured-11",
+            "measured-12",
+            "measured-13",
+            "measured-14",
+            "measured-15",
+            "measured-16",
+            "measured-17",
+            "measured-18",
+            "measured-19"
+          ],
+          "status": null
+        },
+        "space": {
+          "constraints": [],
+          "engine_version": "0.5.1",
+          "objectives": [
+            {
+              "direction": "maximize",
+              "name": "response",
+              "priority": 0,
+              "target": null,
+              "unit": ""
+            }
+          ],
+          "outcome_constraints": [],
+          "params": [
+            {
+              "bounds": [
+                0,
+                10
+              ],
+              "kind": "continuous",
+              "name": "x",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            },
+            {
+              "bounds": [
+                0,
+                1
+              ],
+              "kind": "continuous",
+              "name": "z",
+              "step": null,
+              "transform": "linear",
+              "unit": "",
+              "values": null
+            }
+          ],
+          "schema_version": "1.0"
+        },
+        "stage": "declaration"
+      }
+    ],
+    "observations": {
+      "X": {
+        "x": [
+          0,
+          0,
+          1,
+          1,
+          2,
+          2,
+          3,
+          3,
+          4,
+          4,
+          6,
+          6,
+          7,
+          7,
+          8,
+          8,
+          9,
+          9,
+          10,
+          10
+        ],
+        "z": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ]
+      },
+      "Y": {
+        "response": [
+          4,
+          4,
+          4,
+          3.8,
+          4,
+          3.6,
+          4,
+          3.4,
+          4,
+          3.2,
+          4,
+          2.8,
+          4,
+          2.6,
+          4,
+          2.4,
+          4,
+          2.2,
+          4,
+          2
+        ]
+      },
+      "Yvar": null,
+      "ids": [
+        "measured-0",
+        "measured-1",
+        "measured-2",
+        "measured-3",
+        "measured-4",
+        "measured-5",
+        "measured-6",
+        "measured-7",
+        "measured-8",
+        "measured-9",
+        "measured-10",
+        "measured-11",
+        "measured-12",
+        "measured-13",
+        "measured-14",
+        "measured-15",
+        "measured-16",
+        "measured-17",
+        "measured-18",
+        "measured-19"
+      ],
+      "status": null
+    },
+    "pattern": "antagonism",
+    "prediction_X": {
+      "x": [
+        5
+      ],
+      "z": [
+        0.5
+      ]
+    },
+    "seed": 17,
+    "space": {
+      "constraints": [],
+      "engine_version": "0.5.1",
+      "objectives": [
+        {
+          "direction": "maximize",
+          "name": "response",
+          "priority": 0,
+          "target": null,
+          "unit": ""
+        }
+      ],
+      "outcome_constraints": [],
+      "params": [
+        {
+          "bounds": [
+            0,
+            10
+          ],
+          "kind": "continuous",
+          "name": "x",
+          "step": null,
+          "transform": "linear",
+          "unit": "",
+          "values": null
+        },
+        {
+          "bounds": [
+            0,
+            1
+          ],
+          "kind": "continuous",
+          "name": "z",
+          "step": null,
+          "transform": "linear",
+          "unit": "",
+          "values": null
+        }
+      ],
+      "schema_version": "1.0"
+    },
+    "version": "2.0"
   }
 ]

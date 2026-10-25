@@ -155,7 +155,16 @@ class _Component(Module):
             t = displacements[0]  # F1 validation requires origin == lower.
             K = parameters["half_response"] - parameters["origin"]
             d = _BEHAVIOR_SIGN[parameters["direction"]]
-            return d * self.magnitude("raw_amplitude") * (t / (K + t))
+            if not torch.isfinite(t).all():
+                raise _invalid("Saturation requires finite physical displacement", self.artifact)
+            # Divide the smaller positive operand by the larger before adding:
+            # K+t can overflow even when the contribution and gradient are finite.
+            # Select operands first so inactive branches stay safe for autograd
+            # (including the t=0 anchor); no tensor is detached or scalarized.
+            large = t >= K
+            ratio = torch.where(large, K, t) / torch.where(large, t, K)
+            fraction = torch.where(large, 1. / (1. + ratio), ratio / (1. + ratio))
+            return d * self.magnitude("raw_amplitude") * fraction
         if self.pattern == "threshold":
             p, q = self.slopes()
             h = (parameters["threshold"] - coordinates[0]["lower"]) / coordinates[0]["range"]

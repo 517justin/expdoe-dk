@@ -72,6 +72,38 @@ def test_saturation_anchor_half_limit_and_analytic_derivatives(direction, d):
 BEHAVIORS = {"increasing": 1, "decreasing": -1, "flat": 0}
 
 
+@pytest.mark.parametrize("log", [False, True], ids=["linear", "log"])
+@pytest.mark.parametrize("direction,sign", [("increasing", 1.), ("decreasing", -1.)])
+def test_saturation_huge_finite_domain_preserves_values_and_gradients(log, direction, sign):
+    upper, lower = 1.7e308, 1e307 if log else 0.
+    span = upper - lower
+    _, _, mean = case(bounds=((lower, upper), (1., 2.)), log=log,
+        parameters={"origin": lower, "half_response": lower + .6 * span,
+                    "direction": direction})
+    assign(mean, **{"components.0.raw_amplitude": 1.})
+    fractions = torch.tensor([.2, .6, 1.], dtype=torch.double)
+    model_x = (torch.log1p(fractions * (span / lower)) / math.log1p(span / lower)
+               if log else fractions)
+    X = torch.stack([model_x, torch.zeros_like(model_x)], dim=-1).requires_grad_()
+    values = mean.physical(X)
+    torch.testing.assert_close(values, sign * torch.tensor([.25, .5, .625], dtype=torch.double),
+                               rtol=1e-12, atol=0.)
+    first = torch.autograd.grad(values.sum(), X)[0][:, 0]
+    expected = sign * torch.tensor([.9375, 5. / 12., .234375], dtype=torch.double)
+    if log:
+        expected *= (lower / span + fractions) * math.log1p(span / lower)
+    assert torch.isfinite(first).all() and (sign * first > 0).all()
+    torch.testing.assert_close(first, expected, rtol=1e-12, atol=0.)
+
+
+def test_saturation_rejects_nonfinite_decoded_displacement_instead_of_false_limit():
+    _, _, mean = case(bounds=((0., 1.7e308), (1., 2.)),
+                      parameters={"half_response": 1.02e308})
+    with pytest.raises(EngineError) as caught:
+        mean.physical(torch.tensor([[2., 0.]], dtype=torch.double))
+    assert caught.value.code == ErrorCode.KNOWLEDGE_INVALID
+
+
 @pytest.mark.parametrize("below,above", list(itertools.permutations(BEHAVIORS, 2)))
 def test_threshold_all_six_pairs_anchor_midpoint_curvature_continuity_and_tails(below, above):
     _, _, mean = case("threshold", parameters={"below_behavior": below, "above_behavior": above})

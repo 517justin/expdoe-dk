@@ -196,7 +196,8 @@ class FittedSurrogate:
         self._model = model
         self._location, self._scale, self._sign = location, scale, sign
         self._transforms, self._exclusions = deepcopy(transforms), deepcopy(exclusions)
-        self._diagnostics = {"structured_mean": {}}
+        self._diagnostics = {"response_location": location, "response_scale": scale,
+                             "structured_mean": {}}
 
     @property
     def diagnostics(self):
@@ -309,7 +310,7 @@ def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
                 fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))
             model.eval()
         fitted = FittedSurrogate(space, model, location, scale, sign, transforms, exclusions)
-        fitted._diagnostics = {"structured_mean": deepcopy(structured_diagnostics)}
+        fitted._diagnostics["structured_mean"] = deepcopy(structured_diagnostics)
         fitted.predict(batch.X)  # Reject non-finite fits before exposing a fitted object.
         return fitted
     except EngineError:
