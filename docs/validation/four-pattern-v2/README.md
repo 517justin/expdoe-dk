@@ -171,3 +171,52 @@ E6 still owns independent review of this evidence, the complete test matrix
 contract, consistent version/compatibility updates, build, and clean offline
 wheel smoke with reference dependencies. No CLI/adapter task, release version,
 wheel approval, merge, push, publication or E6 approval is implied here.
+
+## 2026-10-25 E6 verification closure
+
+This dated addendum supersedes the still-open E6 status above; the F6 matrix
+and earlier artifact-gate statements remain historical evidence, not the
+current release-verification result. E6 verification is complete for engine
+commit `c4b3e511e8cde5b56e60219de50f26f69b30a196`, version **0.5.1**.
+
+The canonical current package suites, using `PYTHONPATH=src` and
+`/opt/homebrew/Caskroom/miniconda/base/envs/expdoe-dk-codex/bin/python -m pytest`
+from `expdoe-dk/`, passed:
+
+| Arguments | Current result |
+|---|---|
+| `-q` | 1244 passed, 8 skipped, 61 warnings |
+| `--run-slow -q` | 1252 passed, 111 warnings |
+
+The only new warning is the huge-domain physical-feature normalization NumPy
+variance overflow warning. It is disclosed and not silenced; the saturation
+output/gradient regression itself passes. Existing dependency deprecation,
+Cholesky jitter and tiny-negative-variance warnings remain visible. This does
+not certify general huge-domain feature normalization.
+
+E6 compatibility uses the exact reader allow-list `{0.5.0, 0.5.1}`, not a
+blanket major/minor match. Current writers emit `0.5.1`; historical `0.5.0`
+state restores successfully and rewrites as `0.5.1`. Unknown future versions
+are rejected, including at nested envelope boundaries.
+
+Fresh artifacts built from that verified engine commit and the current public
+golden fixture have these SHA-256 values:
+
+| Artifact or fixture | SHA-256 |
+|---|---|
+| `expdoe_dk-0.5.1-py3-none-any.whl` | `0370c1ee5a828ed4799980ed0e301a6042e2cc1dc6bf041164fc51437ae94558` |
+| `expdoe_dk-0.5.1.tar.gz` | `059676bcc3bbe290150730c7846ca660b1a53250b4e92df1be502089cc36f5d6` |
+| `expdoe-dk/tests/phase_one/fixtures/four_pattern_v2_cases.json` | `bd13faecc06455fbb526149defb916775ef5f640d9cdabee9d6eb884bc40acd0` |
+
+The rebuilt artifacts, fresh venv, `--no-index` installation with
+`[reference-models]` from pre-provisioned local wheels, `pip check`, and
+outside-checkout public API/fixture smoke were independently audited and
+passed. This fresh gate supersedes the earlier artifact evidence for the
+pre-fix source and fixture; no checkout source import or automatic provider
+discovery was used in the smoke.
+
+Closure does not tag, publish, merge, or implement CLI/adapter tasks. It does
+not validate unsupported numerical consumers, relax precision-certified
+domain restrictions, or establish scientific calibration. The conditional-MAP
+uncertainty, prior sensitivity, non-identifiability and observed zero latent
+truth coverage limitations above remain applicable.
