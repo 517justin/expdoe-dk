@@ -92,7 +92,7 @@ def test_campaign_runs_end_to_end_and_improves():
         .with_random_augment(n=20)
     )
     campaign = Campaign(space, knowledge, seed=42)
-    result = campaign.run(_oracle, n_doe=6, n_iter=8, q=1)
+    result = campaign.run(_oracle, n_doe=6, n_iter=8, q=1, doe_method="sobol")
 
     # Feasibility of every recorded trial.
     assert bool(space.feasibility_mask(result.history_df).all().item())
@@ -108,7 +108,7 @@ def test_campaign_checkpoint_roundtrip(tmp_path):
     warnings.simplefilter("ignore")
     space = _chem_space()
     campaign = Campaign(space, Knowledge(), seed=42)
-    doe = campaign.suggest_doe(n=6, method="lhs_random", n_iterations=200)
+    doe = campaign.suggest_doe(n=6, method="sobol", n_iterations=200)
     y = _oracle(doe)
     campaign.tell(doe, y)
 
