@@ -121,23 +121,24 @@ class _Component(Module):
                      if hasattr(self, f"raw_{branch}") else self.raw_width.new_zeros(())
                      for branch in ("below", "above"))
 
-    def coordinates(self, X):
+    def displacements(self, X):
+        """Decode x-L directly, preserving small steps above large anchors."""
         result = []
         for dim, coordinate in zip(self.payload["dimensions"], self.payload["coordinates"], strict=True):
             model = X[..., dim]
-            lower, upper = coordinate["lower"], coordinate["upper"]
-            physical = (torch.exp(math.log(lower) + model * (math.log(upper) - math.log(lower)))
-                        if coordinate["transform"] == "log" else lower + coordinate["range"] * model)
-            result.append(physical)
+            lower, span = coordinate["lower"], coordinate["range"]
+            displacement = (lower * torch.expm1(model * math.log1p(span / lower))
+                            if coordinate["transform"] == "log" else span * model)
+            result.append(displacement)
         return result
 
     def forward(self, X):
-        x = self.coordinates(X)
+        displacements = self.displacements(X)
         coordinates, parameters = self.payload["coordinates"], self.payload["parameters"]
-        u = [(value - coordinate["lower"]) / coordinate["range"]
-             for value, coordinate in zip(x, coordinates, strict=True)]
+        u = [value / coordinate["range"]
+             for value, coordinate in zip(displacements, coordinates, strict=True)]
         if self.pattern == "saturation":
-            t = x[0] - parameters["origin"]
+            t = displacements[0]  # F1 validation requires origin == lower.
             K = parameters["half_response"] - parameters["origin"]
             d = _BEHAVIOR_SIGN[parameters["direction"]]
             return d * self.magnitude("raw_amplitude") * (t / (K + t))
@@ -208,8 +209,8 @@ class StructuredMean(Mean):
             component = next(c for c in self.components if int(dim) in c.payload["dimensions"])
             index = component.payload["dimensions"].index(int(dim))
             coordinate = component.payload["coordinates"][index]
-            x = component.coordinates(X)[index]
-            value = value + self.response_scale * beta * ((x - coordinate["lower"]) / coordinate["range"])
+            displacement = component.displacements(X)[index]
+            value = value + self.response_scale * beta * (displacement / coordinate["range"])
         if not torch.isfinite(value).all():
             raise _invalid("Structured mean produced nonfinite physical response")
         return value

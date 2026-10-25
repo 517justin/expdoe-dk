@@ -14,10 +14,11 @@ from expdoe_dk.knowledge.artifacts import OptimizationArtifact
 
 
 def case(pattern="saturation", *, factors=None, bounds=((0., 1.), (0., 1.)),
-         log=False, maximize=False, location=0., scale=1., confidence=1., parameters=None):
+         log=False, maximize=False, location=0., scale=1., confidence=1., parameters=None,
+         kinds=("continuous", "continuous")):
     """Compile real F1 artifacts and assign known parameters by their names."""
-    space = Space([Parameter(name, bounds=limit, transform="log" if log else "linear")
-                   for name, limit in zip(("x", "y"), bounds)],
+    space = Space([Parameter(name, bounds=limit, kind=kind, transform="log" if log else "linear")
+                   for name, limit, kind in zip(("x", "y"), bounds, kinds)],
                   objectives="response", maximize=maximize)
     defaults = {
         "saturation": {"direction": "increasing", "origin": bounds[0][0],
@@ -316,3 +317,42 @@ def test_empty_mean_has_only_baseline_and_nonfinite_evaluation_is_typed():
     with pytest.raises(EngineError) as caught:
         mean(torch.tensor([[float("nan"), 0.]], dtype=torch.double))
     assert caught.value.code == ErrorCode.KNOWLEDGE_INVALID
+
+
+@pytest.mark.parametrize("log", [False, True], ids=["linear", "log"])
+@pytest.mark.parametrize("pattern", ["saturation", "threshold", "synergy", "antagonism", "nuisance"])
+def test_large_integer_anchor_relative_values_and_gradients(pattern, log):
+    low = 2**53
+    declaration = "synergy" if pattern == "nuisance" else pattern
+    parameters = ({"half_response": low + 1} if pattern == "saturation" else
+                  {"threshold": low + 1} if pattern == "threshold" else {})
+    space, artifacts, mean = case(declaration, bounds=((low, low + 4), (1., 2.)),
+        kinds=("integer", "continuous"), log=log, parameters=parameters)
+    assert artifacts[0].payload["coordinates"][0]["lower"] == low
+    if pattern == "nuisance":
+        # Isolate the shared free main effect without changing the public API.
+        assign(mean, **{"components.0.raw_amplitude": 1e-100, "nuisance.0": .7})
+    X = inputs(space, [[low, 2.], [low + 1, 2.], [low + 2, 2.], [low + 4, 2.]]).requires_grad_()
+    values = mean.physical(X)
+    assert values[0].item() == pytest.approx(0., abs=1e-15)
+    assert len(set(values.detach().tolist())) == 4
+    if pattern == "threshold":
+        # h=.25, p=.4, q=0: the midpoint value includes the anchored smoothing tail.
+        expected_half = .1 - .02 * (math.log(2.) - math.log1p(math.exp(-5.)))
+        assert values[1].item() == pytest.approx(expected_half)
+        assert values[2].item() == pytest.approx(.1)
+        expected_first, expected_second = .2, -2.
+    else:
+        expected, expected_first, expected_second = {
+            "saturation": ([0., .2, .4 * 2 / 3, .32], .4, -1.6),
+            "synergy": ([0., .1, .2, .4], .4, 0.),
+            "antagonism": ([0., -.1, -.2, -.4], -.4, 0.),
+            "nuisance": ([0., .175, .35, .7], .7, 0.),
+        }[pattern]
+        torch.testing.assert_close(values, torch.tensor(expected, dtype=torch.double), rtol=1e-12, atol=1e-15)
+    first = torch.autograd.grad(values.sum(), X, create_graph=True)[0]
+    second = torch.autograd.grad(first[1, 0], X)[0][1, 0]
+    # log1p(4/low) makes the log-coordinate chain derivative 4 to float64 precision.
+    assert first[1, 0].item() == pytest.approx(expected_first, rel=1e-12)
+    assert second.item() == pytest.approx(expected_second, rel=1e-12, abs=1e-12)
+    assert torch.autograd.gradcheck(mean.physical, (X,), eps=1e-6, atol=1e-8)
