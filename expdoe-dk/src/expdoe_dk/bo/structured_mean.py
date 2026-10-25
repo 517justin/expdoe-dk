@@ -127,8 +127,22 @@ class _Component(Module):
         for dim, coordinate in zip(self.payload["dimensions"], self.payload["coordinates"], strict=True):
             model = X[..., dim]
             lower, span = coordinate["lower"], coordinate["range"]
-            displacement = (lower * torch.expm1(model * math.log1p(span / lower))
-                            if coordinate["transform"] == "log" else span * model)
+            if coordinate["transform"] == "log":
+                ratio = span / lower
+                if math.isfinite(ratio):
+                    displacement = lower * torch.expm1(model * math.log1p(ratio))
+                else:
+                    # Avoid both the overflowing ratio and expm1(log(upper/lower)).
+                    log_lower = math.log(lower)
+                    z = model * (math.log(coordinate["upper"]) - log_lower)
+                    positive = z.clamp_min(0)
+                    # Keep inactive branches finite for autograd; these clamps
+                    # do not clip inputs or the selected displacement formula.
+                    displacement = torch.where(z >= 0,
+                        torch.exp(log_lower + positive) * (-torch.expm1(-positive)),
+                        lower * torch.expm1(z.clamp_max(0)))
+            else:
+                displacement = span * model
             result.append(displacement)
         return result
 

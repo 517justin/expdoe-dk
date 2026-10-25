@@ -356,3 +356,24 @@ def test_large_integer_anchor_relative_values_and_gradients(pattern, log):
     assert first[1, 0].item() == pytest.approx(expected_first, rel=1e-12)
     assert second.item() == pytest.approx(expected_second, rel=1e-12, abs=1e-12)
     assert torch.autograd.gradcheck(mean.physical, (X,), eps=1e-6, atol=1e-8)
+
+
+def test_wide_continuous_log_domain_has_zero_anchor_finite_values_and_gradients():
+    space, artifacts, mean = case("synergy", bounds=((1e-200, 1e200), (1., 2.)), log=True)
+    assert artifacts[0].payload["coordinates"][0]["range"] == 1e200
+    X = inputs(space, [[1e-200, 2.], [1., 2.], [1e200, 2.]]).requires_grad_()
+    values = mean.physical(X)
+    assert values[0].item() == 0.
+    torch.testing.assert_close(values, torch.tensor([0., 4e-201, .4], dtype=torch.double), rtol=1e-12, atol=0.)
+    log_span = 400 * math.log(10.)
+    first = torch.autograd.grad(values.sum(), X, create_graph=True)[0]
+    assert torch.isfinite(first).all()
+    torch.testing.assert_close(first[:, 0], torch.tensor([0., 4e-201 * log_span, .4 * log_span],
+        dtype=torch.double), rtol=1e-12, atol=0.)
+    second = torch.autograd.grad(first[:, 0].sum(), X)[0]
+    assert torch.isfinite(second).all()
+    torch.testing.assert_close(second[:, 0], torch.tensor([0., 4e-201 * log_span**2, .4 * log_span**2],
+        dtype=torch.double), rtol=1e-12, atol=0.)
+    assert torch.autograd.gradcheck(mean.physical, (X,), eps=1e-7, atol=1e-8)
+    mean.physical(X).sum().backward()
+    assert all(p.grad is not None and torch.isfinite(p.grad).all() for p in mean.parameters())
