@@ -89,6 +89,9 @@ def inspect_capabilities(space: Space, knowledge: Knowledge) -> CapabilityReport
                 consumer = ARTIFACT_CONSUMERS.get((category, artifact.kind))
                 entry = {**identity, "artifact_kind": artifact.kind,
                          "category": category}
+                from .structured_coverage import STRUCTURED_KINDS
+                if artifact.kind in STRUCTURED_KINDS:
+                    entry.update(coverage_status="not_evaluated", empirical_evidence="not_evaluated")
                 if consumer is None:
                     unsupported = True
                     diagnostics.append({**entry, "reason": "unsupported_artifact"})
@@ -107,6 +110,23 @@ def inspect_capabilities(space: Space, knowledge: Knowledge) -> CapabilityReport
             unsupported = True
             diagnostics.append({**identity, "reason": "no_numerical_artifact"})
         (blocked if unsupported else applied).append(spec.pattern_id)
+    # Composition is a whole-declaration property, never a per-pattern check.
+    if any(spec.enabled and spec.version == "2.0" and spec.pattern in
+           {"saturation", "threshold", "synergy", "antagonism"} for spec in knowledge.specs):
+        from .structured_coverage import check_structured_composition
+        try:
+            check_structured_composition(space, knowledge.compile(space))
+        except EngineError as error:
+            affected = error.details.get("pattern_ids", [])
+            if not affected:
+                affected = [error.details.get("pattern_id")] if error.details.get("pattern_id") else [s.pattern_id for s in knowledge.specs if s.enabled]
+            for identity in affected:
+                if identity in applied:
+                    applied.remove(identity)
+                if identity not in blocked:
+                    blocked.append(identity)
+            diagnostics.append({"pattern_ids": affected, "reason": error.details.get("reason", "invalid_knowledge"),
+                                "code": error.code.value, "details": error.details})
     return CapabilityReport(tuple(applied), tuple(blocked), tuple(diagnostics))
 
 

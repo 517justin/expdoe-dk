@@ -30,6 +30,13 @@ def _invalid(artifact: OptimizationArtifact, reason: str) -> EngineError:
 
 def validate_runtime_artifact(space: Space, category: str, artifact: OptimizationArtifact) -> None:
     """Validate numerical preconditions beyond a registry's JSON schema."""
+    from .structured_coverage import STRUCTURED_KINDS
+    if artifact.kind in STRUCTURED_KINDS:
+        from .structured_mean import _validate
+        _validate(space, artifact)
+        if category != "mean_components":
+            raise _invalid(artifact, "Structured means require mean_components")
+        return
     payload = artifact.payload
     try:
         def finite(value, *, positive=False):
@@ -258,6 +265,8 @@ def compile_runtime(space: Space, knowledge: Knowledge,
     # Compile the whole declaration set first so certified conflicts preserve
     # their KNOWLEDGE_CONFLICT code, rather than being reduced to an inventory.
     artifacts = knowledge.compile(space, observations)
+    from .structured_coverage import check_structured_composition
+    check_structured_composition(space, artifacts)
     report = inspect_capabilities(space, knowledge)
     if report.blocked:
         raise EngineError(ErrorCode.KNOWLEDGE_INVALID, "Knowledge has no supported runtime route",
