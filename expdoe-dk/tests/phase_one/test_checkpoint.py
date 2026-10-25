@@ -43,6 +43,29 @@ def test_restore_preserves_next_batch(populated_campaign):
     np.testing.assert_array_equal(restored._rng.random(5), populated_campaign._rng.random(5))
 
 
+def test_checkpoint_writer_identifies_all_envelopes_as_051():
+    campaign = Campaign(Space([Parameter("x", bounds=(0., 1.))]), seed=7)
+
+    state = campaign.to_state()
+
+    assert state["engine_version"] == "0.5.1"
+    assert state["space"]["engine_version"] == "0.5.1"
+    assert state["knowledge"]["engine_version"] == "0.5.1"
+
+
+@pytest.mark.parametrize("section", [None, "space", "knowledge"])
+def test_checkpoint_rejects_unknown_future_patch_with_typed_error(section):
+    campaign = Campaign(Space([Parameter("x", bounds=(0., 1.))]), seed=7)
+    state = campaign.to_state()
+    envelope = state if section is None else state[section]
+    envelope["engine_version"] = "0.5.99"
+
+    with pytest.raises(EngineError) as caught:
+        Campaign.from_state(state)
+
+    assert caught.value.code is ErrorCode.CHECKPOINT_INCOMPATIBLE
+
+
 def test_restore_rejects_unknown_schema(populated_campaign):
     state = populated_campaign.to_state()
     state["schema_version"] = "99.0"
@@ -155,6 +178,12 @@ def test_actual_050_schema20_remains_readable(schema_20_fixture):
     assert restored.history_df().y.tolist() == [1.5]
     assert restored.seed == 7
     assert restored.to_state()["schema_version"] == "2.1"
+    assert restored.to_state()["engine_version"] == "0.5.1"
+    assert restored.to_state()["space"]["engine_version"] == "0.5.1"
+    assert restored.to_state()["knowledge"]["engine_version"] == "0.5.1"
+    assert schema_20_fixture["engine_version"] == "0.5.0"
+    assert schema_20_fixture["space"]["engine_version"] == "0.5.0"
+    assert schema_20_fixture["knowledge"]["engine_version"] == "0.5.0"
 
 
 def test_knowledge_050_explicit_compatibility_survives_reader_patch_bump(schema_20_fixture, monkeypatch):

@@ -46,7 +46,7 @@ def test_release_dependency_and_legal_inputs_are_clean():
 
     assert PROHIBITED not in text
     assert REMOVED_DEPENDENCY not in text
-    assert "version = \"0.5.0\"" in text
+    assert "version = \"0.5.1\"" in text
     assert "scipy>=1.12" in text
 
 
@@ -91,5 +91,5 @@ def test_built_wheel_and_sdist_are_clean_and_complete(tmp_path):
                 for name, payload in members.items()
                 if name.endswith("PKG-INFO")
             )
-        assert "Version: 0.5.0" in metadata
+        assert "Version: 0.5.1" in metadata
         assert "Requires-Dist:scipy>=1.12" in metadata.replace(" ", "")

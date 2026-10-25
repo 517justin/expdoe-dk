@@ -129,7 +129,7 @@ def test_space_serialization_round_trips_mixed_domain_types_strictly():
     restored = Space.from_dict(payload)
 
     assert payload["schema_version"] == "1.0"
-    assert payload["engine_version"] == "0.5.0"
+    assert payload["engine_version"] == "0.5.1"
     assert restored.to_dict() == payload
     assert restored.model_to_physical(
         restored.physical_to_model(
@@ -140,7 +140,8 @@ def test_space_serialization_round_trips_mixed_domain_types_strictly():
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("schema_version", "99.0"), ("engine_version", "9.9.9")],
+    [("schema_version", "99.0"), ("engine_version", "9.9.9"),
+     ("engine_version", "0.5.0"), ("engine_version", "0.5.99")],
 )
 def test_space_restoration_rejects_unknown_schema_or_engine_version(field, value):
     """Catches incompatible serialized spaces being accepted as current state."""

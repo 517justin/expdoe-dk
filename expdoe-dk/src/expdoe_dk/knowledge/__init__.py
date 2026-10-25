@@ -41,10 +41,10 @@ from .validators import (
     check_shape_prior_fit,
 )
 
-# Exact, reviewed wire compatibility table. 0.5.0 declarations use Space 1.0,
-# Knowledge 1.0 and Campaign 2.0/2.1. E6 must explicitly add its released patch
-# version here after its release gates; no major/minor or future-version match.
-COMPATIBLE_ENGINE_VERSIONS = frozenset({"0.5.0"})
+# Exact, reviewed wire compatibility table. 0.5.0 and 0.5.1 declarations use
+# Space 1.0, Knowledge 1.0 and Campaign 2.0/2.1. No major/minor or
+# future-version match; standalone Space readers remain exact-current-version.
+COMPATIBLE_ENGINE_VERSIONS = frozenset({"0.5.0", "0.5.1"})
 
 # --------------------------------------------------------------------- #
 # Knowledge item dataclasses (JSON-serializable, no torch tensors stored)

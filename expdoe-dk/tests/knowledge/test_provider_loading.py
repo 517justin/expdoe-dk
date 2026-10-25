@@ -1013,14 +1013,14 @@ def test_v05_publication_exports_delivered_domain_and_knowledge_apis():
     assert "LinearConstraint" in ed.__all__
 
 
-def test_project_and_runtime_versions_are_atomically_published_as_v05():
+def test_project_and_runtime_versions_are_atomically_published_as_v051():
     from importlib.metadata import version
 
     import expdoe_dk as ed
     from expdoe_dk.domain.space import ENGINE_VERSION, SPACE_SCHEMA_VERSION
 
-    assert version("expdoe-dk") == "0.5.0"
-    assert ed.__version__ == "0.5.0"
+    assert version("expdoe-dk") == "0.5.1"
+    assert ed.__version__ == "0.5.1"
     assert ENGINE_VERSION == ed.__version__
     assert SPACE_SCHEMA_VERSION == "1.0"
     assert ed.ENGINE_VERSION == ENGINE_VERSION

@@ -70,6 +70,22 @@ The difference between the two is one sign flip the user can't see. `expdoe-dk` 
 
 ---
 
+## Precision and integer domains
+
+Physical integer parameters, pending/history/checkpoint JSON, and candidate
+identities preserve exact Python integers instead of silently converting them
+to binary64. Fit and evaluation support tested adjacent physical levels above
+`2**53` when the relevant model coordinates are certifiably distinct.
+
+Public `recommend` fails closed with a typed configuration error, not rounded
+suggestions, when a large linear integer domain exceeds the certified
+cardinality/coordinate bound or a large log-integer domain cannot be
+exhaustively precision-certified. If recommendation rejects your integer
+domain, narrow it, use a finite explicit grid, or split the campaign. This is
+not universal arbitrary-precision GP recommendation support.
+
+---
+
 ## HTML report (v0.4)
 
 `Result.to_html(path)` produces a single self-contained HTML file you can attach to a lab notebook or share with collaborators:
