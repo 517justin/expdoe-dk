@@ -7,6 +7,16 @@ import pytest
 from expdoe_dk import ObservationBatch, PendingBatch
 
 
+def test_object_numeric_conditions_keep_exact_scalars_in_both_batch_boundaries():
+    values = [.5, 2**53 + 1]
+    X = pd.DataFrame({"level": pd.Series(values, dtype=object)})
+    observed = ObservationBatch(X, pd.DataFrame({"y": [1., 2.]}))
+    pending = PendingBatch(("a", "b"), X)
+    for frame in (observed.X, observed.successful().X, pending.X):
+        assert frame.level.tolist() == values
+        assert type(frame.level.iloc[1]) is int
+
+
 def test_successful_filters_failed_rows_without_imputation():
     batch = ObservationBatch(
         X=pd.DataFrame({"x": [0.1, 0.2]}),

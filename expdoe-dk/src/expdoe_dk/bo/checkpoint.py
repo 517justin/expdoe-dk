@@ -286,14 +286,13 @@ def batch_to_state(batch):
 
 
 def batch_from_state(raw, space):
-    # Object dtype prevents initial numeric inference; pd.NA also prevents the
-    # ObservationBatch object-column deepcopy/map from inferring float64 for
-    # integers plus missing values. JSON serialization maps pd.NA back to null.
+    # Preserve scalar identities before constructing immutable batches.
+    # JSON serialization maps missing unsuccessful outcomes back to null.
     outcomes = pd.DataFrame(
         [[pd.NA if value is None else value for value in row] for row in raw["Y"]],
         columns=space.objectives, dtype=object,
     )
-    return ObservationBatch(pd.DataFrame(raw["X"], columns=space.param_names),
+    return ObservationBatch(pd.DataFrame(raw["X"], columns=space.param_names, dtype=object),
         outcomes,
         Yvar=None if raw["Yvar"] is None else pd.DataFrame(raw["Yvar"], columns=space.objectives, dtype=float),
         status=None if raw["status"] is None else pd.Series(raw["status"], dtype=object), ids=raw["ids"])
@@ -322,7 +321,7 @@ def restore(state, campaign_class):
         batches = [batch_from_state(batch, space) for batch in state["observations"]]
         raw_pending = state["pending"]
         pending = None if raw_pending is None else PendingBatch(raw_pending["ids"],
-            pd.DataFrame(raw_pending["X"], columns=space.param_names))
+            pd.DataFrame(raw_pending["X"], columns=space.param_names, dtype=object))
         for batch in batches:
             validate_frame(space, batch.X)
         if pending is not None:

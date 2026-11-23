@@ -212,23 +212,29 @@ def test_evaluation_result_standard_dataclass_operations_preserve_snapshot():
     assert copied.to_dict() == evaluation.to_dict()
 
 
-def test_recommendation_result_standard_dataclass_operations_preserve_snapshot():
+@pytest.mark.parametrize("ids", [(), ("formula-A",)])
+def test_recommendation_result_standard_dataclass_operations_preserve_snapshot(ids):
     recommendation = RecommendationResult(
         frame=pd.DataFrame({"material": [["A"]]}),
         predictions=Prediction(np.array([[1.0]]), np.array([[0.1]])),
         diagnostics={"candidate_keys": ["key-A"]},
+        candidate_ids=ids,
     )
     assert is_dataclass(recommendation)
     assert tuple(field.name for field in fields(recommendation)) == (
-        "frame", "predictions", "diagnostics",
+        "frame", "predictions", "diagnostics", "candidate_ids",
     )
     raw = asdict(recommendation)
     assert raw["frame"].to_dict(orient="records") == [{"material": ["A"]}]
     np.testing.assert_array_equal(raw["predictions"]["mean"], [[1.0]])
     assert raw["diagnostics"] == {"candidate_keys": ["key-A"]}
+    assert raw["candidate_ids"] == ids
+    if not ids:
+        assert "candidate_ids" not in recommendation.to_dict()
     copied = replace(recommendation)
     copied.frame.at[0, "material"].append("B")
     copied.diagnostics["candidate_keys"].append("key-B")
+    assert copied.candidate_ids == ids
     assert copied.to_dict() == recommendation.to_dict()
 
 

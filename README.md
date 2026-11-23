@@ -146,6 +146,17 @@ assert restored.to_dict() == payload
 Observer and laboratory-device integration is future external work and is not
 implemented in this repository.
 
+## Single-objective workflows
+
+- [Fixed candidate catalogs](./docs/candidate-catalog.md): recommend original
+  formulas with stable IDs, preserving constraints and measured/pending exclusions.
+- [Measurement lifecycle example](./docs/measurement-workflow.md): partial returns,
+  failed or cancelled trials, repeated measurements and state restoration.
+- [Log-response guide](./docs/log-objectives.md): response units, uncertainty and
+  optimization direction (guides are in Traditional Chinese).
+- [Scope and acceptance](./docs/textbook-improvements.md): local verification and
+  the original roadmap for multi-objective recommendation, which remains deferred.
+
 ## Development
 
 ```bash

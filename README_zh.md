@@ -130,6 +130,13 @@ assert restored.to_dict() == payload
 
 Observer 與實驗室 device integration 是未來的外部工作，本 repository 尚未實作。
 
+## 單一目標實驗流程
+
+- [既有候選清單推薦](./docs/candidate-catalog.md)：保留原始配方和穩定 ID，沿用限制與已測／待測排除。
+- [量測流程範例](./docs/measurement-workflow.md)：部分回填、失敗、取消、重複量測及狀態還原。
+- [對數反應值指南](./docs/log-objectives.md)：反應單位、不確定性與最佳化方向。
+- [範圍與驗收](./docs/textbook-improvements.md)：本機驗證範圍；多目標推薦仍依原實裝計畫另行處理。
+
 ## 開發
 
 ```bash

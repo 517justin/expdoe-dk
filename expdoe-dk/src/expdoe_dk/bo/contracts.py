@@ -24,7 +24,9 @@ def _clone_frame(frame: pd.DataFrame) -> pd.DataFrame:
     cloned = frame.copy(deep=True).reset_index(drop=True)
     for column in cloned.columns:
         if cloned[column].dtype == object:
-            cloned[column] = cloned[column].map(deepcopy)
+            cloned[column] = pd.Series(
+                [deepcopy(value) for value in cloned[column]], index=cloned.index, dtype=object,
+            )
     return cloned
 
 
@@ -125,6 +127,7 @@ class RecommendationResult:
     frame: pd.DataFrame
     predictions: Prediction
     diagnostics: dict
+    candidate_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         frame = object.__getattribute__(self, "frame")
@@ -136,6 +139,14 @@ class RecommendationResult:
             raise TypeError("RecommendationResult.predictions must be a Prediction")
         if len(frame) != predictions.mean.shape[0]:
             raise ValueError("Recommendation rows and prediction rows differ")
+        ids = object.__getattribute__(self, "candidate_ids")
+        if isinstance(ids, (str, bytes)):
+            raise ValueError("candidate_ids must be a sequence, not a string")
+        ids = tuple(ids)
+        if ids and (len(ids) != len(frame) or any(not isinstance(value, str) or not value for value in ids)
+                    or len(set(ids)) != len(ids)):
+            raise ValueError("candidate_ids must uniquely identify every recommendation row")
+        object.__setattr__(self, "candidate_ids", ids)
         object.__setattr__(self, "frame", _clone_frame(frame))
         object.__setattr__(self, "diagnostics", _json_object(diagnostics))
 
@@ -154,6 +165,7 @@ class RecommendationResult:
             "frame": frame.to_dict(orient="records"),
             "predictions": self.predictions.to_dict(),
             "diagnostics": diagnostics,
+            **({"candidate_ids": list(self.candidate_ids)} if self.candidate_ids else {}),
         })
 
 

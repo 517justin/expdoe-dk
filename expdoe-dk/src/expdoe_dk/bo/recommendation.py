@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import math
 import warnings
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -26,7 +27,11 @@ from ..doe.design import MAX_ENUMERATION_ROWS, MAX_POOL_ROWS, MAX_REQUESTED_ROWS
 from ..errors import EngineError, ErrorCode
 from ..knowledge import Knowledge
 from .contracts import RecommendationResult
+from .candidates import prepare_catalog
 from .knowledge_runtime import compile_runtime
+from .linear_search import (
+    ContinuousSubspace, compile_linear_search, generate_linear_candidates, linear_seed_pool,
+)
 from .surrogates import FittedSurrogate, fit_surrogate
 
 _MINIMUM_FEASIBILITY = .95
@@ -149,13 +154,17 @@ def _make_acquisition(space, fitted: FittedSurrogate, baseline, pending, runtime
     )
 
 
-def _search_pool(space, q, seed):
+def _search_pool(space, q, seed, linear_rows=()):
     finite = [i for i, parameter in enumerate(space.params) if parameter.kind != "continuous"]
     continuous = [i for i, parameter in enumerate(space.params) if parameter.kind == "continuous"]
     cardinality = math.prod(space.params[i].cardinality for i in finite)
     bounds = torch.tensor([parameter.model_bounds for parameter in space.params], dtype=torch.double).T
     bounded = cardinality > MAX_ENUMERATION_ROWS
     if bounded:
+        if linear_rows:
+            raise _invalid("Linear equality search exceeds the finite enumeration limit; "
+                           "provide a feasible candidate catalog with candidates= instead",
+                           finite_combinations=cardinality, limit=MAX_ENUMERATION_ROWS)
         size = min(MAX_POOL_ROWS, max(2048, q * 32))
         unit = torch.quasirandom.SobolEngine(space.n_dims, scramble=True, seed=seed).draw(size).double()
         coordinates = bounds[0] + unit * (bounds[1] - bounds[0])
@@ -171,6 +180,16 @@ def _search_pool(space, q, seed):
         levels.append(parameter.encode(physical))
     combinations = tuple(dict(zip(finite, values)) for values in itertools.product(*levels))
     samples = max(4, min(128, 512 // max(1, cardinality))) if continuous else 1
+    if linear_rows:
+        samples = min(max(samples, q + 2), MAX_POOL_ROWS // cardinality)
+        pool, subspaces, feasible_count = linear_seed_pool(
+            space, bounds, continuous, combinations, linear_rows, samples, seed,
+        )
+        return pool, subspaces, continuous, {
+            "search_strategy": "enumerated_mixed_linear_polytope",
+            "finite_combinations": cardinality, "linear_subspaces_feasible": feasible_count,
+            "degradation_reason": None, "pool_size": len(pool),
+        }
     samples = min(samples, MAX_POOL_ROWS // max(1, cardinality))
     unit = torch.quasirandom.SobolEngine(space.n_dims, scramble=True, seed=seed).draw(samples).double()
     initial = bounds[0] + unit * (bounds[1] - bounds[0])
@@ -181,7 +200,7 @@ def _search_pool(space, q, seed):
             values[:, index] = value
         frames.append(space.model_to_physical(values))
     pool = pd.concat(frames, ignore_index=True)
-    return pool, combinations, continuous, {
+    return pool, tuple(ContinuousSubspace(fixed) for fixed in combinations) if continuous else (), continuous, {
         "search_strategy": "enumerated_mixed_multistart" if continuous else "finite_enumeration",
         "finite_combinations": cardinality, "degradation_reason": None, "pool_size": len(pool),
     }
@@ -212,7 +231,9 @@ def _score(acquisition, coordinates):
 
 
 def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowledge | None = None,
-              pending: PendingBatch | None = None, q: int = 1, seed: int = 0) -> RecommendationResult:
+              pending: PendingBatch | None = None, q: int = 1, seed: int = 0,
+              candidates: pd.DataFrame | None = None,
+              candidate_ids: Sequence[str] | None = None) -> RecommendationResult:
     """Return a complete, unique GP-selected batch, or raise a typed error.
 
     Requires three successful observations. Safety additionally requires an
@@ -220,6 +241,12 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
     under the fitted latent GP; this is model-based feasibility, NOT guaranteed
     safety. Greedy conditional qLogNEI uses the pending API for both externally
     pending and already-selected batch points. All returned values are physical.
+
+    With ``candidates``, score only those original rows and return aligned
+    ``candidate_ids``. IDs are unique non-empty strings, separate from trial
+    IDs and response columns. Duplicate physical conditions are rejected.
+    All observed conditions (including failures) and pending conditions remain
+    excluded. Sorting by stable ID makes selection independent of catalog order.
     """
     if not isinstance(space, Space) or not isinstance(observations, ObservationBatch):
         raise _invalid("Expected Space and ObservationBatch")
@@ -231,13 +258,22 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
         raise _invalid("q must be a positive bounded integer and seed a non-negative integer")
     if space.n_objectives != 1:
         raise EngineError(ErrorCode.ACQUISITION_INCOMPATIBLE, "Recommendation supports one objective")
+    if candidates is None and candidate_ids is not None:
+        raise _invalid("candidate_ids requires candidates")
     _check_precision(space)
+    catalog, catalog_ids = None, {}
     _validate_frame(space, observations.X, "observations")
     if pending is not None:
         _validate_frame(space, pending.X, "pending")
+    if candidates is not None:
+        catalog, catalog_ids = prepare_catalog(
+            space, candidates, candidate_ids,
+            references=(observations.X,) + (() if pending is None else (pending.X,)),
+        )
     knowledge = knowledge if knowledge is not None else Knowledge()
     runtime = compile_runtime(space, knowledge, observations)
     design_space = space.with_constraints(*runtime["parameter_constraints"])
+    linear_rows = compile_linear_search(design_space) if catalog is None else ()
     successful = observations.successful()
     safety_bounds = _outcome_bounds(space) if space.outcome_constraints else None
     safe_baseline_count = None
@@ -263,23 +299,44 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(seed)
             acquisition = _make_acquisition(space, fitted, successful.X, original_pending, runtime, seed)
-            pool, combinations, continuous, search = _search_pool(space, q, seed)
+            if catalog is None:
+                pool, subspaces, continuous, search = _search_pool(space, q, seed, linear_rows)
+            else:
+                pool, subspaces, continuous = catalog, (), ()
+                search = {"search_strategy": "provided_catalog", "pool_size": len(catalog),
+                          "degradation_reason": None, "catalog_order": "stable_id",
+                          "duplicate_condition_policy": "reject"}
             pool = _filter(design_space, pool, excluded, fitted, safety_bounds)
+            if catalog is not None and len(pool) < q:
+                raise EngineError(ErrorCode.NO_FEASIBLE_CANDIDATE,
+                    "Candidate catalog cannot supply a complete unique feasible batch",
+                    details={"requested": q, "available": len(pool), **search})
             chosen = []
             optimized_count = 0
             bounds = torch.tensor([parameter.model_bounds for parameter in space.params], dtype=torch.double).T
             for _ in range(q):
                 current = pool
-                if continuous and combinations:
+                if continuous and subspaces:
                     # Optimize each declared finite subspace; keep feasible seeded
                     # starts in the scored candidate set even when an optimum is
                     # rejected. Numerical failure never switches search policy.
                     optimized = []
-                    for fixed in combinations:
+                    for subspace in subspaces:
+                        optimizer_kwargs = {"num_restarts": 2, "raw_samples": 32}
+                        if subspace.seeds is not None:
+                            starts = subspace.seeds
+                            best = _score(acquisition, starts).topk(min(len(starts), 2)).indices
+                            optimizer_kwargs = {
+                                "num_restarts": len(best), "raw_samples": None,
+                                "batch_initial_conditions": starts[best].unsqueeze(-2),
+                                "equality_constraints": list(subspace.equalities) or None,
+                                "inequality_constraints": list(subspace.inequalities) or None,
+                                "gen_candidates": generate_linear_candidates,
+                            }
                         with warnings.catch_warnings():
                             warnings.simplefilter("error", OptimizationWarning)
                             candidate, value = optimize_acqf(acquisition, bounds=bounds, q=1,
-                                num_restarts=2, raw_samples=32, fixed_features=fixed,
+                                fixed_features=subspace.fixed, **optimizer_kwargs,
                                 options={"maxiter": 80, "batch_limit": 2},
                                 retry_on_optimization_warning=False)
                         if not torch.isfinite(value).all():
@@ -341,7 +398,15 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
             "observed_feasible_baseline_count": safe_baseline_count,
             "probabilities": None if probabilities is None else probabilities.tolist()},
     }
-    return RecommendationResult(frame, predictions, diagnostics)
+    ids = tuple(catalog_ids[key] for key in diagnostics["candidate_keys"]) if catalog is not None else ()
+    if catalog is not None:
+        diagnostics["strategy_explanation"] = (
+            "Greedy conditional joint MC log noisy expected improvement scores only original catalog rows. "
+            "Stable-ID ordering resolves exact score ties; IDs and physical values are returned together. "
+            "Observed and pending conditions are excluded, with pending points conditioned in the acquisition. "
+            "The existing knowledge, physical objective utility, hard constraints and model-based outcome "
+            "safety checks apply. No continuous optimization, Cartesian expansion or random fallback is used.")
+    return RecommendationResult(frame, predictions, diagnostics, candidate_ids=ids)
 
 
 __all__ = ["recommend"]

@@ -24,7 +24,9 @@ def _clone_frame(value: pd.DataFrame, name: str) -> pd.DataFrame:
     cloned = value.copy(deep=True).reset_index(drop=True)
     for column in cloned.columns:
         if cloned[column].dtype == object:
-            cloned[column] = cloned[column].map(deepcopy)
+            cloned[column] = pd.Series(
+                [deepcopy(value) for value in cloned[column]], index=cloned.index, dtype=object,
+            )
     return cloned
 
 
