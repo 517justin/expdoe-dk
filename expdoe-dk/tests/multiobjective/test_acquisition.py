@@ -436,3 +436,37 @@ def test_equal_preferences_allow_explicit_hv_but_auto_still_uses_nparego(real_mo
     assert auto["acquisition_kind"] == "q_log_nparego"
     assert auto["acquisition_reason"] == "preference_override"
     assert config.to_dict() == snapshot
+
+
+def test_ehvi_accepts_object_dtype_successes_with_failed_missing_outcomes():
+    space, _ = data()
+    batch = ObservationBatch(
+        pd.DataFrame({"x": [0., 1., 2., 3.]}),
+        pd.DataFrame({"y1": [2., 3., 4., None], "y0": [1., 2., 3., None]}, dtype=object),
+        status=pd.Series(["success", "success", "success", "failed"]),
+        ids=("a", "b", "c", "failed"))
+    original_X, original_Y, original_status = batch.X, batch.Y, batch.status
+    assert all(dtype == object for dtype in batch.successful().Y.dtypes)
+    config = MultiObjectiveConfig(noise_mode="noiseless")
+    runtime = compile_runtime(space, Knowledge(), batch)
+    geometry = resolve_geometry(space, batch, runtime, config)
+    geometry_snapshot = geometry.to_dict()
+    model_batch = ObservationBatch(batch.X, batch.Y,
+        Yvar=pd.DataFrame(0., index=batch.Y.index, columns=batch.Y.columns),
+        status=batch.status, ids=batch.ids)
+    fitted = fit_surrogate(space, model_batch, seed=11)
+
+    acq, diagnostic = api().build_multiobjective_acquisition(
+        space, fitted, batch, None, runtime, config, geometry, seed=23, slot=0)
+    assert diagnostic["acquisition_kind"] == "q_log_ehvi"
+    X = torch.tensor([[[.3]]], dtype=torch.double, requires_grad=True)
+    value = acq(X)
+    assert torch.isfinite(value).all()
+    value.sum().backward()
+    assert X.grad is not None and torch.isfinite(X.grad).all()
+    pd.testing.assert_frame_equal(batch.X, original_X)
+    pd.testing.assert_frame_equal(batch.Y, original_Y)
+    pd.testing.assert_series_equal(batch.status, original_status)
+    assert batch.ids == ("a", "b", "c", "failed") and batch.Yvar is None
+    assert geometry.to_dict() == geometry_snapshot
+    assert resolve_geometry(space, batch, runtime, config).to_dict() == geometry_snapshot

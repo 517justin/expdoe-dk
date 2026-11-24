@@ -188,7 +188,7 @@ def build_multiobjective_acquisition(space: Space, fitted, observations: Observa
             partition_cls = _capability("botorch.utils.multi_objective.box_decompositions.non_dominated",
                                         "NondominatedPartitioning")
             feasible = _feasible_baseline(space, successful, runtime)
-            physical = baseline.new_tensor(successful.Y.loc[:, space.objectives].to_numpy(copy=True))
+            physical = baseline.new_tensor(successful.Y.loc[:, space.objectives].to_numpy(dtype=float, copy=True))
             kwargs["partitioning"] = _construct(partition_cls,
                 ref_point=baseline.new_tensor(geometry.acquisition_reference), Y=utilities(physical)[feasible])
         else:
