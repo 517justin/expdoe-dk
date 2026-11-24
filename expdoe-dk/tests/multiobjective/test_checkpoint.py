@@ -292,11 +292,12 @@ def test_empirical_warning_identity_and_diagnostics_roundtrip(monkeypatch):
 
 @pytest.mark.parametrize("field", ["X", "Y", "Yvar"])
 def test_rejects_lossy_column_dtype_conversion(field):
-    raw = json.loads((Path(__file__).parents[1] / "fixtures" / "multiobjective_checkpoint_2_2.json").read_text())
+    raw = json.loads((Path(__file__).parents[1] / "fixtures" / "multiobjective_checkpoint_2_2_060.json").read_text())
+    assert validate_state(raw) == raw
     if field == "Y":
         raw["observations"][0][field]["data"][0][0] = .1
     raw["observations"][0][field]["dtypes"][0] = "float32"
-    with pytest.raises(EngineError) as caught:
+    with pytest.raises(EngineError, match="Column dtype changes checkpoint values or missing markers") as caught:
         validate_state(raw)
     assert caught.value.code is ErrorCode.CHECKPOINT_INCOMPATIBLE
 
