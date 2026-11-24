@@ -1,7 +1,7 @@
 # Monotone v2: soft directional knowledge with legacy compatibility
 
 Date: 2026-11-24
-Status: design proposal for approval; direction selected, implementation NOT authorized by this document yet.
+Status: approved for implementation by the user's 2026-11-24 instruction to proceed, following selection of versioned new knowledge with legacy compatibility.
 Builder check: independent planning review completed; no material unanswered planning questions identified. This is not implementation, mathematical proof, or acceptance evidence.
 Base: codex/multiobjective-v060 at 46a0b376dbc058867a60392789edda6a29f8cfb5.
 
@@ -394,7 +394,7 @@ backward-compatibility rule, or quality gate without a documented design revisio
 ## 12. Approval checkpoint
 
 User has selected versioned new knowledge with legacy compatibility.
-This full proposal still requires approval, particularly:
+The user approved proceeding with this full proposal, including:
 
 1. Explicit opt-in v2 while old with_monotone stays v1.
 2. Two-stage soft directional Laplace approximation and confidence semantics.
