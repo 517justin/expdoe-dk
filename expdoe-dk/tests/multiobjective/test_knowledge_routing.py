@@ -190,7 +190,8 @@ def test_tradeoff_payload_is_strict(space, payload):
 
 
 @pytest.mark.parametrize("kind", ["priority", "target_range", "prior", "structured", "safety"])
-def test_whole_declaration_conflicts_keep_original_ids(space, kind):
+@pytest.mark.parametrize("bad_scope", [None, (), ("unknown",)])
+def test_whole_declaration_conflicts_keep_original_ids(space, kind, bad_scope):
     if kind == "priority":
         specs = [spec("objective_priority", identity=f"source-{i}", objectives=("yield", "cost"),
                       factors=(), parameters={"weights": weights}) for i, weights in enumerate(([1., 2.], [2., 1.]))]
@@ -216,7 +217,22 @@ def test_whole_declaration_conflicts_keep_original_ids(space, kind):
         compile_runtime(space, knowledge, None)
     assert caught.value.code == ErrorCode.KNOWLEDGE_CONFLICT
     assert all(identity in str(caught.value.details) for identity in ("source-0", "source-1"))
-    assert set(inspect_capabilities(space, knowledge).blocked) == {"source-0", "source-1"}
+    expected_blocked = {"source-0", "source-1"}
+    if bad_scope is not None:
+        knowledge.add(spec(identity="bad-scope", objectives=bad_scope))
+        expected_blocked.add("bad-scope")
+    knowledge.add(spec("gp_prior", identity="unrelated-valid", factors=(),
+                       objectives=("cost",), parameters={"lengthscale": "weak"}))
+    report = inspect_capabilities(space, knowledge)
+    assert set(report.blocked) == expected_blocked
+    assert report.applied == ("unrelated-valid",)
+    conflicts = [d for d in report.diagnostics if d.get("code") == ErrorCode.KNOWLEDGE_CONFLICT.value]
+    assert conflicts
+    assert all(identity in str(conflicts) for identity in ("source-0", "source-1"))
+    if bad_scope is not None:
+        reason = "unknown_objective_scope" if bad_scope else "missing_objective_scope"
+        assert any(d.get("pattern_id") == "bad-scope" and d.get("reason") == reason
+                   for d in report.diagnostics)
 
 
 def test_same_normalized_preferences_retain_both_sources(space):

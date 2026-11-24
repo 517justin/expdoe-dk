@@ -141,6 +141,7 @@ def _inspect_multiobjective(space, knowledge):
     from .structured_coverage import STRUCTURED_KINDS
 
     applied, blocked, diagnostics = [], [], []
+    routable_specs = []
 
     def record_error(error, fallback):
         affected = error.details.get("pattern_ids", error.details.get("source_pattern_ids", []))
@@ -159,6 +160,7 @@ def _inspect_multiobjective(space, knowledge):
             continue
         try:
             routes = _knowledge_routes(space, None, _subset(knowledge, (spec,)))
+            routable_specs.append(spec)
             for route in routes:
                 artifacts = _compile_route(route)
                 for category in ARTIFACT_CATEGORIES:
@@ -175,16 +177,12 @@ def _inspect_multiobjective(space, knowledge):
         else:
             applied.append(spec.pattern_id)
     # Per-pattern success cannot certify composition, prior or global conflicts.
-    try:
-        routes = _knowledge_routes(space, None, knowledge)
-    except EngineError:
-        pass  # The per-pattern pass already recorded malformed scopes.
-    else:
-        for route in routes:
-            try:
-                _compile_route(route)
-            except EngineError as error:
-                record_error(error, [spec.pattern_id for spec in route.knowledge.specs])
+    # Scope errors must not prevent checking the remaining declarations together.
+    for route in _knowledge_routes(space, None, _subset(knowledge, routable_specs)):
+        try:
+            _compile_route(route)
+        except EngineError as error:
+            record_error(error, [spec.pattern_id for spec in route.knowledge.specs])
     return CapabilityReport(tuple(applied), tuple(blocked), tuple(diagnostics))
 
 
