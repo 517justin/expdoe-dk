@@ -146,7 +146,7 @@ Observer 與實驗室 device integration 是未來的外部工作，本 reposito
 - [既有候選清單推薦](./docs/candidate-catalog.md)：保留原始配方和穩定 ID，沿用限制與已測／待測排除。
 - [量測流程範例](./docs/measurement-workflow.md)：部分回填、失敗、取消、重複量測及狀態還原。
 - [對數反應值指南](./docs/log-objectives.md)：反應單位、不確定性與最佳化方向。
-- [範圍與驗收](./docs/textbook-improvements.md)：本機驗證、多目標後續實作，以及尚未驗收的教材／Colab 流程。
+- [範圍與驗收](./docs/textbook-improvements.md)：本機驗證、已實作的多目標流程，以及尚未驗收的教材／Colab 流程。
 
 ## 開發
 

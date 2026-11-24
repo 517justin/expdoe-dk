@@ -168,7 +168,7 @@ implemented in this repository.
 - [Log-response guide](./docs/log-objectives.md): response units, uncertainty and
   optimization direction (guides are in Traditional Chinese).
 - [Scope and acceptance](./docs/textbook-improvements.md): local verification,
-  multiobjective follow-up and unverified textbook/Colab workflows.
+  implemented multiobjective workflows and unverified textbook/Colab workflows.
 
 ## Development
 

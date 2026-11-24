@@ -1,8 +1,10 @@
 # Multiobjective Acceptance
 
-**Approved protocol v2 passed both complete pre-release suites and matrices.**
-The 0.6.0 candidate's metadata, post-bump suites and fresh wheel are the next
-verification stage; this paragraph does not claim they have already passed.
+**0.6.0 passed the approved protocol and complete current/lower slow suites.**
+Final production source is clean `412fd2d4ff89ec836f6889bdfebe489dff532f1a`;
+fresh installed-wheel, metadata, examples and artifact checks also passed.
+The later checkpoint-test correction and documentation-only changes are verified
+separately below; they are not misattributed to the full-suite source revision.
 Protocol `fixed-catalog-monotone`, version `2.0`, reports four methods:
 `random`, `plain_gp`, legacy `knowledge_gp`, and `knowledge_gp_v2`.
 Only the latter adds `monotone@2.0`, increasing on gain, confidence .8,
@@ -18,7 +20,7 @@ This protocol does not claim exact zero fitted noise.
 
 ### Approved V2 Results
 
-Source `226379f3bef0e2ab1bbf41468d7fad37a4f0944e`, clean at both matrix starts.
+Pre-release source `226379f3bef0e2ab1bbf41468d7fad37a4f0944e`, clean at both matrix starts.
 Each complete `pytest --run-slow` suite includes the fixed 20-row matrix; no
 duplicate standalone matrix was run on the same source. Both stacks passed
 all three quality gates and every row's replay/restart, feasibility 1.0,
@@ -63,6 +65,69 @@ V2 is opt-in and can be slow. Bounded source-adapter forward/backward observatio
 reached 131-133s excluding setup, not full-recommendation throughput; see
 [numerical scope and cost](../../docs/multiobjective.md#numerical-scope-and-cost).
 
+### Final 0.6.0 Verification
+
+Both complete post-bump suites ran on clean source
+`412fd2d4ff89ec836f6889bdfebe489dff532f1a`, with installed metadata 0.6.0:
+
+| Stack | Passed | Skipped | Warnings | Full suite | Matrix including replay/restart |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Current | 2592 | 0 | 188 | 1591.86s | 1071.71s |
+| Lower | 2591 | 1 | 200 | 2016.40s | 1258.85s |
+
+All nine slow cases ran, including packaging; the only lower skip is unavailable
+Torch uint64. Timings overlap across stacks and are not isolated benchmarks.
+Both 20-row matrices reproduce the table above exactly, with the same locked
+parameters, all three release gates passing and legacy v1 failing separately.
+Controller-owned independent audits recomputed physical HV and normalized
+regrets, passing with maximum discrepancy 2.64e-16. Each matrix separately
+captured 600 fixed-noise-clamp warnings. Suite warnings remain visible: jitter,
+fixed-noise clamps, negative-variance warnings, existing overflow and dependency
+deprecations. A passing suite does not mean warning-free numerical execution.
+
+Final logs and retained matrices are under
+`.superpowers/sdd/2026-11-24-monotone-v2-implementation/`:
+`task-6-final-{current,floor}-412fd2d.log` and
+`task-6-final-{current,floor}-412fd2d/test_full_fixed_seed_matrix0/{matrix.jsonl,summary.json}`.
+Audit files are `task-6-final-{current,floor}-412fd2d-independent-audit.json`.
+
+Fresh wheel and sdist built from that same clean source passed legal/dependency
+and source-content checks. Offline noneditable wheel installation was checked
+outside source with PYTHONPATH removed: actual site-packages import, matching
+package/metadata/engine 0.6.0, exact artifact hash, historical checkpoint/Space
+reads, rejected unreviewed writers, and examples 03/04/05 all passed. The same
+examples passed on both refreshed editables; all three pip checks passed. The
+legacy API overlay passed 170 capability tests, not a supported Ax resolution.
+
+Artifacts in `task-6-artifacts-412fd2d/`:
+- `expdoe_dk-0.6.0-py3-none-any.whl`, SHA256
+  `c984742fd3258046db67cad0dd091bf52719ea51b60fea5302d5b6435e50a78a`.
+- `expdoe_dk-0.6.0.tar.gz`, SHA256
+  `871b994331251eaaf89d64ad1ac5781a901d9b5b92f41ee73d40a4676daac7b5`.
+
+Review identified a masked dtype-regression test: its old schema-2.2 fixture
+failed at the writer check instead of conversion. After full gates completed,
+the test was corrected to validate the separate 0.6.0 fixture before corruption and assert
+the intended conversion error; historical fixtures remain unchanged. The new
+assertion first failed for all three X/Y/Yvar cases, then the entire checkpoint
+test file passed on current and lower (72 each). This test-only correction and
+the final prose delta do not change the production package or built wheel;
+their focused verification is composed with, not called a rerun of, the full
+412fd2d gates. No tag, push or publication was performed.
+
+### Preserved Post-Bump Compatibility Failure
+
+The earlier 0.6.0 candidate `93a920aef20db1529ddb557180250e9f0ef6d9de` passed
+both matrices and their independent audits, but each full suite failed 40
+historical 0.5.1 Space reads: current 2549 passed/40 failed/105 warnings;
+lower 2548 passed/40 failed/1 skipped/122 warnings. Those are not full passes.
+The controller-approved correction accepts exactly standalone Space writers
+0.5.1 and 0.6.0, keeps 0.5.0 migration Campaign-owned, rejects unreviewed/future
+versions, and leaves every historical fixture unchanged. Full corrected-source
+results are above; the original `task-6-post-{current,floor}-v060` logs/matrices
+and `task-6-artifacts-93a920a` archives remain preserved, not reused as final
+artifact acceptance. No optimizer, quality, noise or numerical policy changed.
+
 ### Historical V2 Execution Hold
 
 Both fixed matrices started from clean source
@@ -97,7 +162,7 @@ sequential experiment, not general multiobjective cross-validation. Package and
 engine versions remained 0.5.1 at that revision. No successful acceptance is
 attributed to this historical v1 run.
 
-## Frozen Protocol
+### Historical Frozen Protocol
 
 Catalog: `x=i/100`, i=0..100. Maximize `[x, 1-x]`, hard parameter limit `x<=0.8`.
 The 81 feasible recipes have exact raw-utility HV **0.476**, reference `[0,0]`.
@@ -125,7 +190,7 @@ checkpoint. Both complete measurement frames and every recommended batch must
 match exactly. Runtime includes replay and restart verification; the 22-row
 budget counts the primary trajectory only, not duplicated verification work.
 
-## Results
+### Historical Results
 
 Source commit `3aae0f583d9a8dfa20cd09e5e2d6f8915fc8d4c8`, clean tracked/untracked
 state at both standalone matrix starts. Initial Task10 base is
@@ -169,7 +234,7 @@ diagnostic evidence, not an approved core-model change or a universal explanatio
 of knowledge performance. Acceptance parameters and production models were not
 modified to improve these numbers.
 
-## Environments and Warnings
+### Historical Environments and Warnings
 
 | Dependency | Current | Resolver-clean lower |
 | --- | --- | --- |
@@ -242,4 +307,6 @@ The full slow suite exercises the approved v2 quality gate. Fast tests
 prove oracle/geometry and actual 2/3/4/5/6-objective routing with named-column,
 catalog, pending, noise and hard-constraint checks; they do not replace quality
 acceptance. Logs and full JSONL evidence for this local run are in the ignored
-Task10 SDD handoff directory; exact commands and results are in task-10-report.md.
+Task 6 SDD directory named above; commands, source provenance, failures and
+results are in task-6-report.md. Historical v1 evidence remains in the original
+Task10 handoff directory and task-10-report.md.

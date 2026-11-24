@@ -20,9 +20,9 @@
 - 其他 expression／知識限制仍會在物理單位檢查，但此補強不是任意非線性等式求解器。有限的取樣與多起點搜尋不保證找到所有可行配方或全域最佳解。
 - 無法組成完整且不重複的批次就報錯；數值求解失敗也不以隨機配方替代。這是當時單目標補強的紀錄；現行多目標支援邊界見[多目標指南](multiobjective.md)。
 
-## 0.6.0 多目標後續實作
+## 0.6.0 多目標實作與驗收
 
-原規劃的具名多目標推薦、qLogEHVI／qLogNEHVI／qLogNParEGO 式路由、實測 Pareto／固定尺度超體積報告、schema 2.2 checkpoint 已實作。固定五種子的 current／lower 品質協定與完整 slow suites 均通過；此案例的 monotone v2 與 Plain 成績相同，不能宣稱優於 Plain。歷史 v1 失敗與後來的數值失敗證據仍保留，詳見[逐方法結果](../experiments/multiobjective_validation/README.md)。
+原規劃的具名多目標推薦、qLogEHVI／qLogNEHVI／qLogNParEGO 式路由、實測 Pareto／固定尺度超體積報告、schema 2.2 checkpoint 已實作。0.6.0 原始碼 `412fd2d` 在乾淨工作樹通過固定五種子的 current／lower 品質協定與完整 slow suites：current 2592 passed；lower 2591 passed、1 項 Torch uint64 能力限制跳過。發布前 `226379f` 的驗收與 `93a920a` 的版本相容性失敗另行保留，不混作最終通過證據。後續只有測試與文件修正；checkpoint 測試檔另於兩個環境各通過 72 項，套件程式碼及已驗證 wheel 仍對應 `412fd2d`。此案例的 monotone v2 與 Plain 成績相同，不能宣稱優於 Plain。歷史 v1 與數值失敗證據仍保留，詳見[逐方法結果](../experiments/multiobjective_validation/README.md)。
 
 `with_monotone` 仍為 v1，不自動升級；v2 以柔性方向證據調整已擬合 GP，不捏造量測值。v2 計算可能很慢，不保證互動速度；已觀察的 source-adapter 耗時並非完整推薦流程基準。最低 Python 版本已依 Ax 相依條件修正為 3.11。教材原始資料、Colab、其他作業系統與 GPU 仍未驗收。
 
