@@ -130,6 +130,45 @@ def test_boundary_affine_hull_keeps_unseen_free_coordinate(face):
     np.testing.assert_allclose(result.frame[["a", "b"]], 0., atol=1e-9, rtol=0)
 
 
+@pytest.mark.parametrize("face", ["bounds", "inequalities"])
+def test_certified_fixed_axes_are_removed_from_optimizer_not_free_coordinates(face):
+    from expdoe_dk.bo.linear_search import compile_linear_search
+    from expdoe_dk.bo.recommendation import _search_pool
+
+    lower = 0. if face == "bounds" else -1.
+    constraints = [LinearConstraint("tight", {"a": 1., "b": 1.}, "==", 0.),
+                   LinearConstraint("free_line", {"c": 1., "d": 1.}, "==", 1.)]
+    if face == "inequalities":
+        constraints += [LinearConstraint("a_nonnegative", {"a": 1.}, ">=", 0.),
+                        LinearConstraint("b_nonnegative", {"b": 1.}, ">=", 0.)]
+    space = Space([Parameter("a", bounds=(lower, 1.)),
+                   Parameter("n", kind="integer", bounds=(1, 2)),
+                   Parameter("b", bounds=(lower, 1.)),
+                   Parameter("c", bounds=(0., 1.)), Parameter("d", bounds=(0., 1.))],
+                  objectives="y", constraints=constraints)
+    pool, subspaces, _, _ = _search_pool(space, q=2, seed=17, linear_rows=compile_linear_search(space))
+    assert len(subspaces) == 2
+    assert space.feasibility_mask(pool).all()
+    fixed_value = 0. if face == "bounds" else .5
+    for finite_value, subspace in zip((0., 1.), subspaces):
+        assert subspace.fixed == {0: fixed_value, 1: finite_value, 2: fixed_value}
+        # Only certified constant axes are removed; c+d=1 must still constrain
+        # the free coordinates, and the sampled line must not collapse to a point.
+        assert any(set(indices.tolist()) == {3, 4} for indices, _, _ in subspace.equalities)
+        assert subspace.seeds[:, 3].unique().numel() > 1
+
+
+def test_affine_hull_does_not_fix_a_coordinate_from_one_active_lp_vertex():
+    from expdoe_dk.bo.linear_search import compile_linear_search
+    from expdoe_dk.bo.recommendation import _search_pool
+
+    space = Space([Parameter("a", bounds=(0., 1.)), Parameter("b", bounds=(0., 1.))],
+                  objectives="y", constraints=[LinearConstraint("sum", {"a": 1., "b": 1.}, "==", 1.)])
+    pool, subspaces, _, _ = _search_pool(space, q=2, seed=17, linear_rows=compile_linear_search(space))
+    assert subspaces[0].fixed == {}
+    assert pool.a.nunique() > 1 and pool.b.nunique() > 1
+
+
 @pytest.mark.parametrize("coefficient,delta", [(1., 1e-10), (1000., 1e-10)])
 def test_redundant_equalities_keep_physical_tolerance_after_scaling(coefficient, delta):
     space = Space([Parameter("x", bounds=(0., 1.)), Parameter("free", bounds=(0., 1.))],

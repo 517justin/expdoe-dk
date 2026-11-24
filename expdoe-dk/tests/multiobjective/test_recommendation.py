@@ -401,21 +401,65 @@ def test_resolved_entry_rejects_preferences_that_disagree_with_geometry():
 
 def test_missing_multiobjective_capability_is_typed_and_scalar_still_works(monkeypatch):
     import botorch.acquisition.multi_objective.logei as logei
+    scalar_space, scalar_batch = _scalar_fixture()
+    before = recommend(scalar_space, scalar_batch, q=2, seed=17)
     monkeypatch.delattr(logei, "qLogNoisyExpectedHypervolumeImprovement")
     with pytest.raises(EngineError) as error:
         recommend(*_line(), q=2, seed=17)
     assert error.value.code == ErrorCode.ACQUISITION_INCOMPATIBLE
     assert "qLogNoisyExpectedHypervolumeImprovement" in str(error.value)
-    test_scalar_fixed_seed_result_diagnostics_and_rng_are_unchanged()
+    after = recommend(scalar_space, scalar_batch, q=2, seed=17)
+    assert after.to_dict() == before.to_dict()
 
 
-def test_scalar_fixed_seed_result_diagnostics_and_rng_are_unchanged():
+def _scalar_fixture():
     space = Space([Parameter("x", kind="integer", bounds=(0, 10))], objectives="y")
     batch = ObservationBatch(pd.DataFrame({"x": [2, 4, 6, 8]}),
         pd.DataFrame({"y": [120., 140., 160., 180.]}), Yvar=pd.DataFrame({"y": [.001] * 4}))
+    return space, batch
+
+
+def _scalar_reference(space, batch):
+    """Same-stack pre-Task6 contract for this finite, unconstrained fixture.
+
+    Use public scalar fitting and BoTorch directly, not recommendation helpers.
+    This reproduces base 8436566's greedy qLogNEI protocol with 128 seeded Sobol
+    samples. Verified against base evidence on 0.18.1/0.17.2 (rows [10,9]) and
+    isolated 0.11 (rows [10,3]); backend-specific numerical values are not a
+    universal golden. No ignored archive or repository history is needed.
+    """
+    from botorch.acquisition.logei import qLogNoisyExpectedImprovement
+    from botorch.acquisition.objective import GenericMCObjective
+    from botorch.sampling.normal import SobolQMCNormalSampler
+    from expdoe_dk import fit_surrogate
+
+    fitted = fit_surrogate(space, batch, seed=17)
+    with torch.random.fork_rng(devices=[]), torch.no_grad():
+        torch.manual_seed(17)
+        acquisition = qLogNoisyExpectedImprovement(
+            model=fitted.acquisition_model(), X_baseline=space.physical_to_model(batch.X),
+            X_pending=None, sampler=SobolQMCNormalSampler(torch.Size([128]), seed=17),
+            objective=GenericMCObjective(lambda samples, X=None: samples[..., 0]),
+            constraints=None, prune_baseline=False, cache_root=False)
+        available, selected = [0, 1, 3, 5, 7, 9, 10], []
+        for _ in range(2):
+            coordinates = torch.tensor(available, dtype=torch.double).reshape(-1, 1) / 10.
+            scores = acquisition(coordinates.unsqueeze(1)).flatten()
+            selected.append(available.pop(int(scores.argmax())))
+            acquisition.set_X_pending(torch.tensor(selected, dtype=torch.double).reshape(-1, 1) / 10.)
+        acquisition.set_X_pending(None)
+        coordinates = torch.tensor(selected, dtype=torch.double).reshape(1, -1, 1) / 10.
+        score = float(acquisition(coordinates).item())
+    return selected, fitted.predict(pd.DataFrame({"x": selected})), score
+
+
+def test_scalar_fixed_seed_result_diagnostics_and_rng_are_unchanged():
+    space, batch = _scalar_fixture()
+    expected_rows, expected_prediction, expected_score = _scalar_reference(space, batch)
     torch.manual_seed(777)
     result = recommend(space, batch, q=2, seed=17)
-    assert result.frame.x.tolist() == [10, 9]
+    assert result.frame.x.tolist() == expected_rows
+    assert result.diagnostics["candidate_keys"] == [f'[["x",["int",{x}]]]' for x in expected_rows]
     assert set(result.to_dict()) == {"frame", "predictions", "diagnostics"}
     assert list(result.diagnostics) == ["search_strategy", "finite_combinations", "degradation_reason",
         "pool_size", "acquisition_name", "acquisition_value_kind", "joint_acquisition_value", "seed",
@@ -423,7 +467,7 @@ def test_scalar_fixed_seed_result_diagnostics_and_rng_are_unchanged():
         "parameter_constraint_sources", "transforms", "exclusions", "soft_outcome_preference",
         "strategy_explanation", "outcome_safety"]
     assert result.diagnostics["acquisition_value_kind"] == "joint_batch"
-    assert result.diagnostics["joint_acquisition_value"] == pytest.approx(2.995382638702547, abs=1e-9)
-    np.testing.assert_allclose(result.predictions.mean, [[199.99292819423715], [189.997344460162]], rtol=1e-10)
-    np.testing.assert_allclose(result.predictions.variance, [[.008797736882115716], [.003061230017920025]], rtol=1e-7)
+    assert result.diagnostics["joint_acquisition_value"] == pytest.approx(expected_score, rel=0, abs=1e-9)
+    np.testing.assert_allclose(result.predictions.mean, expected_prediction.mean, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(result.predictions.variance, expected_prediction.variance, rtol=1e-7, atol=0)
     assert torch.rand(3).tolist() == [0.08191531896591187, 0.49113744497299194, 0.40329331159591675]

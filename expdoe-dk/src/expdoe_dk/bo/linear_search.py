@@ -272,6 +272,24 @@ def _sampler_type():
     return HitAndRunPolytopeSampler
 
 
+def _fixed_hull_coordinates(equalities, continuous):
+    """Eliminate singleton implications of the already certified affine hull."""
+    fixed = {}
+    while True:
+        previous = len(fixed)
+        for coefficients, rhs in equalities:
+            terms = [(i, value) for i, value in enumerate(coefficients.tolist()) if value]
+            remaining = [(i, value) for i, value in terms if i not in fixed]
+            if len(remaining) == 1:
+                index, coefficient = remaining[0]
+                value = (rhs - math.fsum(c * fixed[i] for i, c in terms if i in fixed)) / coefficient
+                if not math.isfinite(value):
+                    raise ValueError("Certified fixed coordinate is non-finite")
+                fixed[index] = value
+        if len(fixed) == previous:
+            return {continuous[index]: value for index, value in fixed.items()}
+
+
 def linear_seed_pool(space, bounds, continuous, combinations, rows, samples, seed):
     """Sample free coordinates only, then restore fixed model coordinates."""
     continuous_indices = torch.tensor(continuous, dtype=torch.long)
@@ -312,7 +330,11 @@ def linear_seed_pool(space, bounds, continuous, combinations, rows, samples, see
             coordinates[:, index] = value
         frames.append(space.model_to_physical(coordinates))
         if sampler.nullC.shape[1]:
-            subspaces.append(ContinuousSubspace(fixed, _sparse(equalities, continuous_indices),
+            # Tight bounds plus equalities can leave SLSQP with degenerate active
+            # constraints. BoTorch removes fixed features and substitutes them in
+            # the original constraints; do not leave certified constant axes free.
+            optimizer_fixed = {**fixed, **_fixed_hull_coordinates(equalities, continuous)}
+            subspaces.append(ContinuousSubspace(optimizer_fixed, _sparse(equalities, continuous_indices),
                                                _sparse(inequalities, continuous_indices), coordinates))
 
     pool = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=space.param_names)
