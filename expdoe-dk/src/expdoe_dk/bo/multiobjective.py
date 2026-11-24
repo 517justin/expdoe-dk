@@ -167,4 +167,27 @@ def resolve_preference_weights(space: Space, runtime: Mapping, config: MultiObje
     return first, tuple(provenance for _, provenance in candidates)
 
 
-__all__ = ["MultiObjectiveConfig", "resolve_preference_weights"]
+def resolve_noise_mode(observations, config: MultiObjectiveConfig) -> str:
+    """Resolve against original measurements, without synthesizing metadata.
+
+    The caller must fit noiseless models with a temporary zero-Yvar batch when
+    original Yvar is absent. Keep the original batch for geometry and history.
+    """
+    from expdoe_dk.domain import ObservationBatch
+
+    if not isinstance(observations, ObservationBatch):
+        raise EngineError(ErrorCode.CONFIG_INVALID, "Noise resolution requires an ObservationBatch")
+    variance = observations.Yvar
+    mode = config.noise_mode
+    if mode == "auto":
+        return "inferred" if variance is None else "known"
+    if mode == "known" and variance is None:
+        raise EngineError(ErrorCode.CONFIG_INVALID, "known noise requires complete Yvar")
+    if mode == "inferred" and variance is not None:
+        raise EngineError(ErrorCode.CONFIG_INVALID, "inferred noise rejects supplied Yvar")
+    if mode == "noiseless" and variance is not None and (variance.to_numpy() != 0).any():
+        raise EngineError(ErrorCode.CONFIG_INVALID, "noiseless noise requires absent or all-zero Yvar")
+    return mode
+
+
+__all__ = ["MultiObjectiveConfig", "resolve_preference_weights", "resolve_noise_mode"]

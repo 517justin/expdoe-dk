@@ -355,4 +355,27 @@ def _runtime_from_artifacts(space, artifacts):
     return runtime
 
 
-__all__ = ["compile_runtime"]
+def outcome_safety_intervals(space: Space) -> dict[str, tuple[float, float]]:
+    """Intersect hard physical bounds once per named output, in Space order.
+
+    Knowledge target ranges are intentionally absent: they are soft utilities,
+    not outcome safety constraints.
+    """
+    bounds = {}
+    for constraint in space.outcome_constraints:
+        if not constraint.hard or constraint.operator not in ("<=", ">="):
+            raise EngineError(ErrorCode.ACQUISITION_INCOMPATIBLE,
+                              "Outcome safety requires hard named <= or >= bounds")
+        lo, hi = bounds.get(constraint.objective, (-math.inf, math.inf))
+        if constraint.operator == "<=":
+            hi = min(hi, constraint.bound)
+        else:
+            lo = max(lo, constraint.bound)
+        if lo > hi:
+            raise EngineError(ErrorCode.CONFIG_INVALID,
+                              f"Empty outcome safety interval for {constraint.objective}")
+        bounds[constraint.objective] = (lo, hi)
+    return {name: bounds[name] for name in space.objectives if name in bounds}
+
+
+__all__ = ["compile_runtime", "outcome_safety_intervals"]
