@@ -76,8 +76,8 @@ class Prediction:
 
     @staticmethod
     def _validate_arrays(mean: np.ndarray, variance: np.ndarray) -> None:
-        if mean.ndim != 2 or mean.shape[1] != 1 or variance.shape != mean.shape:
-            raise ValueError("Prediction arrays must have matching (n, 1) shape")
+        if mean.ndim != 2 or mean.shape[1] < 1 or variance.shape != mean.shape:
+            raise ValueError("Prediction arrays must have matching (n, m) shape with m >= 1")
         if not np.isfinite(mean).all() or not np.isfinite(variance).all():
             raise ValueError("Prediction arrays must be finite")
         if (variance < 0).any():
@@ -92,6 +92,12 @@ class Prediction:
         variance = object.__getattribute__(self, "variance")
         self._validate_arrays(mean, variance)
         return {"mean": mean.tolist(), "variance": variance.tolist()}
+
+
+@dataclass(frozen=True)
+class AcquisitionDecision:
+    kind: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -139,6 +145,15 @@ class RecommendationResult:
             raise TypeError("RecommendationResult.predictions must be a Prediction")
         if len(frame) != predictions.mean.shape[0]:
             raise ValueError("Recommendation rows and prediction rows differ")
+        n_outputs = predictions.mean.shape[1]
+        if n_outputs > 1:
+            names = diagnostics.get("objective_names")
+            if (
+                not isinstance(names, (list, tuple)) or len(names) != n_outputs
+                or any(not isinstance(name, str) or not name for name in names)
+                or len(set(names)) != n_outputs
+            ):
+                raise ValueError("diagnostics.objective_names must uniquely name every prediction output")
         ids = object.__getattribute__(self, "candidate_ids")
         if isinstance(ids, (str, bytes)):
             raise ValueError("candidate_ids must be a sequence, not a string")
@@ -169,4 +184,7 @@ class RecommendationResult:
         })
 
 
-__all__ = ["CapabilityReport", "Prediction", "EvaluationResult", "RecommendationResult"]
+__all__ = [
+    "CapabilityReport", "Prediction", "AcquisitionDecision", "EvaluationResult",
+    "RecommendationResult",
+]

@@ -246,3 +246,14 @@ def test_recommendation_result_standard_dataclass_operations_preserve_snapshot(i
 def test_prediction_rejects_invalid_arrays(mean, variance):
     with pytest.raises((TypeError, ValueError)):
         Prediction(mean, variance)
+
+
+def test_single_objective_result_json_remains_unchanged():
+    prediction = Prediction([[1.0]], [[0.1]])
+    assert prediction.to_dict() == {"mean": [[1.0]], "variance": [[0.1]]}
+    result = RecommendationResult(pd.DataFrame({"x": [0.5]}), prediction, {})
+    assert result.to_dict() == {
+        "frame": [{"x": 0.5}],
+        "predictions": {"mean": [[1.0]], "variance": [[0.1]]},
+        "diagnostics": {},
+    }

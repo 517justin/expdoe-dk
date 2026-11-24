@@ -17,7 +17,7 @@ Quick start:
 
 from .space import Parameter, LinearConstraint, Space
 from .knowledge import KNOWLEDGE_SCHEMA_VERSION, Knowledge
-from .bo import Campaign, Result
+from .bo import Campaign, MultiObjectiveConfig, Result
 from .bo.capabilities import inspect_capabilities
 from .bo.knowledge_runtime import compile_runtime
 from .bo.surrogates import FittedSurrogate, fit_surrogate
@@ -25,6 +25,7 @@ from .bo.recommendation import recommend
 from .bo.evaluation import evaluate_models, make_folds
 from .doe.design import candidate_keys
 from .bo.contracts import (
+    AcquisitionDecision,
     CapabilityReport,
     EvaluationResult,
     Prediction,
@@ -76,6 +77,8 @@ __all__ = [
     "Knowledge",
     "Campaign",
     "Result",
+    "MultiObjectiveConfig",
+    "AcquisitionDecision",
     "CapabilityReport",
     "Prediction",
     "EvaluationResult",
