@@ -156,9 +156,10 @@ reference values require a new campaign. Historical schema 2.0 multiobjective
 archives missing objectives are archival-only; no data are imputed.
 
 The release writer is 0.6.0. Knowledge and scalar schema 2.0/2.1 readers accept
-the exact reviewed engine versions 0.5.0, 0.5.1 and 0.6.0; standalone versioned
-Space reads remain exact-current-version, with historical normalization owned
-by Campaign restoration. Schema 2.2 accepts **only** release writer 0.6.0 with
+the exact reviewed engine versions 0.5.0, 0.5.1 and 0.6.0. Standalone versioned
+Space reads accept exactly 0.5.1 and 0.6.0, while 0.5.0 Space normalization is
+owned by Campaign restoration. Readers leave historical input payloads unchanged;
+writers emit 0.6.0. Schema 2.2 accepts **only** release writer 0.6.0 with
 matching nested envelopes. The retained 0.5.1 prerelease schema-2.2 fixture is
 not silently relabelled or accepted as a released archive. Never assume all
 0.x payloads are compatible. Historical schema 2.0/2.1 fixtures stay historical.

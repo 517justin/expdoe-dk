@@ -138,10 +138,31 @@ def test_space_serialization_round_trips_mixed_domain_types_strictly():
     ).to_dict("records") == [{"temperature": 350.0, "binder": "B"}]
 
 
+def test_space_reads_051_without_rewriting_payload_and_writes_060():
+    payload = {
+        "schema_version": "1.0", "engine_version": "0.5.1",
+        "params": [{"name": "x", "kind": "continuous", "bounds": [0., 1.],
+                    "values": None, "step": None, "unit": "K", "transform": "linear"}],
+        "constraints": [],
+        "objectives": [{"name": "y", "direction": "maximize", "target": None,
+                        "unit": "", "priority": 0}],
+        "outcome_constraints": [],
+    }
+    before = json.dumps(payload)
+
+    restored = Space.from_dict(payload)
+
+    assert restored.to_dict() == payload | {"engine_version": "0.6.0"}
+    assert json.dumps(payload) == before
+    assert restored.param_names == ["x"]
+    assert restored.objectives == ["y"]
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("schema_version", "99.0"), ("engine_version", "9.9.9"),
-     ("engine_version", "0.5.0"), ("engine_version", "0.5.1"), ("engine_version", "0.5.99")],
+     ("engine_version", "0.5.0"), ("engine_version", "0.6.1"), ("engine_version", "0.5.99"),
+     ("engine_version", ["0.5.1"]), ("engine_version", {"version": "0.5.1"})],
 )
 def test_space_restoration_rejects_unknown_schema_or_engine_version(field, value):
     """Catches incompatible serialized spaces being accepted as current state."""

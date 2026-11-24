@@ -24,6 +24,8 @@ from .parameter import Parameter, _json_scalars_equal
 
 SPACE_SCHEMA_VERSION = "1.0"
 ENGINE_VERSION = "0.6.0"
+# Reviewed standalone Space 1.0 writers; older Campaign migration is separate.
+_COMPATIBLE_ENGINE_VERSIONS = frozenset({"0.5.1", "0.6.0"})
 
 
 def _config_invalid(message: str) -> EngineError:
@@ -565,7 +567,8 @@ class Space:
             raise _checkpoint_incompatible(
                 f"Unsupported Space schema version {state['schema_version']!r}"
             )
-        if state["engine_version"] != ENGINE_VERSION:
+        if (not isinstance(state["engine_version"], str)
+                or state["engine_version"] not in _COMPATIBLE_ENGINE_VERSIONS):
             raise _checkpoint_incompatible(
                 f"Unsupported Space engine version {state['engine_version']!r}"
             )

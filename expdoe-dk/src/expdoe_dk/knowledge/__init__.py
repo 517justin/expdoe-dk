@@ -44,7 +44,7 @@ from .validators import (
 # Exact, reviewed wire compatibility table. 0.5.0 and 0.5.1 declarations use
 # Space 1.0, Knowledge 1.0 and Campaign 2.0/2.1. The 0.6.0 writer also
 # supports Campaign 2.2, whose release writer is checked separately. No future
-# version matching; standalone Space readers remain exact-current-version.
+# version matching; standalone Space has its own narrower reviewed table.
 COMPATIBLE_ENGINE_VERSIONS = frozenset({"0.5.0", "0.5.1", "0.6.0"})
 
 # --------------------------------------------------------------------- #

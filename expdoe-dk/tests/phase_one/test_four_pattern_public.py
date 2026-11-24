@@ -64,16 +64,19 @@ def test_golden_cases_are_exactly_the_four_v2_patterns(golden_v2_cases):
 
 
 def test_golden_fixtures_are_self_contained_public_payloads(golden_v2_cases):
+    before = json.dumps(golden_v2_cases)
     for case in golden_v2_cases:
+        assert case["space"]["engine_version"] == case["knowledge"]["engine_version"] == "0.5.1"
         space, batch, knowledge = _public_inputs(case)
-        assert space.to_dict() == case["space"]
-        assert knowledge.to_envelope() == case["knowledge"]
+        assert space.to_dict() == case["space"] | {"engine_version": "0.6.0"}
+        assert knowledge.to_envelope() == case["knowledge"] | {"engine_version": "0.6.0"}
         assert batch.X.to_dict(orient="list") == case["observations"]["X"]
         assert batch.Y.to_dict(orient="list") == case["observations"]["Y"]
         assert list(batch.ids) == case["observations"]["ids"]
         assert {negative["kind"] for negative in case["negative_cases"]} >= {
             "malformed_declaration", "insufficient_rows", "conflicting_declarations"}
     json.dumps(golden_v2_cases, allow_nan=False)
+    assert json.dumps(golden_v2_cases) == before
 
 
 @pytest.mark.parametrize("pattern", PATTERNS)
