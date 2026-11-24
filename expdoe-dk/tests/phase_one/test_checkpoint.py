@@ -148,13 +148,17 @@ def test_batch_boundaries_reject_invalid_input_without_mutation(method, value):
     assert campaign.to_state() == before
 
 
-def test_multiobjective_new_boundary_fails_explicitly():
-    with pytest.warns(UserWarning):
-        campaign = Campaign(Space([Parameter("x", bounds=(0., 1.))], objectives=["a", "b"]))
-    with pytest.raises(EngineError):
+def test_multiobjective_records_full_vectors_but_checkpoint_is_not_yet_supported(tmp_path):
+    campaign = Campaign(Space([Parameter("x", bounds=(0., 1.))], objectives=["a", "b"]))
+    campaign.tell_batch(ObservationBatch(pd.DataFrame({"x": [0.]}), pd.DataFrame({"a": [1.], "b": [2.]})))
+    assert campaign.history_df()[["a", "b"]].values.tolist() == [[1., 2.]]
+    with pytest.raises(EngineError) as caught:
         campaign.to_state()
-    with pytest.raises(EngineError):
-        campaign.tell_batch(ObservationBatch(pd.DataFrame({"x": [0.]}), pd.DataFrame({"a": [1.], "b": [2.]})))
+    assert caught.value.code == ErrorCode.CHECKPOINT_INCOMPATIBLE
+    with pytest.raises(EngineError) as caught:
+        campaign.save_checkpoint(tmp_path / "multi.json")
+    assert caught.value.code == ErrorCode.CHECKPOINT_INCOMPATIBLE
+    assert not (tmp_path / "multi.json").exists()
 
 
 @pytest.fixture
@@ -330,19 +334,31 @@ def test_new_state_refuses_enabled_external_provider_version(populated_campaign,
         Campaign.from_state(state)
 
 
-def test_legacy_multiobjective_archive_still_roundtrips(tmp_path):
-    with pytest.warns(UserWarning):
-        campaign = Campaign(Space([Parameter("x", bounds=(0., 1.))], objectives=["a", "b"]))
-    campaign.tell(pd.DataFrame({"x": [0.5]}), [2.])
+def test_legacy_multiobjective_wire_is_readable_but_cannot_restore_partial_campaign(tmp_path):
+    from expdoe_dk.bo.checkpoint import read_json, validate_state
+    state = {
+        "schema_version": "2.0", "engine_version": "0.5.0",
+        "space": {"schema_version": "1.0", "engine_version": "0.5.0",
+            "params": [{"name": "x", "kind": "continuous", "bounds": [0., 1.],
+                "values": None, "step": None, "unit": "", "transform": "linear"}],
+            "constraints": [], "objectives": [
+                {"name": "a", "direction": "maximize", "target": None, "unit": "", "priority": 0},
+                {"name": "b", "direction": "maximize", "target": None, "unit": "", "priority": 0}],
+            "outcome_constraints": []},
+        "knowledge": {"schema_version": "1.0", "engine_version": "0.5.0",
+            "strict": False, "specs": [], "providers": []},
+        "seed": 7, "history": [{"x": 0.5, "y": 2., "kind": "doe"}], "trial_kind": ["doe"],
+    }
     path = tmp_path / "legacy.json"
-    with pytest.warns(UserWarning, match="archival schema 2.0"):
-        campaign.save_checkpoint(path)
-    with pytest.warns(UserWarning):
-        restored = Campaign.load_checkpoint(path)
-    assert restored.space.objectives == ["a", "b"]
-    assert restored.finalize().best_y_physical == 2.
-    with pytest.raises(EngineError):
-        restored.to_state()
+    original = json.dumps(state, allow_nan=False)
+    path.write_text(original)
+    assert read_json(path) == validate_state(state) == state
+    for restore in (lambda: Campaign.from_state(state), lambda: Campaign.load_checkpoint(path)):
+        with pytest.raises(EngineError, match="missing.*objective|objective.*missing") as caught:
+            restore()
+        assert caught.value.code == ErrorCode.CHECKPOINT_INCOMPATIBLE
+    assert path.read_text() == original
+    assert json.dumps(state, allow_nan=False) == original
 
 
 def test_mixed_variance_is_persisted_but_never_silently_dropped_at_fit():

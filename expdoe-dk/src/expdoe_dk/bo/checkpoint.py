@@ -312,6 +312,10 @@ def restore(state, campaign_class):
         knowledge = (Knowledge.from_dict(state["knowledge"]) if "schema_version" not in state
                      else Knowledge.from_envelope(state["knowledge"]))
         if state.get("schema_version") != "2.1":
+            if space.n_objectives > 1:
+                raise EngineError(ErrorCode.CHECKPOINT_INCOMPATIBLE,
+                    "Legacy multiobjective archive is missing objective measurements; "
+                    "read the raw archive instead of restoring a Campaign")
             campaign = campaign_class(space, knowledge, seed=state["seed"])
             history = pd.DataFrame(state["history"])
             if not history.empty:
