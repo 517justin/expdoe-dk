@@ -237,3 +237,116 @@ def test_unsupported_qualified_scope_is_not_checked_as_global_trend(qualifier):
     assert detail["status"] == "unsupported"
     assert detail["reason"] == "unsupported_directional_scope"
     assert detail["violation"] is None
+
+
+def validated_scalar(*, violating=False):
+    space, knowledge = declaration()
+    campaign = Campaign(space, knowledge, validation_min_obs=3, validation_interval=1)
+    X = pd.DataFrame({"x": np.linspace(0., 1., 10)})
+    with warnings.catch_warnings(record=True) as notices:
+        warnings.simplefilter("always")
+        campaign.tell(X, -X.x if violating else X.x)
+    assert len(notices) == int(violating)
+    assert campaign.validation_diagnostics[0]["violation"] is violating
+    return campaign
+
+
+def replace_directional(campaign, change):
+    envelope = campaign.knowledge.to_envelope()
+    spec = envelope["specs"][0]
+    if change == "direction":
+        spec["parameters"]["direction"] = "decreasing"
+    elif change == "confidence":
+        spec["confidence"] = 0.
+    elif change == "disable":
+        spec["enabled"] = False
+    elif change == "remove":
+        envelope["specs"].pop(0)
+    elif change == "reid":
+        spec["pattern_id"] = "replacement"
+    else:
+        raise AssertionError(change)
+    campaign.knowledge = Knowledge.from_envelope(envelope)
+
+
+@pytest.mark.parametrize("change", ["direction", "confidence", "disable", "remove", "reid"])
+def test_scalar_empirical_state_follows_exact_replacement_declaration(change):
+    campaign = validated_scalar()
+    original = campaign.validation_diagnostics
+    replace_directional(campaign, change)
+    envelope = campaign.knowledge.to_envelope()
+    current = campaign.validation_diagnostics
+    if change in {"disable", "remove"}:
+        assert current == []
+    else:
+        d, = current
+        assert d["status"] == "not_checked" and d["violation"] is None
+        assert d["reason"] == ("inactive_confidence" if change == "confidence" else "validation_not_run")
+        assert d["pattern_id"] == ("replacement" if change == "reid" else "direction")
+    assert original[0]["status"] == "checked" and original[0]["violation"] is False
+    assert campaign.knowledge.to_envelope() == envelope
+
+
+def test_scalar_warning_lifecycle_resets_only_changed_directional_spec():
+    space, knowledge = declaration()
+    space = Space([*space.params, Parameter("z", bounds=(0., 1.))], objectives=space.objective_specs)
+    other = declaration(factor="z", pattern_id="other")[1].to_envelope()["specs"][0]
+    other["parameters"]["direction"] = "decreasing"
+    envelope = knowledge.to_envelope()
+    envelope["specs"].append(other)
+    campaign = Campaign(space, Knowledge.from_envelope(envelope), validation_min_obs=3, validation_interval=1)
+    X = pd.DataFrame({"x": np.linspace(0., 1., 10), "z": np.linspace(0., 1., 10)})
+    with pytest.warns(UserWarning, match=r"\[other\]"):
+        campaign.tell(X, X.x)
+    replace_directional(campaign, "direction")
+    records = {d["pattern_id"]: d for d in campaign.validation_diagnostics}
+    assert records["direction"]["status"] == "not_checked"
+    assert records["other"]["status"] == "checked" and records["other"]["violation"] is True
+    with warnings.catch_warnings(record=True) as notices:
+        warnings.simplefilter("always")
+        campaign.tell(X, X.x)
+    assert len(notices) == 1 and "[direction]" in str(notices[0].message)
+    with warnings.catch_warnings(record=True) as repeated:
+        warnings.simplefilter("always")
+        campaign.tell(X, X.x)
+    assert not repeated
+
+
+def test_scalar_tell_invalidates_suppression_without_intervening_read():
+    campaign = validated_scalar(violating=True)
+    envelope = campaign.knowledge.to_envelope()
+    envelope["specs"][0]["confidence"] = .4
+    campaign.knowledge = Knowledge.from_envelope(envelope)
+    X = pd.DataFrame({"x": np.linspace(0., 1., 10)})
+    with pytest.warns(UserWarning, match=r"\[direction\]"):
+        campaign.tell(X, -X.x)
+    assert campaign.validation_diagnostics[0]["violation"] is True
+    assert campaign.knowledge.to_envelope() == envelope
+
+
+@pytest.mark.parametrize("field,value", [("epsilon", .1), ("softness", .5), ("n_pairs_per_dim", 4)])
+def test_scalar_empirical_context_includes_all_v2_parameters(field, value):
+    campaign = validated_scalar()
+    envelope = campaign.knowledge.to_envelope()
+    envelope["specs"][0]["parameters"][field] = value
+    campaign.knowledge = Knowledge.from_envelope(envelope)
+    detail, = campaign.validation_diagnostics
+    assert detail["status"] == "not_checked" and detail["violation"] is None
+
+
+def test_equivalent_scalar_declaration_retains_verdict_and_warning_suppression():
+    campaign = validated_scalar(violating=True)
+    expected = campaign.to_state()
+    campaign.knowledge = Knowledge.from_envelope(campaign.knowledge.to_envelope())
+    assert campaign.to_state() == expected
+    X = pd.DataFrame({"x": np.linspace(0., 1., 10)})
+    with warnings.catch_warnings(record=True) as notices:
+        warnings.simplefilter("always")
+        campaign.tell(X, -X.x)
+    assert not notices
+
+
+def test_scalar_empirical_context_includes_space_declaration():
+    campaign = validated_scalar()
+    campaign.space = Space([Parameter("x", bounds=(-1., 1.))], objectives=campaign.space.objective_specs)
+    assert campaign.validation_diagnostics[0]["status"] == "not_checked"

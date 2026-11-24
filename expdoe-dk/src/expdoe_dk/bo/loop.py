@@ -210,6 +210,10 @@ class Campaign:
         self._validation_diagnostics: list[dict] = []
         self._last_directional_fit: dict | None = None
         self._last_directional_context: dict | None = None
+        self._directional_validation_contexts: dict[str, dict] = {}
+        # Restore installs validated empirical records after construction; bind
+        # them to the exact restored declarations without replaying validation.
+        self._sync_directional_validation_contexts()
 
     @property
     def multiobjective(self) -> MultiObjectiveConfig | None:
@@ -217,6 +221,7 @@ class Campaign:
 
     @property
     def validation_diagnostics(self) -> list[dict]:
+        self._sync_directional_validation_contexts()
         diagnostics = deepcopy(self._validation_diagnostics)
         identities = {(d["objective_name"], d["pattern_id"]) for d in diagnostics}
         for spec in self.knowledge.specs:
@@ -234,6 +239,25 @@ class Campaign:
                     "evidence_basis": "marginal_measured_trend", "status": "not_checked",
                     "violation": None, "reason": reason})
         return diagnostics
+
+    def _sync_directional_validation_contexts(self) -> None:
+        """Invalidate scalar v2 evidence and warning suppression on replacement."""
+        if self.space.n_objectives != 1:
+            return
+        specs = {spec.pattern_id: spec.to_dict() for spec in self.knowledge.specs
+                 if spec.enabled and (spec.pattern, spec.version) == ("monotone", "2.0")}
+        if not specs and not self._directional_validation_contexts:
+            return
+        space = self.space.to_dict()
+        current = {pattern_id: {"space": space, "spec": spec} for pattern_id, spec in specs.items()}
+        stale = {pattern_id for pattern_id, context in self._directional_validation_contexts.items()
+                 if current.get(pattern_id) != context}
+        if stale:
+            self._validation_diagnostics = [d for d in self._validation_diagnostics
+                if not (d.get("version") == "2.0" and d["pattern_id"] in stale)]
+            self._validation_emitted = {key for key in self._validation_emitted
+                if not (len(key) == 4 and key[1] in stale)}
+        self._directional_validation_contexts = current
 
     def _declaration(self) -> dict:
         return {"space": self.space.to_dict(), "knowledge": self.knowledge.to_envelope(),
@@ -611,6 +635,7 @@ class Campaign:
     # ------------------------------------------------------------------ #
     def _maybe_run_validators(self) -> None:
         """Throttled hook: run empirical validators after enough new data."""
+        self._sync_directional_validation_contexts()
         if not self.validate_active:
             return
         n = self._successful_count() if self.space.n_objectives > 1 else len(self._y_internal)
@@ -831,6 +856,7 @@ class Campaign:
     # Step 5: finalize — best point in physical frame
     # ------------------------------------------------------------------ #
     def finalize(self) -> Result:
+        self._sync_directional_validation_contexts()
         multi = self.space.n_objectives > 1
         if not multi and not self._X_phys:
             raise RuntimeError("Campaign has no data; cannot finalize.")
@@ -1017,6 +1043,7 @@ class Campaign:
 
     def to_state(self) -> dict:
         """Return detached validated JSON: scalar schema 2.1, multiobjective 2.2."""
+        self._sync_directional_validation_contexts()
         if self.space.n_objectives != 1:
             from .checkpoint import multiobjective_to_state
             return multiobjective_to_state(self)

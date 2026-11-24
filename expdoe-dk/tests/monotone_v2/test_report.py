@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from expdoe_dk import Campaign, ObservationBatch
-from .test_campaign import catalog, declaration, directional, initial
+from .test_campaign import catalog, declaration, directional, initial, replace_directional, validated_scalar
 
 
 @pytest.mark.parametrize("multi", [False, True])
@@ -127,3 +127,31 @@ def test_empty_scalar_result_reports_no_measurements_or_model_fit():
     # Keep the pre-existing scalar Campaign API: it cannot choose a best without data.
     with pytest.raises(RuntimeError, match="no data"):
         Campaign(space, knowledge).finalize()
+
+
+@pytest.mark.parametrize("change", ["direction", "confidence", "disable", "remove", "reid"])
+def test_scalar_report_never_attributes_old_empirical_verdict_to_new_rule(change, monkeypatch):
+    import expdoe_dk.bo.loop as loop
+    from expdoe_dk.bo import recommendation, surrogates
+    campaign = validated_scalar()
+    old = campaign.finalize()
+    replace_directional(campaign, change)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("finalize/restore must not refit or implicitly revalidate")
+
+    monkeypatch.setattr(loop, "check_monotone_assumption", forbidden)
+    monkeypatch.setattr(recommendation, "fit_surrogate", forbidden)
+    monkeypatch.setattr(surrogates, "fit_surrogate", forbidden)
+    result = campaign.finalize()
+    records = result.multiobjective_diagnostics.get("validation", [])
+    if change in {"disable", "remove"}:
+        assert records == []
+    else:
+        assert records[0]["status"] == "not_checked" and records[0]["violation"] is None
+        assert "not_checked" in result.to_html_string()
+        assert '"violation": false' not in html.unescape(result.to_html_string())
+    assert old.multiobjective_diagnostics["validation"][0]["violation"] is False
+    assert old.knowledge["specs"][0]["parameters"]["direction"] == "increasing"
+    restored = Campaign.from_state(campaign.to_state())
+    assert restored.finalize().multiobjective_diagnostics == result.multiobjective_diagnostics

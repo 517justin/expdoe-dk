@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from expdoe_dk import Campaign, EngineError, ErrorCode, Knowledge, ObservationBatch
+from expdoe_dk import Campaign, EngineError, ErrorCode, Knowledge, ObservationBatch, Parameter, Space
 from expdoe_dk.bo.checkpoint import validate_state
-from .test_campaign import catalog, declaration, directional, initial
+from .test_campaign import catalog, declaration, directional, initial, replace_directional, validated_scalar
 
 
 @pytest.mark.parametrize("multi", [False, True])
@@ -185,3 +185,71 @@ def test_literal_v1_archive_does_not_resolve_to_new_algorithm():
     assert restored.knowledge.specs[0].version == "1.0"
     assert result.diagnostics["transforms"]["virtual_rows"] == 6
     assert "directional" not in result.diagnostics
+
+
+@pytest.mark.parametrize("change", ["direction", "confidence", "disable", "remove", "reid"])
+def test_scalar_checkpoint_after_validated_declaration_replacement(change):
+    campaign = validated_scalar(violating=True)
+    replace_directional(campaign, change)
+    # Checkpoint is the first read after replacement: stale warning keys must
+    # be cleared before constructing the wire, not only while reading diagnostics.
+    state = campaign.to_state()
+    assert state["knowledge"] == campaign.knowledge.to_envelope()
+    validation = state["validation"]
+    assert validation.get("directional_emitted", []) == []
+    if change in {"disable", "remove"}:
+        assert validation.get("diagnostics", []) == []
+    else:
+        d, = validation["diagnostics"]
+        assert d["status"] == "not_checked" and d["violation"] is None
+    if change == "remove":
+        assert set(validation) == {"active", "interval", "min_obs", "auto_rescue", "last_n", "emitted"}
+    restored = Campaign.from_state(state)
+    assert restored.to_state() == state
+    assert restored.validation_diagnostics == campaign.validation_diagnostics
+
+
+@pytest.mark.parametrize("change", ["direction", "confidence", "disable", "remove", "reid"])
+def test_restored_scalar_warning_suppression_is_context_bound(change):
+    campaign = validated_scalar(violating=True)
+    original = campaign.knowledge.to_envelope()
+    restored = Campaign.from_state(campaign.to_state())
+    X = pd.DataFrame({"x": np.linspace(0., 1., 10)})
+    with warnings.catch_warnings(record=True) as unchanged:
+        warnings.simplefilter("always")
+        restored.tell(X, -X.x)
+    assert not unchanged
+    replace_directional(restored, change)
+    changed_state = restored.to_state()
+    restored = Campaign.from_state(changed_state)
+    restored.knowledge = Knowledge.from_envelope(original)
+    with pytest.warns(UserWarning, match=r"\[direction\]"):
+        restored.tell(X, -X.x)
+    assert restored.validation_diagnostics[0]["violation"] is True
+    with warnings.catch_warnings(record=True) as repeated:
+        warnings.simplefilter("always")
+        restored.tell(X, -X.x)
+    assert not repeated
+
+
+def test_removing_inactive_v2_preserves_legacy_scalar_warning_state():
+    space = Space([Parameter("x", bounds=(0., 1.)), Parameter("z", bounds=(0., 1.))])
+    knowledge = (Knowledge().with_quadratic_peak("x", center=.5)
+                 .with_monotone_v2("z", "increases_objective", confidence=0.))
+    campaign = Campaign(space, knowledge, validation_min_obs=3, validation_interval=1)
+    X = pd.DataFrame({"x": np.linspace(0., 1., 10), "z": np.linspace(0., 1., 10)})
+    with pytest.warns(UserWarning, match="with_quadratic_peak"):
+        campaign.tell(X, -X.x)
+    before = campaign.to_state()
+    assert before["validation"]["emitted"] == [["quadratic_peak", "x"]]
+    envelope = knowledge.to_envelope()
+    envelope["specs"] = envelope["specs"][:1]
+    campaign.knowledge = Knowledge.from_envelope(envelope)
+    state = campaign.to_state()
+    assert state["validation"]["emitted"] == [["quadratic_peak", "x"]]
+    assert "directional_emitted" not in state["validation"]
+    restored = Campaign.from_state(state)
+    with warnings.catch_warnings(record=True) as notices:
+        warnings.simplefilter("always")
+        restored.tell(X, -X.x)
+    assert not notices
