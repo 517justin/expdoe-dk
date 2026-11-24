@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import warnings
 from collections.abc import Sequence
 from copy import deepcopy
@@ -42,6 +43,32 @@ from .checkpoint import (
 )
 
 log = logging.getLogger("expdoe_dk.bo.Campaign")
+
+
+def _same_physical_value(left, right) -> bool:
+    from ..domain.parameter import _json_scalars_equal
+
+    # Python numeric comparison is exact across int/float; numpy comparison can
+    # instead round a large integer to the floating operand's dtype.
+    left = left.item() if isinstance(left, np.generic) else left
+    right = right.item() if isinstance(right, np.generic) else right
+    if left is None or left is pd.NA or right is None or right is pd.NA:
+        return left is right
+    if isinstance(left, float) and not math.isfinite(left):
+        return isinstance(right, float) and (math.isnan(right) if math.isnan(left) else left == right)
+    return _json_scalars_equal(left, right)
+
+
+def _concat_physical_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Retain pandas dtypes unless combining columns changes physical values."""
+    combined = pd.concat(frames, ignore_index=True)
+    for name in combined.columns:
+        original = [value for frame in frames for value in frame[name].tolist()]
+        if not all(_same_physical_value(before, after)
+                   for before, after in zip(original, combined[name].tolist(), strict=True)):
+            combined[name] = pd.Series(original, dtype=object)
+    return combined
+
 
 # --------------------------------------------------------------------- #
 # Result container
@@ -241,9 +268,7 @@ class Campaign:
         return diagnostics
 
     def _sync_directional_validation_contexts(self) -> None:
-        """Invalidate scalar v2 evidence and warning suppression on replacement."""
-        if self.space.n_objectives != 1:
-            return
+        """Invalidate v2 evidence and warning suppression on replacement."""
         specs = {spec.pattern_id: spec.to_dict() for spec in self.knowledge.specs
                  if spec.enabled and (spec.pattern, spec.version) == ("monotone", "2.0")}
         if not specs and not self._directional_validation_contexts:
@@ -396,6 +421,8 @@ class Campaign:
 
     def _record_observations(self, observations: ObservationBatch) -> None:
         if self.space.n_objectives > 1:
+            # A failed tell may roll back observations, not declaration changes.
+            self._sync_directional_validation_contexts()
             # Allocate once, separately from caller IDs, so appends cannot rename
             # geometry's source prefix or turn anonymous returns into pending IDs.
             used = {identifier for ids in self._observation_ids for identifier in ids}
@@ -469,14 +496,12 @@ class Campaign:
                 "Recorded unsuccessful variance cannot be combined with missing successful variance")
         variance = None
         if known and all(known):
-            if self.space.n_objectives > 1 and any(
-                    b.Yvar is None or b.Yvar.isna().to_numpy().any() for b in batches):
-                # Object columns retain None / NaN / pd.NA across pandas versions;
-                # absent unsuccessful-batch variances are unknown, never zero.
-                variance = pd.DataFrame({name: pd.Series([
-                    value for b in batches for value in
-                    ([None] * len(b.X) if b.Yvar is None else b.Yvar[name].tolist())
-                ], dtype=object) for name in self.space.objectives})
+            if self.space.n_objectives > 1:
+                # Absent unsuccessful-batch variances are unknown, never zero.
+                variance = _concat_physical_frames([b.Yvar if b.Yvar is not None else
+                    pd.DataFrame({name: pd.Series([None] * len(b.X), dtype=object)
+                                  for name in self.space.objectives})
+                    for b in batches])
             else:
                 variance = pd.concat([b.Yvar if b.Yvar is not None else
                     pd.DataFrame(0., index=range(len(b.X)), columns=self.space.objectives)
@@ -496,8 +521,10 @@ class Campaign:
                         identifier += ":"
                     used.add(identifier)
                 identifiers.append(identifier)
-        return ObservationBatch(pd.concat([b.X for b in batches], ignore_index=True),
-            pd.concat([b.Y for b in batches], ignore_index=True), Yvar=variance,
+        concat = (_concat_physical_frames if self.space.n_objectives > 1 else
+                  lambda frames: pd.concat(frames, ignore_index=True))
+        return ObservationBatch(concat([b.X for b in batches]),
+            concat([b.Y for b in batches]), Yvar=variance,
             status=status, ids=identifiers)
 
     # ------------------------------------------------------------------ #
@@ -995,7 +1022,7 @@ class Campaign:
                 frame[columns["metadata"]["status"]] = "success" if batch.status is None else batch.status
                 frame[columns["metadata"]["kind"]] = kind
                 frames.append(frame)
-            return (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
+            return (_concat_physical_frames(frames) if frames else pd.DataFrame(
                 columns=[*columns["parameters"].values(), *self.space.objectives, *columns["metadata"].values()]))
         if not self._X_phys:
             return pd.DataFrame(columns=list(self.space.param_names) + ["y", "kind"])
