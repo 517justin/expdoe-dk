@@ -124,12 +124,12 @@ def test_catalog_mixed_factors_preserves_rows_and_hard_equality():
     assert space.feasibility_mask(out.frame).all()
 
 
-def test_catalog_does_not_remove_multiobjective_guard():
+def test_multiobjective_catalog_requires_all_named_observed_objectives():
     space, observations = line()
     space = Space(space.params, objectives=(Objective("y", "maximize"), Objective("cost", "minimize")))
     with pytest.raises(EngineError) as error:
         recommend(space, observations, candidates=pd.DataFrame({"x": [1.]}), candidate_ids=("a",))
-    assert error.value.code == ErrorCode.ACQUISITION_INCOMPATIBLE
+    assert error.value.code == ErrorCode.CONFIG_INVALID
 
 
 def test_catalog_exact_large_integers_survive_mixed_columns_and_serialization():

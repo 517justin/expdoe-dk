@@ -11,6 +11,7 @@ import itertools
 import math
 import warnings
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -33,6 +34,10 @@ from .linear_search import (
     ContinuousSubspace, compile_linear_search, generate_linear_candidates, linear_seed_pool,
 )
 from .surrogates import FittedSurrogate, fit_surrogate
+from .multiobjective import MultiObjectiveConfig
+
+if TYPE_CHECKING:
+    from .objective_geometry import ObjectiveGeometry
 
 _MINIMUM_FEASIBILITY = .95
 _MC_SAMPLES = 128
@@ -206,12 +211,14 @@ def _search_pool(space, q, seed, linear_rows=()):
     }
 
 
-def _filter(space, frame, excluded, fitted, safety_bounds):
+def _filter(space, frame, excluded, fitted, safety_bounds, *,
+            feasibility=None, minimum_probability=_MINIMUM_FEASIBILITY):
     mask = space.feasibility_mask(frame).numpy()
     frame = frame.loc[mask].reset_index(drop=True)
-    if safety_bounds is not None and len(frame):
-        probabilities = _safety_probability(fitted.predict(frame), safety_bounds)
-        frame = frame.loc[probabilities >= _MINIMUM_FEASIBILITY].reset_index(drop=True)
+    if len(frame) and (safety_bounds is not None or feasibility is not None):
+        probabilities = (feasibility(frame) if feasibility is not None else
+                         _safety_probability(fitted.predict(frame), safety_bounds))
+        frame = frame.loc[probabilities >= minimum_probability].reset_index(drop=True)
     selected, seen = [], set(excluded)
     for i in range(len(frame)):
         key = next(iter(candidate_keys(frame.iloc[[i]], space)))
@@ -233,11 +240,12 @@ def _score(acquisition, coordinates):
 def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowledge | None = None,
               pending: PendingBatch | None = None, q: int = 1, seed: int = 0,
               candidates: pd.DataFrame | None = None,
-              candidate_ids: Sequence[str] | None = None) -> RecommendationResult:
+              candidate_ids: Sequence[str] | None = None,
+              multiobjective: MultiObjectiveConfig | None = None) -> RecommendationResult:
     """Return a complete, unique GP-selected batch, or raise a typed error.
 
     Requires three successful observations. Safety additionally requires an
-    observed feasible baseline and >=0.95 joint interval probability per point
+    observed feasible baseline and, by default, >=0.95 joint interval probability per point
     under the fitted latent GP; this is model-based feasibility, NOT guaranteed
     safety. Greedy conditional qLogNEI uses the pending API for both externally
     pending and already-selected batch points. All returned values are physical.
@@ -247,6 +255,26 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
     IDs and response columns. Duplicate physical conditions are rejected.
     All observed conditions (including failures) and pending conditions remain
     excluded. Sorting by stable ID makes selection independent of catalog order.
+
+    Multiple objectives use fixed observed utility geometry and conditional
+    log-HV or NParEGO-style acquisitions. Diagnostics include the geometry,
+    per-slot weights and conditional scores, never a mixed-weight joint score.
+    """
+    return _recommend_resolved(space, observations, knowledge=knowledge, pending=pending,
+        q=q, seed=seed, candidates=candidates, candidate_ids=candidate_ids,
+        multiobjective=multiobjective, geometry=None)
+
+
+def _recommend_resolved(space: Space, observations: ObservationBatch, *,
+                        knowledge: Knowledge | None = None, pending: PendingBatch | None = None,
+                        q: int = 1, seed: int = 0, candidates: pd.DataFrame | None = None,
+                        candidate_ids: Sequence[str] | None = None,
+                        multiobjective: MultiObjectiveConfig | None = None,
+                        geometry: ObjectiveGeometry | None = None) -> RecommendationResult:
+    """Shared search entry for Campaign's frozen geometry and standalone calls.
+
+    A supplied geometry is reused, not resolved from later observations. The
+    caller owns persistence and commits it only after a successful result.
     """
     if not isinstance(space, Space) or not isinstance(observations, ObservationBatch):
         raise _invalid("Expected Space and ObservationBatch")
@@ -256,8 +284,22 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
         raise _invalid("pending must be PendingBatch or None")
     if type(q) is not int or not 1 <= q <= MAX_REQUESTED_ROWS or type(seed) is not int or seed < 0:
         raise _invalid("q must be a positive bounded integer and seed a non-negative integer")
-    if space.n_objectives != 1:
-        raise EngineError(ErrorCode.ACQUISITION_INCOMPATIBLE, "Recommendation supports one objective")
+    is_multiobjective = space.n_objectives > 1
+    if multiobjective is not None:
+        if not isinstance(multiobjective, MultiObjectiveConfig):
+            raise _invalid("multiobjective must be MultiObjectiveConfig or None")
+        multiobjective.validate_for_space(space)
+    if geometry is not None:
+        from .objective_geometry import ObjectiveGeometry
+        if not is_multiobjective or not isinstance(geometry, ObjectiveGeometry):
+            raise _invalid("geometry requires multiple objectives and ObjectiveGeometry")
+    if is_multiobjective:
+        from .acquisition import build_multiobjective_acquisition, joint_feasibility
+        from .multiobjective import resolve_noise_mode
+        from .objective_geometry import _feasible_baseline, resolve_geometry
+        multiobjective = multiobjective if multiobjective is not None else MultiObjectiveConfig()
+        multiobjective.validate_for_space(space)
+        noise_mode = resolve_noise_mode(observations, multiobjective)
     if candidates is None and candidate_ids is not None:
         raise _invalid("candidate_ids requires candidates")
     _check_precision(space)
@@ -275,8 +317,18 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
     design_space = space.with_constraints(*runtime["parameter_constraints"])
     linear_rows = compile_linear_search(design_space) if catalog is None else ()
     successful = observations.successful()
-    safety_bounds = _outcome_bounds(space) if space.outcome_constraints else None
+    safety_bounds = _outcome_bounds(space) if space.outcome_constraints and not is_multiobjective else None
     safe_baseline_count = None
+    model_observations = observations
+    if is_multiobjective:
+        if geometry is None:
+            geometry = resolve_geometry(space, observations, runtime, multiobjective)
+        safe_baseline_count = int(_feasible_baseline(space, successful, runtime).sum())
+        if noise_mode == "noiseless" and observations.Yvar is None:
+            # Zero noise is a model setting, never a fabricated measurement.
+            model_observations = ObservationBatch(observations.X, observations.Y,
+                Yvar=pd.DataFrame(0., index=observations.Y.index, columns=observations.Y.columns),
+                status=observations.status, ids=observations.ids)
     if safety_bounds is not None:
         if list(successful.Y.columns) != space.objectives:
             raise EngineError(ErrorCode.INSUFFICIENT_DATA, "Safety requires measured physical outcomes")
@@ -286,7 +338,7 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
             raise EngineError(ErrorCode.INSUFFICIENT_DATA,
                 "Safety requires three successful observations and an observed feasible baseline")
     try:
-        fitted = fit_surrogate(space, observations, knowledge=knowledge, seed=seed)
+        fitted = fit_surrogate(space, model_observations, knowledge=knowledge, seed=seed)
     except EngineError:
         raise
     except Exception as error:
@@ -295,10 +347,18 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
     original_pending = None if pending is None else pending.X
     if original_pending is not None:
         excluded |= candidate_keys(original_pending, space)
+    feasibility = (lambda frame: joint_feasibility(space, fitted, frame)) if is_multiobjective else None
+    minimum_probability = multiobjective.min_joint_feasibility if is_multiobjective else _MINIMUM_FEASIBILITY
+    filter_options = dict(feasibility=feasibility, minimum_probability=minimum_probability)
     try:
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(seed)
-            acquisition = _make_acquisition(space, fitted, successful.X, original_pending, runtime, seed)
+            if is_multiobjective:
+                acquisition, diagnostic = build_multiobjective_acquisition(
+                    space, fitted, observations, pending, runtime, multiobjective, geometry,
+                    seed=seed, slot=0)
+            else:
+                acquisition = _make_acquisition(space, fitted, successful.X, original_pending, runtime, seed)
             if catalog is None:
                 pool, subspaces, continuous, search = _search_pool(space, q, seed, linear_rows)
             else:
@@ -306,15 +366,26 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
                 search = {"search_strategy": "provided_catalog", "pool_size": len(catalog),
                           "degradation_reason": None, "catalog_order": "stable_id",
                           "duplicate_condition_policy": "reject"}
-            pool = _filter(design_space, pool, excluded, fitted, safety_bounds)
+            pool = _filter(design_space, pool, excluded, fitted, safety_bounds, **filter_options)
             if catalog is not None and len(pool) < q:
                 raise EngineError(ErrorCode.NO_FEASIBLE_CANDIDATE,
                     "Candidate catalog cannot supply a complete unique feasible batch",
                     details={"requested": q, "available": len(pool), **search})
             chosen = []
+            slot_diagnostics, conditional_values = [], []
             optimized_count = 0
             bounds = torch.tensor([parameter.model_bounds for parameter in space.params], dtype=torch.double).T
-            for _ in range(q):
+            for slot in range(q):
+                if is_multiobjective:
+                    if slot:
+                        acquisition, diagnostic = build_multiobjective_acquisition(
+                            space, fitted, observations, pending, runtime, multiobjective, geometry,
+                            seed=seed, slot=slot)
+                    slot_diagnostics.append(diagnostic)
+                    conditioning = ([original_pending] if original_pending is not None else []) + chosen
+                    condition = pd.concat(conditioning, ignore_index=True) if conditioning else None
+                    acquisition.set_X_pending(None if condition is None or condition.empty
+                                              else space.physical_to_model(condition))
                 current = pool
                 if continuous and subspaces:
                     # Optimize each declared finite subspace; keep feasible seeded
@@ -344,7 +415,7 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
                         optimized.append(space.model_to_physical(candidate))
                         optimized_count += 1
                     current = pd.concat([pool, *optimized], ignore_index=True)
-                current = _filter(design_space, current, excluded, fitted, safety_bounds)
+                current = _filter(design_space, current, excluded, fitted, safety_bounds, **filter_options)
                 if current.empty:
                     raise EngineError(ErrorCode.NO_FEASIBLE_CANDIDATE,
                         "Search cannot produce a complete unique feasible batch",
@@ -352,17 +423,21 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
                 scores = _score(acquisition, space.physical_to_model(current))
                 selected = current.iloc[[int(scores.argmax())]].reset_index(drop=True)
                 chosen.append(selected)
+                if is_multiobjective:
+                    conditional_values.append(float(scores.max().item()))
                 excluded |= candidate_keys(selected, space)
-                condition = pd.concat(([original_pending] if original_pending is not None else []) + chosen,
-                                      ignore_index=True)
-                acquisition.set_X_pending(space.physical_to_model(condition))
+                if not is_multiobjective:
+                    condition = pd.concat(([original_pending] if original_pending is not None else []) + chosen,
+                                          ignore_index=True)
+                    acquisition.set_X_pending(space.physical_to_model(condition))
             frame = pd.concat(chosen, ignore_index=True)
-            acquisition.set_X_pending(None if original_pending is None or original_pending.empty
-                                      else space.physical_to_model(original_pending))
-            with torch.no_grad():
-                joint_value = float(acquisition(space.physical_to_model(frame).unsqueeze(0)).item())
-            if not math.isfinite(joint_value):
-                raise ValueError("Joint acquisition is non-finite")
+            if not is_multiobjective:
+                acquisition.set_X_pending(None if original_pending is None or original_pending.empty
+                                          else space.physical_to_model(original_pending))
+                with torch.no_grad():
+                    joint_value = float(acquisition(space.physical_to_model(frame).unsqueeze(0)).item())
+                if not math.isfinite(joint_value):
+                    raise ValueError("Joint acquisition is non-finite")
     except EngineError:
         raise
     except Exception as error:
@@ -372,34 +447,57 @@ def recommend(space: Space, observations: ObservationBatch, *, knowledge: Knowle
     avoided = candidate_keys(observations.X, space) | (set() if original_pending is None
                                                        else candidate_keys(original_pending, space))
     final_keys = candidate_keys(frame, space)
-    probabilities = None if safety_bounds is None else _safety_probability(predictions, safety_bounds)
+    probabilities = (feasibility(frame) if feasibility is not None else
+                     None if safety_bounds is None else _safety_probability(predictions, safety_bounds))
     if (len(frame) != q or len(final_keys) != q or final_keys & avoided
             or not design_space.feasibility_mask(frame).all()
-            or (probabilities is not None and (probabilities < _MINIMUM_FEASIBILITY).any())):
+            or (probabilities is not None and (probabilities < minimum_probability).any())):
         raise EngineError(ErrorCode.NO_FEASIBLE_CANDIDATE, "Final physical candidate validation failed")
-    diagnostics = {**search, "acquisition_name": "qLogNoisyExpectedImprovement",
+    acquisition_diagnostics = ({} if is_multiobjective else {
+        "acquisition_name": "qLogNoisyExpectedImprovement",
         "acquisition_value_kind": "joint_batch", "joint_acquisition_value": joint_value,
+    })
+    diagnostics = {**search, **acquisition_diagnostics,
         "seed": seed, "mc_samples": _MC_SAMPLES, "pending_count": 0 if pending is None else len(pending.X),
         "candidate_keys": [next(iter(candidate_keys(frame.iloc[[i]], space))) for i in range(q)],
         "continuous_subspaces_optimized": optimized_count,
         "parameter_constraint_sources": [item.source_pattern_id for item in runtime["parameter_constraints"]],
         "transforms": fitted.transforms, "exclusions": list(fitted.exclusions),
         "soft_outcome_preference": "additive negative physical interval shortfall; no feasibility rejection",
-        "strategy_explanation": (
+    }
+    if is_multiobjective:
+        diagnostics.update({key: value for key, value in slot_diagnostics[0].items()
+                            if key not in {"slot", "scalarization_weights"}})
+        diagnostics.update({
+            "weights_by_slot": [item["scalarization_weights"] for item in slot_diagnostics],
+            "conditional_acquisition_values": conditional_values,
+            "acquisition_value_kind": "conditional_per_slot",
+            "observation_ids": list(observations.ids),
+            "pending_ids": [] if pending is None else list(pending.ids),
+            "strategy_explanation": (
+                "Greedy conditional multiobjective log acquisition uses independent physical GP outputs "
+                "and frozen observed utility geometry. Each slot conditions external pending and earlier "
+                "selections; conditional scores correspond to that slot's recorded weights, not a common "
+                "mixed-weight batch objective. The shared search scores only original rows for a provided "
+                "catalog, otherwise enumerates finite subspaces or uses the declared seeded pool and "
+                "continuous optimization. Physical constraints, uniqueness and joint model-based "
+                "feasibility are rechecked; this is not guaranteed safety. No numerical fallback is used."),
+        })
+    else:
+        diagnostics["strategy_explanation"] = (
             "Greedy conditional joint MC log noisy expected improvement uses physical objective utility "
             "and GP posterior uncertainty, with external pending and selected points conditioned through "
             "the acquisition pending API. Finite enumeration or the declared seeded pool supplies "
             "candidates; continuous subspaces use multistart optimization plus a scored seeded candidate pool. "
             "Hard physical constraints and exact duplicate exclusions are rechecked. "
             "Joint acquisition is reported for the complete batch, not attributed to individual points. "
-            "Any outcome safety is model-based feasibility, not guaranteed safety."),
-        "outcome_safety": {"basis": "model_based_feasibility", "guaranteed": False,
-            "minimum_probability": _MINIMUM_FEASIBILITY,
-            "observed_feasible_baseline_count": safe_baseline_count,
-            "probabilities": None if probabilities is None else probabilities.tolist()},
-    }
+            "Any outcome safety is model-based feasibility, not guaranteed safety.")
+    diagnostics["outcome_safety"] = {"basis": "model_based_feasibility", "guaranteed": False,
+        "minimum_probability": minimum_probability,
+        "observed_feasible_baseline_count": safe_baseline_count,
+        "probabilities": None if probabilities is None else probabilities.tolist()}
     ids = tuple(catalog_ids[key] for key in diagnostics["candidate_keys"]) if catalog is not None else ()
-    if catalog is not None:
+    if catalog is not None and not is_multiobjective:
         diagnostics["strategy_explanation"] = (
             "Greedy conditional joint MC log noisy expected improvement scores only original catalog rows. "
             "Stable-ID ordering resolves exact score ties; IDs and physical values are returned together. "
