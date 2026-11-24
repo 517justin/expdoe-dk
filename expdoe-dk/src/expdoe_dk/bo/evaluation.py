@@ -60,6 +60,8 @@ def evaluate_models(space: Space, observations: ObservationBatch, *,
     it never exposes incomplete predictions as complete OOF metrics.
     Ridge/RF are always appended internally and are not production track options.
     """
+    if isinstance(space, Space) and space.n_objectives != 1:
+        raise EngineError(ErrorCode.CONFIG_INVALID, "Surrogate evaluation currently requires one objective")
     if (not isinstance(tracks, dict) or not tracks or any(
         not isinstance(name, str) or not name or name in {"ridge", "random_forest"}
         or (knowledge is not None and not isinstance(knowledge, Knowledge))

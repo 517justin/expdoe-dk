@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import inspect
 import math
 
 import numpy as np
@@ -19,6 +20,7 @@ from ..knowledge import Knowledge
 from .contracts import Prediction
 from .gp import build_gp, build_virtual_observation_augmenter
 from .knowledge_runtime import compile_runtime
+from .objective_routing import project_objective
 
 
 def _model_inputs(space, frame):
@@ -31,10 +33,10 @@ def _model_inputs(space, frame):
 def _eligible(space, observations, *, minimum):
     if not isinstance(space, Space) or not isinstance(observations, ObservationBatch):
         raise EngineError(ErrorCode.CONFIG_INVALID, "Expected Space and ObservationBatch")
-    if space.n_objectives != 1:
-        raise EngineError(ErrorCode.CONFIG_INVALID, "Surrogate evaluation currently requires one objective")
-    if list(observations.Y.columns) != space.objectives:
+    responses = observations.Y
+    if not responses.columns.is_unique or set(responses.columns) != set(space.objectives):
         raise EngineError(ErrorCode.CONFIG_INVALID, "Observation response columns must match Space objectives")
+    responses = responses[space.objectives]
     status = observations.status
     status = ["success"] * len(observations.X) if status is None else status.tolist()
     indices = [i for i, value in enumerate(status) if value == "success"]
@@ -46,15 +48,18 @@ def _eligible(space, observations, *, minimum):
     variance = observations.Yvar
     if variance is not None:
         try:
+            if not variance.columns.is_unique or set(variance.columns) != set(space.objectives):
+                raise ValueError("Variance columns must match Space objectives")
+            variance = variance[space.objectives]
             values = variance.iloc[indices].to_numpy(dtype=float)
-            valid = (list(variance.columns) == space.objectives and values.shape == (len(indices), 1)
+            valid = (values.shape == (len(indices), space.n_objectives)
                      and np.isfinite(values).all() and (values >= 0).all())
         except (ValueError, TypeError, IndexError):
             valid = False
         if not valid:
             raise EngineError(ErrorCode.CONFIG_INVALID,
                 "Known variance must be finite and non-negative for every successful row; mixed missing variance is unsupported")
-    batch = ObservationBatch(observations.X.iloc[indices], observations.Y.iloc[indices],
+    batch = ObservationBatch(observations.X.iloc[indices], responses.iloc[indices],
         Yvar=None if variance is None else variance.iloc[indices],
         ids=tuple(observations.ids[i] if observations.ids else str(i) for i in indices))
     _model_inputs(space, batch.X)
@@ -239,6 +244,61 @@ class FittedSurrogate:
             raise EngineError(ErrorCode.MODEL_FIT_FAILED, f"Surrogate prediction failed: {error}") from error
 
 
+def _multioutput_types():
+    # New BoTorch APIs must never become import requirements for scalar fits.
+    try:
+        from botorch.models.model import ModelList
+        from botorch.sampling.list_sampler import ListSampler
+        from botorch.sampling.normal import IIDNormalSampler
+
+        inspect.signature(ModelList).bind(object(), object())
+        inspect.signature(ListSampler).bind(object(), object())
+        inspect.signature(IIDNormalSampler).bind(sample_shape=torch.Size([1]), seed=0)
+    except (ImportError, AttributeError, TypeError, ValueError) as error:
+        raise EngineError(ErrorCode.ACQUISITION_INCOMPATIBLE,
+            "Installed BoTorch lacks the ModelList/ListSampler multioutput sampling APIs",
+            details={"capability": "physical_multioutput_sampling"},
+            hints=("Use a BoTorch version supporting ModelList, ListSampler and "
+                   "IIDNormalSampler(sample_shape, seed).",)) from error
+    return ModelList, ListSampler, IIDNormalSampler
+
+
+class _MultiOutputFittedSurrogate(FittedSurrogate):
+    """Independent physical GPs ordered by Space objective names."""
+
+    def __init__(self, space, fitted, exclusions):
+        self._space, self._fitted = space, tuple(fitted)
+        self._exclusions = deepcopy(exclusions)
+        self._transforms = {"objective_names": list(space.objectives), "objectives": {
+            name: model.transforms for name, model in zip(space.objectives, self._fitted)}}
+        self._diagnostics = {"objective_names": list(space.objectives),
+            "independent_outputs": True, "objectives": {
+                name: model.diagnostics for name, model in zip(space.objectives, self._fitted)}}
+
+    def predict(self, X: pd.DataFrame) -> Prediction:
+        predictions = [model.predict(X) for model in self._fitted]
+        return Prediction(np.concatenate([p.mean for p in predictions], axis=-1),
+                          np.concatenate([p.variance for p in predictions], axis=-1))
+
+    def acquisition_model(self) -> Model:
+        """Physical ModelList posterior in Space coordinates; use cache_root=False.
+
+        Pair with ``acquisition_sampler`` for joint-q PosteriorList samples.
+        Outputs are independent; within-output joint covariance is preserved.
+        Only latent responses are supported, as in the single-output adapter.
+        """
+        ModelList, _, _ = _multioutput_types()
+        return ModelList(*(model.acquisition_model() for model in self._fitted))
+
+    def acquisition_sampler(self, *, sample_shape: torch.Size, seed: int = 0):
+        """Seeded ListSampler yielding sample_shape x batch_shape x q x m."""
+        # Separate low-dimensional Sobol streams can couple independent outputs.
+        # IID base samples avoid this while each GP still samples its full q joint.
+        _, ListSampler, IIDNormalSampler = _multioutput_types()
+        return ListSampler(*(IIDNormalSampler(sample_shape=sample_shape, seed=seed + i)
+                             for i in range(len(self._fitted))))
+
+
 def fit_surrogate(space: Space, observations: ObservationBatch, *,
                   knowledge: Knowledge | None = None, seed: int = 0) -> FittedSurrogate:
     """Fit a production GP to >=3 successes, never to objective utilities."""
@@ -254,6 +314,19 @@ def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
         raise EngineError(ErrorCode.CONFIG_INVALID, "seed must be a non-negative integer")
     knowledge = knowledge if knowledge is not None else Knowledge()
     runtime = compile_runtime(space, knowledge, batch)
+    if space.n_objectives > 1:
+        _multioutput_types()
+        fitted = []
+        for name in space.objectives:
+            projected, selected, scoped = project_objective(space, batch, knowledge, name)
+            try:
+                fitted.append(_fit_surrogate(projected, selected, knowledge=scoped,
+                                             seed=seed, minimum=minimum))
+            except EngineError as error:
+                raise EngineError(error.code, f"Objective {name!r} fitting failed: {error}",
+                    details={**error.details, "objective_name": name,
+                             "objective_names": list(space.objectives)}, hints=error.hints) from error
+        return _MultiOutputFittedSurrogate(space, fitted, exclusions)
     features = _PhysicalFeatures(space, batch.X)
     X = _model_inputs(space, batch.X)
     y = batch.Y.to_numpy(dtype=float)
