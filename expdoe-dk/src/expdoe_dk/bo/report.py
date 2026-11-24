@@ -14,8 +14,8 @@ Charts use Chart.js via CDN (cdn.jsdelivr.net is on the standard allowlist
 for sandboxed clients). The page is functional without JavaScript — the
 chart simply doesn't render. Tables, summary, and CSV all work statically.
 
-All on-page text is in the user's physical units (no Y_norm or unit-cube
-values).
+Measured tables use physical units. Directional diagnostics explicitly distinguish
+physical endpoints, model coordinates, and normalized likelihood noise.
 """
 from __future__ import annotations
 
@@ -180,6 +180,40 @@ def _cumulative_best(values: list[float], maximize: bool) -> list[float]:
     return out
 
 
+def _directional_report(result: "Result") -> str:
+    specs = [spec for spec in (result.knowledge or {}).get("specs", [])
+             if (spec["pattern"], spec["version"]) == ("monotone", "2.0")]
+    if not specs:
+        return ""
+
+    def metadata(value):
+        return '<pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html.escape(
+            json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False)) + '</pre>'
+
+    diagnostics = result.multiobjective_diagnostics
+    model = diagnostics.get("directional")
+    return ("<h2>Directional knowledge (declarations, not measurements)</h2>"
+        "<p>Monotone 2.0 uses soft directional factors, not fabricated function-value observations "
+        "or measurement variances. Confidence is a fractional evidence weight, not a calibrated probability "
+        "that the rule is true. Zero confidence is inactive.</p>"
+        "<p>Tempered-probit Laplace approximation: each accepted pair has weight confidence / accepted pair count. "
+        "Requested pairs per dimension: 1 to 32; at most 64 active pairs per output and 4096 generated centers "
+        "per specification. Finite local pairs do not guarantee global or partial monotonicity.</p>"
+        + metadata(specs)
+        + "<h2>Directional model diagnostics</h2>"
+        + ("<p>No ask-time fit diagnostics are available. No model is fitted by reporting or checkpoint restore.</p>"
+           if model is None else
+           "<p>Last successful ask-time fit, not a post-tell refit or a historical sequence of model fits. "
+           "Physical endpoints and model-coordinate endpoints are labeled separately. "
+           "Declared measurement variance and fitted likelihood noise may differ, including zero-noise clamping.</p>"
+           + metadata(model))
+        + "<h2>Measured trend checks</h2>"
+        + "<p>Marginal measured trends can be confounded when other factors vary. They do not prove "
+        "partial monotonicity or its violation. Conditioning results are not empirical validation. "
+        "No automatic change to epsilon or confidence is made.</p>"
+        + metadata(diagnostics.get("validation", [])))
+
+
 # ---------------------------------------------------------------------- #
 # Main entry point
 # ---------------------------------------------------------------------- #
@@ -234,6 +268,7 @@ def _render_multiobjective(result: "Result", title: str) -> str:
                 f'<a class="download" download="history.csv" href="data:text/csv;base64,{encoded}">Download CSV</a>',
                 "<h2>Parameter units</h2>", metadata(result.param_units),
                 "<h2>Knowledge (declarations, not measurements)</h2>", metadata(result.knowledge),
+                _directional_report(result),
                 "".join(f'<p class="note">{escaped(note)}</p>' for note in result.notes)]
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<title>{escaped(title)}</title><meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -260,13 +295,6 @@ def render_html(result: "Result", title: str | None = None) -> str:
     cum_best = _cumulative_best(y_values, maximize=maximize) if y_values else []
     trial_index = list(range(1, len(y_values) + 1))
 
-    # Best row in user frame.
-    if maximize:
-        best_idx = int(history["y"].idxmax())
-    else:
-        best_idx = int(history["y"].idxmin())
-    best_row = history.iloc[best_idx]
-
     # ----------------------------------------------------------------- #
     # Header
     # ----------------------------------------------------------------- #
@@ -279,20 +307,24 @@ def render_html(result: "Result", title: str | None = None) -> str:
     # ----------------------------------------------------------------- #
     # Best point card
     # ----------------------------------------------------------------- #
-    best_y_str = f"{result.best_y_physical:.4g}"
-    best_params_rows = "".join(
-        f"<dt>{html.escape(p)}</dt><dd>"
-        f"{_format_param(float(best_row[p]), unit_of.get(p, ''), kind_of.get(p))}"
-        f"</dd>"
-        for p in param_names
-    )
-    best_html = (
-        '<section class="best">'
-        f'<div class="best-cap">Best {objective} ({direction_label})</div>'
-        f'<div class="best-val">{best_y_str}</div>'
-        f'<dl class="kv">{best_params_rows}</dl>'
-        '</section>'
-    )
+    best_html = '<p>No measured observations; no best point.</p>'
+    if y_values:
+        best_idx = int(history["y"].idxmax() if maximize else history["y"].idxmin())
+        best_row = history.iloc[best_idx]
+        best_y_str = f"{result.best_y_physical:.4g}"
+        best_params_rows = "".join(
+            f"<dt>{html.escape(p)}</dt><dd>"
+            f"{_format_param(float(best_row[p]), unit_of.get(p, ''), kind_of.get(p))}"
+            f"</dd>"
+            for p in param_names
+        )
+        best_html = (
+            '<section class="best">'
+            f'<div class="best-cap">Best {html.escape(objective)} ({direction_label})</div>'
+            f'<div class="best-val">{best_y_str}</div>'
+            f'<dl class="kv">{best_params_rows}</dl>'
+            '</section>'
+        )
 
     # ----------------------------------------------------------------- #
     # Convergence chart
@@ -304,7 +336,7 @@ def render_html(result: "Result", title: str | None = None) -> str:
         "kinds": history["kind"].tolist() if "kind" in history.columns else [],
         "maximize": maximize,
         "objective": objective,
-    })
+    }).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     chart_section = (
         '<h2>Convergence</h2>'
         '<div class="chart-wrap"><canvas id="conv-chart" '
@@ -352,6 +384,7 @@ def render_html(result: "Result", title: str | None = None) -> str:
     # ----------------------------------------------------------------- #
     # Knowledge spec listing
     # ----------------------------------------------------------------- #
+    directional_html = _directional_report(result)
     items_human = _knowledge_human_list(result.knowledge_summary or [])
     if items_human:
         knowledge_html = (
@@ -360,11 +393,14 @@ def render_html(result: "Result", title: str | None = None) -> str:
             + "".join(f"<li>{html.escape(line)}</li>" for line in items_human)
             + "</ul>"
         )
+    elif directional_html:
+        knowledge_html = ""
     else:
         knowledge_html = (
             '<h2>Knowledge applied</h2>'
             '<p class="meta">None. Campaign ran with the baseline GP only.</p>'
         )
+    knowledge_html += directional_html
 
     # Notes (auto-default applied etc.)
     notes_html = ""

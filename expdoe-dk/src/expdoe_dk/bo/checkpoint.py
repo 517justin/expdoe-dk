@@ -5,6 +5,12 @@
 archival readers (and a legacy-only writer for opaque provider archives).
 All JSON structure is checked before constructing Space, Knowledge or Campaign.
 Domain readers then apply their semantic invariants before a Campaign is made.
+
+Scalar 2.1 monotone-2.0 envelopes may add validation.directional_emitted and
+validation.diagnostics together. Legacy emitted pairs are unchanged. Older
+readers reject this strict additive variant and the v2 diagnostic records in
+2.2; legacy-only writers retain the original wire keysets. Model fits are never
+checkpointed as empirical validation.
 """
 from __future__ import annotations
 
@@ -161,6 +167,13 @@ _GEOMETRY = _object({"objective_names": _NAMES,
 _DIAGNOSTIC = _object({"objective_name": _NAME, "pattern_id": _NAME, "pattern": _NAME,
     "status": {"enum": ["checked", "not_checked", "unsupported"]},
     "violation": _nullable(_BOOL), "reason": _nullable(_NAME)})
+_DIRECTIONAL_DIAGNOSTIC = _object({**_DIAGNOSTIC["properties"],
+    "pattern": {"const": "monotone"}, "version": {"const": "2.0"},
+    "evidence_basis": {"const": "marginal_measured_trend"}})
+_WARNING_IDENTITIES = _array(_array(_NAME, minItems=4, maxItems=4), uniqueItems=True)
+_DIRECTIONAL_STATE = _object({**_STATE["properties"],
+    "validation": _object({**_VALIDATION["properties"],
+        "directional_emitted": _WARNING_IDENTITIES, "diagnostics": _array(_DIRECTIONAL_DIAGNOSTIC)})})
 _MULTI_STATE = _object({**_COMMON, "schema_version": {"const": MULTIOBJECTIVE_SCHEMA_VERSION},
     # Task 10 owns the release allowlist expansion; 2.2 has no historical writer.
     "engine_version": {"const": "0.5.1"},
@@ -171,8 +184,8 @@ _MULTI_STATE = _object({**_COMMON, "schema_version": {"const": MULTIOBJECTIVE_SC
     "multiobjective": _CONFIG, "geometry": _nullable(_GEOMETRY),
     "rng_state": _RNG, "ask_iteration": _INTEGER,
     "validation": _object({**_VALIDATION["properties"],
-        "emitted": _array(_array(_NAME, minItems=4, maxItems=4), uniqueItems=True),
-        "diagnostics": _array(_DIAGNOSTIC)})})
+        "emitted": _WARNING_IDENTITIES,
+        "diagnostics": _array({"anyOf": [_DIAGNOSTIC, _DIRECTIONAL_DIAGNOSTIC]})})})
 
 
 def _invalid(message):
@@ -248,7 +261,7 @@ def validate_state(state):
         _validate_v04(state)
         return state
     _validate_schema(state, _MULTI_STATE if schema == MULTIOBJECTIVE_SCHEMA_VERSION
-                     else _STATE if schema == "2.1" else _LEGACY)
+                     else {"anyOf": [_STATE, _DIRECTIONAL_STATE]} if schema == "2.1" else _LEGACY)
     _validate_knowledge(state["knowledge"], archival=schema == "2.0")
     names = [p["name"] for p in state["space"]["params"]]
     objectives = [o["name"] for o in state["space"]["objectives"]]
@@ -261,6 +274,19 @@ def validate_state(state):
         if (spec["pattern"], spec["version"]) in {("safe_region", "1.0"), ("forbidden_region", "1.0")}:
             _canonical_node(spec["parameters"]["constraint"]["ast"],
                 frozenset(spec["scope"]["factors"] or names), 1, _AstBudget())
+    has_directional = any((s["pattern"], s["version"]) == ("monotone", "2.0")
+                          for s in state["knowledge"]["specs"])
+    if schema == "2.1" and "directional_emitted" in state["validation"] and not has_directional:
+        raise _invalid("Directional validation variant requires an exact monotone 2.0 declaration")
+    if has_directional and schema == "2.1":
+        from .knowledge_runtime import compile_runtime
+        try:
+            space = Space.from_dict(state["space"])
+            knowledge = Knowledge.from_envelope(state["knowledge"])
+            compile_runtime(space, knowledge, None)
+            _validate_empirical_state(state["validation"], space, knowledge, scalar=True)
+        except EngineError as error:
+            raise _invalid(f"Invalid directional checkpoint: {error}") from error
     if schema == MULTIOBJECTIVE_SCHEMA_VERSION:
         from .loop import Campaign
         _restore_multiobjective(state, Campaign)
@@ -459,6 +485,44 @@ def multiobjective_to_state(campaign):
             "diagnostics": campaign.validation_diagnostics}})
 
 
+def _validate_empirical_state(validation, space, knowledge, *, scalar=False):
+    """Bind warning identities and versioned evidence to exact declared scopes."""
+    specs = {spec.pattern_id: spec for spec in knowledge.specs}
+    if scalar:
+        for kind, parameter in validation["emitted"]:
+            if not any(spec.enabled and spec.pattern == kind and spec.version == "1.0"
+                       and spec.scope.factors and spec.scope.factors[0] == parameter for spec in knowledge.specs):
+                raise _invalid("Scalar legacy warning identity requires a legacy declaration")
+    emitted = validation.get("directional_emitted", []) if scalar else validation["emitted"]
+    for objective, pattern_id, kind, parameter in emitted:
+        spec = specs.get(pattern_id)
+        if (objective not in space.objectives or parameter not in space.param_names or spec is None
+                or kind != spec.pattern or kind not in {"monotone", "arrhenius", "quadratic_peak"}
+                or not spec.scope.factors or parameter != spec.scope.factors[0]
+                or (spec.scope.objectives and objective not in spec.scope.objectives)
+                or not (spec.version == "1.0" and not scalar or
+                        spec.pattern == "monotone" and spec.version == "2.0" and spec.enabled and spec.confidence > 0)):
+            raise _invalid("Invalid empirical validation warning identity")
+    identities = set()
+    for diagnostic in validation.get("diagnostics", []):
+        spec = specs.get(diagnostic["pattern_id"])
+        objective = diagnostic["objective_name"]
+        identity = (objective, diagnostic["pattern_id"])
+        if (objective not in space.objectives or spec is None
+                or diagnostic["pattern"] != spec.pattern
+                or (spec.scope.objectives and objective not in spec.scope.objectives)
+                or (diagnostic["status"] == "checked") != (diagnostic["violation"] is not None)
+                or (diagnostic["status"] == "checked") != (diagnostic["reason"] is None)
+                or identity in identities):
+            raise _invalid("Invalid empirical validation diagnostic")
+        identities.add(identity)
+        if "version" in diagnostic or (spec.pattern, spec.version) == ("monotone", "2.0"):
+            if (diagnostic.get("version") != spec.version or spec.version != "2.0"
+                    or spec.pattern != "monotone" or not spec.enabled
+                    or (diagnostic["status"] == "checked" and spec.confidence == 0)):
+                raise _invalid("Invalid directional validation version or active scope")
+
+
 def _restore_multiobjective(state, campaign_class):
     """Semantic validation without fitting, asking, or replaying empirical callbacks."""
     from .multiobjective import MultiObjectiveConfig
@@ -496,21 +560,7 @@ def _restore_multiobjective(state, campaign_class):
         validation = state["validation"]
         if validation["last_n"] > len(expected_kinds) or state["rng_state"]["state"]["inc"] % 2 != 1:
             raise _invalid("Invalid validation progress or PCG64 increment")
-        specs = {spec.pattern_id: spec for spec in knowledge.specs}
-        for objective, pattern_id, kind, parameter in validation["emitted"]:
-            spec = specs.get(pattern_id)
-            if (objective not in space.objectives or parameter not in space.param_names or spec is None
-                    or kind != spec.pattern or kind not in {"monotone", "arrhenius", "quadratic_peak"}
-                    or spec.version != "1.0" or not spec.scope.factors or parameter != spec.scope.factors[0]
-                    or (spec.scope.objectives and objective not in spec.scope.objectives)):
-                raise _invalid("Invalid empirical validation warning identity")
-        for diagnostic in validation["diagnostics"]:
-            spec = specs.get(diagnostic["pattern_id"])
-            if (diagnostic["objective_name"] not in space.objectives or spec is None
-                    or diagnostic["pattern"] != spec.pattern
-                    or (diagnostic["status"] == "checked") != (diagnostic["violation"] is not None)
-                    or (diagnostic["status"] == "checked") != (diagnostic["reason"] is None)):
-                raise _invalid("Invalid empirical validation diagnostic")
+        _validate_empirical_state(validation, space, knowledge)
         campaign = campaign_class(space, knowledge, seed=state["seed"], validate=False,
             validation_interval=validation["interval"], validation_min_obs=validation["min_obs"],
             auto_rescue=validation["auto_rescue"], multiobjective=config)
@@ -617,6 +667,8 @@ def restore(state, campaign_class):
         campaign.validate_active = validation["active"]
         campaign._last_validation_n = validation["last_n"]
         campaign._validation_emitted = {tuple(item) for item in validation["emitted"]}
+        campaign._validation_emitted.update(tuple(item) for item in validation.get("directional_emitted", []))
+        campaign._validation_diagnostics = deepcopy(validation.get("diagnostics", []))
         return campaign
     except EngineError:
         raise

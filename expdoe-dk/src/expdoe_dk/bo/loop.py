@@ -83,6 +83,12 @@ class Result:
         }
         if self.history_columns is not None:
             result["history_columns"] = deepcopy(self.history_columns)
+        # The existing diagnostics field is also used by opt-in scalar v2;
+        # legacy scalar JSON retains its historical keyset.
+        if len(self.objectives) == 1 and any(spec["enabled"] and
+                (spec["pattern"], spec["version"]) == ("monotone", "2.0")
+                for spec in (self.knowledge or {}).get("specs", [])):
+            result["multiobjective_diagnostics"] = deepcopy(self.multiobjective_diagnostics)
         if len(self.objectives) > 1:
             result.update({name: deepcopy(getattr(self, name)) for name in (
                 "pareto_rows", "hypervolume_history", "multiobjective_diagnostics", "stop_signals")})
@@ -202,6 +208,8 @@ class Campaign:
         # Cache of warnings already emitted so we don't spam every K obs.
         self._validation_emitted: set[tuple[str, ...]] = set()
         self._validation_diagnostics: list[dict] = []
+        self._last_directional_fit: dict | None = None
+        self._last_directional_context: dict | None = None
 
     @property
     def multiobjective(self) -> MultiObjectiveConfig | None:
@@ -209,7 +217,23 @@ class Campaign:
 
     @property
     def validation_diagnostics(self) -> list[dict]:
-        return deepcopy(self._validation_diagnostics)
+        diagnostics = deepcopy(self._validation_diagnostics)
+        identities = {(d["objective_name"], d["pattern_id"]) for d in diagnostics}
+        for spec in self.knowledge.specs:
+            if not spec.enabled or (spec.pattern, spec.version) != ("monotone", "2.0"):
+                continue
+            for name in spec.scope.objectives or self.space.objectives:
+                if (name, spec.pattern_id) in identities:
+                    continue
+                reason = ("inactive_confidence" if spec.confidence == 0 else
+                          "validation_disabled" if not self.validate_active else
+                          "insufficient_observations" if self._successful_count() < self.validation_min_obs else
+                          "validation_not_run")
+                diagnostics.append({"objective_name": name, "pattern_id": spec.pattern_id,
+                    "pattern": spec.pattern, "version": spec.version,
+                    "evidence_basis": "marginal_measured_trend", "status": "not_checked",
+                    "violation": None, "reason": reason})
+        return diagnostics
 
     def _declaration(self) -> dict:
         return {"space": self.space.to_dict(), "knowledge": self.knowledge.to_envelope(),
@@ -493,6 +517,14 @@ class Campaign:
             result = recommend(self.space, observations, knowledge=self.knowledge,
                 pending=self._pending, q=q, seed=iteration_seed,
                 candidates=candidates, candidate_ids=candidate_ids)
+        directional = {name: detail["directional"]
+            for name, detail in result.diagnostics.get("objectives", {}).items() if "directional" in detail}
+        if "directional" in result.diagnostics:
+            directional[self.space.objectives[0]] = result.diagnostics["directional"]
+        self._last_directional_fit = (deepcopy({"basis": "last_successful_ask", "seed": iteration_seed,
+            "observation_count": count, "objectives": directional}) if directional else None)
+        self._last_directional_context = ({"space": self.space.to_dict(), "knowledge": self.knowledge.to_envelope()}
+                                         if directional else None)
         self._ask_iteration = self._ask_iteration + 1 if iteration is None else iteration + 1
         return result
 
@@ -592,6 +624,14 @@ class Campaign:
             return
         self._run_monotone_validators()
         self._run_shape_validators()
+        if any(spec.enabled and (spec.pattern, spec.version) == ("monotone", "2.0")
+               for spec in self.knowledge.specs):
+            # Trend evidence needs only successful measured X/Y, not a fit-ready
+            # noise vector. Do not reject archival mixed-noise batches here.
+            batch = ObservationBatch(pd.concat(self._X_phys, ignore_index=True),
+                pd.DataFrame({self.space.objectives[0]: self._y_physical}))
+            self._validation_diagnostics = self._run_directional_validators(
+                self.space, batch, self.knowledge, self.space.objectives[0])
 
     def _run_multiobjective_validators(self) -> None:
         from .knowledge_runtime import compile_runtime
@@ -609,8 +649,11 @@ class Campaign:
                                        for p in space.params))
             if shape_supported:
                 checked.update(self._run_shape_validators(context=context))
+            diagnostics.extend(self._run_directional_validators(space, successful, knowledge, name))
             for spec in knowledge.specs:
                 if not spec.enabled:
+                    continue
+                if (spec.pattern, spec.version) == ("monotone", "2.0"):
                     continue
                 results = [checked[spec.pattern_id]] if spec.pattern_id in checked else []
                 supported = spec.version == "1.0" and spec.pattern in {"monotone", "arrhenius", "quadratic_peak"}
@@ -625,6 +668,50 @@ class Campaign:
                         "shape_validator_requires_bounded_numeric_min_max_space" if unsupported_shape else
                         "insufficient_or_inapplicable_data" if supported else "no_empirical_validator")})
         self._validation_diagnostics = diagnostics
+
+    def _run_directional_validators(self, space, batch, knowledge, objective_name) -> list[dict]:
+        """Adapt measured marginal trends without creating or mutating legacy items."""
+        from ..knowledge.validators import MonotoneViolationWarning
+
+        diagnostics = []
+        for spec in knowledge.specs:
+            if not spec.enabled or (spec.pattern, spec.version) != ("monotone", "2.0"):
+                continue
+            reason, result = None, None
+            factor = spec.scope.factors[0] if len(spec.scope.factors) == 1 else None
+            if (knowledge.registry.validate(spec, space).state != "valid" or
+                    space.objective_specs[0].direction not in {"minimize", "maximize"}):
+                reason = "unsupported_directional_scope"
+            elif spec.confidence == 0:
+                reason = "inactive_confidence"
+            elif len(batch.X) < self.validation_min_obs:
+                reason = "insufficient_observations"
+            else:
+                x = batch.X[[factor]].to_numpy(dtype=float)
+                y = batch.Y[objective_name].to_numpy(dtype=float)
+                if np.ptp(x) == 0 or np.ptp(y) == 0:
+                    reason = "constant_factor_or_response"
+                else:
+                    result = check_monotone_assumption(X_user_units=x, y_user=y,
+                        param_index=0, param_name=factor,
+                        declared_effect=("increases_objective" if spec.parameters["direction"] == "increasing"
+                                         else "decreases_objective"),
+                        min_observations=self.validation_min_obs)
+            diagnostics.append({"objective_name": objective_name, "pattern_id": spec.pattern_id,
+                "pattern": spec.pattern, "version": spec.version, "evidence_basis": "marginal_measured_trend",
+                "status": "checked" if result is not None else (
+                    "unsupported" if reason == "unsupported_directional_scope" else "not_checked"),
+                "violation": None if result is None else result.violation, "reason": reason})
+            key = (objective_name, spec.pattern_id, spec.pattern, factor)
+            if result is not None and result.violation and key not in self._validation_emitted:
+                self._validation_emitted.add(key)
+                warnings.warn(MonotoneViolationWarning(
+                    f"{objective_name}: [{spec.pattern_id}] monotone {spec.version}: "
+                    f"measured marginal trend conflicts with the declared direction for {factor!r} "
+                    f"(Spearman={result.observed_spearman:+.3f}, n={result.n_observations}). "
+                    "This association can be confounded by other factors; it is not proof of partial "
+                    "monotonicity or its violation. Epsilon and confidence are unchanged."), stacklevel=3)
+        return diagnostics
 
     @staticmethod
     def _validator_items(knowledge, kinds, *, scoped):
@@ -774,7 +861,13 @@ class Campaign:
         )
         if multi:
             self._finalize_multiobjective(result)
-        if not (any(spec.enabled for spec in self.knowledge.specs) if multi else self.knowledge.items):
+        has_directional = any(spec.enabled and (spec.pattern, spec.version) == ("monotone", "2.0")
+                              for spec in self.knowledge.specs)
+        if has_directional:
+            result.multiobjective_diagnostics["validation"] = self.validation_diagnostics
+            if self._last_directional_context == {"space": self.space.to_dict(), "knowledge": result.knowledge}:
+                result.multiobjective_diagnostics["directional"] = deepcopy(self._last_directional_fit)
+        if not (has_directional or (any(spec.enabled for spec in self.knowledge.specs) if multi else self.knowledge.items)):
             result.notes.append(
                 "No domain knowledge applied — plain GP baseline."
             )
@@ -929,15 +1022,20 @@ class Campaign:
             return multiobjective_to_state(self)
         pending = None if self._pending is None else {
             "ids": list(self._pending.ids), "X": self._pending.X.astype(object).values.tolist()}
+        validation = {"active": self.validate_active, "interval": self.validation_interval,
+            "min_obs": self.validation_min_obs, "auto_rescue": self.auto_rescue,
+            "last_n": self._last_validation_n,
+            "emitted": [list(x) for x in sorted(self._validation_emitted) if len(x) == 2]}
+        if any((spec.pattern, spec.version) == ("monotone", "2.0") for spec in self.knowledge.specs):
+            validation.update(directional_emitted=[list(x) for x in sorted(self._validation_emitted) if len(x) == 4],
+                              diagnostics=self.validation_diagnostics)
         return validate_state({"schema_version": CHECKPOINT_SCHEMA_VERSION,
             "engine_version": ENGINE_VERSION, "space": self.space.to_dict(),
             "knowledge": self.knowledge.to_envelope(), "seed": self.seed,
             "observations": [batch_to_state(b) for b in self._observation_batches],
             "pending": pending, "trial_kind": list(self._trial_kind),
             "rng_state": self._rng.bit_generator.state, "ask_iteration": self._ask_iteration,
-            "validation": {"active": self.validate_active, "interval": self.validation_interval,
-                "min_obs": self.validation_min_obs, "auto_rescue": self.auto_rescue,
-                "last_n": self._last_validation_n, "emitted": [list(x) for x in sorted(self._validation_emitted)]}})
+            "validation": validation})
 
     @classmethod
     def from_state(cls, state: dict) -> "Campaign":

@@ -465,6 +465,13 @@ def _recommend_resolved(space: Space, observations: ObservationBatch, *,
         "transforms": fitted.transforms, "exclusions": list(fitted.exclusions),
         "soft_outcome_preference": "additive negative physical interval shortfall; no feasibility rejection",
     }
+    fit_diagnostics = fitted.diagnostics
+    if "directional" in fit_diagnostics:
+        diagnostics["directional"] = fit_diagnostics["directional"]
+    directional_outputs = {name: {"directional": detail["directional"]}
+        for name, detail in fit_diagnostics.get("objectives", {}).items() if "directional" in detail}
+    if directional_outputs:
+        diagnostics["objectives"] = directional_outputs
     if is_multiobjective:
         diagnostics.update({key: value for key, value in slot_diagnostics[0].items()
                             if key not in {"slot", "scalarization_weights"}})
