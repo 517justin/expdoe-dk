@@ -12,9 +12,11 @@ from itertools import product
 
 import numpy as np
 import torch
+from botorch.models import SingleTaskGP
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
+from gpytorch.likelihoods import FixedNoiseGaussianLikelihood
 from linear_operator.operators import RootLinearOperator
 from scipy import linalg, optimize
 from torch import Tensor
@@ -39,6 +41,52 @@ def _failure(reason, **details):
 def _finite(*values):
     if any(not torch.isfinite(value).all() for value in values):
         raise _failure("nonfinite")
+
+
+def _joint_latent_moments(model, X):
+    """Represent exactly observed latent coordinates without subtraction residue.
+
+    The prior-scale allowance validates only mathematically known zero entries;
+    it never selects a covariance eigenvalue or positive-noise observation to drop.
+    Both fitting and queries use this representation, including cross covariance.
+    """
+    posterior = model.posterior(X)
+    mean, covariance = posterior.mean[..., 0], posterior.distribution.covariance_matrix
+    _finite(mean, covariance)
+    if not (isinstance(model, SingleTaskGP)
+            and isinstance(model.likelihood, FixedNoiseGaussianLikelihood)):
+        return mean, covariance
+    with torch.no_grad():
+        noise = model.likelihood.noise
+        if not (noise == 0).any():
+            return mean, covariance
+        # posterior() has put the model in eval mode and transformed train_inputs.
+        transformed = model.transform_inputs(X)
+        training = model.train_inputs[0]
+        matches = (transformed.unsqueeze(-2) == training.unsqueeze(-3)).all(dim=-1)
+        known = (matches & (noise == 0).unsqueeze(-2)).any(dim=-1)
+        if not known.any():
+            return mean, covariance
+        zero_entries = known.unsqueeze(-1) | known.unsqueeze(-2)
+        prior = GPyTorchPosterior(model.forward(transformed))
+        if hasattr(model, "outcome_transform"):
+            prior = model.outcome_transform.untransform_posterior(prior, X=transformed)
+        prior_variance = prior.distribution.covariance_matrix.diagonal(dim1=-2, dim2=-1)
+        _finite(prior_variance)
+        if (prior_variance < 0).any():
+            raise _failure("negative_prior_variance")
+        sd = prior_variance.sqrt()
+        budget = (_RANK_MULTIPLIER * (training.shape[-2] + X.shape[-2]) * _EPS
+                  * sd.unsqueeze(-1) * sd.unsqueeze(-2))
+        _finite(budget)
+        residual = torch.where(zero_entries, covariance.detach().abs(), 0.)
+        if (residual > budget).any():
+            raise _failure("deterministic_covariance_residual",
+                           maximum_residual=residual.max().item(),
+                           maximum_budget=budget.max().item())
+    # A known value is deterministic, but its derivative covariance with an
+    # unobserved query need not vanish. Correct values without masking gradients.
+    return mean, covariance - torch.where(zero_entries, covariance, 0.).detach()
 
 
 def _psd(matrix):
@@ -236,9 +284,7 @@ class _DirectionalModel(Model):
         if X.dtype != torch.double:
             raise _failure("expected_double_query")
         endpoints = self._endpoints.expand(X.shape[:-2] + self._endpoints.shape)
-        joint = self._source.posterior(torch.cat([X, endpoints], dim=-2))
-        mean, covariance = joint.mean[..., 0], joint.distribution.covariance_matrix
-        _finite(mean, covariance)
+        mean, covariance = _joint_latent_moments(self._source, torch.cat([X, endpoints], dim=-2))
         q, n = X.shape[-2], len(self._endpoints)//2
         cross = covariance[..., :q, q+1::2] - covariance[..., :q, q::2]
         batch_shape = mean.shape[:-1]
@@ -303,9 +349,7 @@ def condition_directional_posterior(model: Model, pairs: DirectionalPairs) -> tu
             v[active] for v in (endpoints, signs, widths, softness, weights))
         pattern_ids = [pid for pid, keep in zip(pairs.pattern_ids, active.tolist()) if keep]
         with torch.no_grad():
-            joint = model.posterior(endpoints.flatten(0,1))
-            mean, C = joint.mean[...,0], joint.distribution.covariance_matrix
-            _finite(mean,C)
+            mean, C = _joint_latent_moments(model, endpoints.flatten(0,1))
             n = len(endpoints)
             dm = mean[...,1::2] - mean[...,::2]
             K = C[...,1::2,1::2] - C[...,1::2,::2] - C[...,::2,1::2] + C[...,::2,::2]

@@ -503,3 +503,163 @@ def test_nonfinite_score_fails_explicitly_without_clipping():
         fit(mean=-1.,scale=1e-320)
     assert caught.value.code == ErrorCode.MODEL_FIT_FAILED
     assert caught.value.details["reason"] == "nonfinite"
+
+
+def test_noiseless_training_endpoint_factors_are_constant():
+    from botorch.models import SingleTaskGP
+    from botorch.exceptions.warnings import InputDataWarning
+    from gpytorch.likelihoods import FixedNoiseGaussianLikelihood
+    from gpytorch import settings
+    X, Y = tensor([[0.],[.3],[.7],[1.]]), tensor([[.5],[.2],[-.3],[-.1]])
+    with settings.min_fixed_noise(double_value=0.):
+        likelihood = FixedNoiseGaussianLikelihood(noise=torch.zeros(4,dtype=torch.double))
+        with pytest.warns(InputDataWarning, match="not standardized"):
+            base = SingleTaskGP(X,Y,likelihood=likelihood,outcome_transform=None)
+    evidence = DirectionalPairs(X.reshape(2,2,1),tensor([1.,1.]),tensor([.3,.3]),
+        tensor([1.2,1.2]),tensor([.5,.5]),("p","p"),[])
+    covariance = base.posterior(X).distribution.covariance_matrix.detach()
+    print("noiseless endpoint eigenvalues:",torch.linalg.eigvalsh(covariance).tolist())
+    adapted,diagnostics = engine().condition_directional_posterior(base,evidence)
+    assert diagnostics["fits"][0]["rank"] == 0
+    assert diagnostics["fits"][0]["solver"] == "none"
+    query = tensor([[[.15],[.55],[.85]],[[0.],[.3],[.7]]]).requires_grad_()
+    actual,expected = adapted.posterior(query),base.posterior(query)
+    torch.testing.assert_close(actual.mean,expected.mean,atol=1e-12,rtol=1e-12)
+    torch.testing.assert_close(actual.distribution.covariance_matrix,
+        expected.distribution.covariance_matrix,atol=1e-12,rtol=1e-12)
+    assert torch.equal(actual.variance[1],torch.zeros_like(actual.variance[1]))
+    assert torch.isfinite(torch.autograd.grad(actual.mean.sum()+actual.variance.sum(),query)[0]).all()
+
+
+def training_field(*, noise=0., amplitude=None, batched=False, transformed=False):
+    from botorch.models import SingleTaskGP
+    from botorch.exceptions.warnings import InputDataWarning
+    from botorch.models.transforms.input import Normalize
+    from gpytorch.likelihoods import FixedNoiseGaussianLikelihood
+    from gpytorch.kernels import ScaleKernel
+    from gpytorch import settings
+    X, Y = tensor([[0.],[.3],[.7],[1.]]), tensor([[.5],[.2],[-.3],[-.1]])
+    if batched:
+        X,Y = X.expand(2,4,1),Y.expand(2,4,1)
+    variance = torch.full(Y.shape[:-1],noise,dtype=torch.double)
+    with settings.min_fixed_noise(double_value=0.):
+        likelihood = FixedNoiseGaussianLikelihood(noise=variance)
+        with pytest.warns(InputDataWarning,match="not standardized"):
+            model = SingleTaskGP(X,Y,likelihood=likelihood,outcome_transform=None,
+                input_transform=Normalize(d=1,bounds=tensor([[-1.],[2.]])) if transformed else None)
+    if amplitude is not None:
+        model.covar_module = ScaleKernel(model.covar_module,batch_shape=model.batch_shape)
+        model.covar_module.outputscale = amplitude
+    endpoints = tensor([[[0.],[.3]],[[.7],[1.]]])
+    evidence = DirectionalPairs(endpoints,tensor([1.,1.]),tensor([.3,.3]),
+        tensor([1.2,1.2]),tensor([.5,.5]),("p","p"),[])
+    return model,evidence
+
+
+@pytest.mark.parametrize("batched,transformed", [(False,False),(False,True),(True,True)])
+def test_noiseless_endpoint_representation_preserves_query_cross_gradients(batched,transformed):
+    base,evidence = training_field(batched=batched,transformed=transformed)
+    model,diagnostics = engine().condition_directional_posterior(base,evidence)
+    assert all(fit["rank"] == 0 for fit in diagnostics["fits"])
+    X = tensor([[[[0.],[.55]]],[[[.3],[.85]]]]).requires_grad_()
+    actual,expected = model.posterior(X),base.posterior(X)
+    a = actual.mean.sum()+actual.distribution.covariance_matrix.sum()
+    b = expected.mean.sum()+expected.distribution.covariance_matrix.sum()
+    torch.testing.assert_close(torch.autograd.grad(a,X)[0],torch.autograd.grad(b,X)[0],atol=1e-10,rtol=1e-10)
+    torch.testing.assert_close(actual.mean,expected.mean,atol=1e-12,rtol=1e-12)
+    assert (actual.variance[...,0,:] == 0).all()
+
+
+def test_noiseless_mixed_pairs_keep_uncertain_direction_and_exact_nullspace():
+    base,p = training_field()
+    p.endpoints[1] = tensor([[.55],[.9]])
+    p.widths[1] = .35
+    both,diagnostics = engine().condition_directional_posterior(base,p)
+    only = DirectionalPairs(p.endpoints[1:],p.signs[1:],p.widths[1:],p.softness[1:],p.weights[1:],("p",),[])
+    reference,_ = engine().condition_directional_posterior(base,only)
+    assert diagnostics["fits"][0]["rank"] == 1
+    X = tensor([[0.],[.2],[.3],[.8]])
+    actual,expected = both.posterior(X),reference.posterior(X)
+    torch.testing.assert_close(actual.mean,expected.mean,atol=2e-8,rtol=2e-8)
+    torch.testing.assert_close(actual.distribution.covariance_matrix,expected.distribution.covariance_matrix,atol=2e-8,rtol=2e-8)
+    assert (actual.variance[[0,2]] == 0).all()
+
+
+@pytest.mark.parametrize("amplitude", [1e-20,1.,1e20])
+def test_noiseless_correction_scales_with_prior_not_universal_floor(amplitude):
+    base,evidence = training_field(amplitude=amplitude)
+    model,diagnostics = engine().condition_directional_posterior(base,evidence)
+    assert diagnostics["fits"][0]["rank"] == 0
+    X = tensor([[.3],[.3+1e-6]])
+    actual = model.posterior(X)
+    raw_joint = base.posterior(torch.cat([X,evidence.endpoints.flatten(0,1)]))
+    assert actual.variance[0].item() == 0.
+    assert actual.variance[1].item() > 0.
+    torch.testing.assert_close(actual.variance[1,0],raw_joint.distribution.covariance_matrix[1,1],rtol=1e-12,atol=0.)
+
+
+def test_genuinely_tiny_positive_training_covariance_is_not_declared_deterministic():
+    base,evidence = training_field(amplitude=1e-20,noise=1e-20)
+    model,diagnostics = engine().condition_directional_posterior(base,evidence)
+    assert diagnostics["fits"][0]["rank"] == 2
+    X = evidence.endpoints.flatten(0,1)
+    actual,expected = model.posterior(X),base.posterior(X)
+    assert (actual.variance > 0).all()
+    torch.testing.assert_close(actual.distribution.covariance_matrix,
+        expected.distribution.covariance_matrix,rtol=1e-12,atol=0.)
+
+
+@pytest.mark.parametrize("where", ["endpoints","query"])
+def test_known_zero_coordinates_do_not_hide_material_covariance_errors(monkeypatch,where):
+    base,evidence = training_field()
+    original = base.posterior
+    def corrupt(X,**kwargs):
+        p = original(X,**kwargs)
+        C = p.distribution.covariance_matrix.clone()
+        if where == "endpoints" or X.shape[-2] > 4:
+            C[...,0,-1] += .01
+            C[...,-1,0] += .01
+        return GPyTorchPosterior(MultivariateNormal(p.mean[...,0],DenseLinearOperator(C)))
+    monkeypatch.setattr(base,"posterior",corrupt)
+    with pytest.raises(EngineError) as caught:
+        model,_ = engine().condition_directional_posterior(base,evidence)
+        model.posterior(tensor([[.2],[.8]]))
+    assert caught.value.code == ErrorCode.MODEL_FIT_FAILED
+    assert caught.value.details["reason"] == "deterministic_covariance_residual"
+
+
+def test_noiseless_representation_is_scoped_to_each_model_batch():
+    base,evidence = training_field(batched=True)
+    base.likelihood.noise = tensor([[0.]*4,[.03]*4])
+    model,diagnostics = engine().condition_directional_posterior(base,evidence)
+    assert [fit["rank"] for fit in diagnostics["fits"]] == [0,2]
+    actual = model.posterior(tensor([[[0.],[.3]],[[0.],[.3]]]))
+    assert (actual.variance[0] == 0).all()
+    assert (actual.variance[1] > 0).all()
+
+
+@pytest.mark.parametrize("response_scale", [1e-4,1e4])
+def test_noiseless_residue_budget_uses_returned_response_frame(monkeypatch,response_scale):
+    from botorch.models import SingleTaskGP
+    from botorch.models.transforms.outcome import Standardize
+    from gpytorch.likelihoods import FixedNoiseGaussianLikelihood
+    from gpytorch import settings
+    X,Y = tensor([[0.],[.3],[.7],[1.]]),tensor([[.5],[.2],[-.3],[-.1]])*response_scale
+    with settings.min_fixed_noise(double_value=0.):
+        likelihood = FixedNoiseGaussianLikelihood(noise=torch.zeros(4,dtype=torch.double))
+        base = SingleTaskGP(X,Y,likelihood=likelihood,outcome_transform=Standardize(m=1))
+    evidence = DirectionalPairs(X.reshape(2,2,1),tensor([1.,1.]),tensor([.3,.3]),
+        tensor([1.2,1.2]),tensor([.5,.5]),("p","p"),[])
+    model,diagnostics = engine().condition_directional_posterior(base,evidence)
+    assert diagnostics["fits"][0]["rank"] == 0
+    assert (model.posterior(X).variance == 0).all()
+    original = base.posterior
+    def corrupt(X,**kwargs):
+        p = original(X,**kwargs)
+        C = p.distribution.covariance_matrix.clone()
+        C[...,0,0] += 1e-7*Y.std().square()
+        return GPyTorchPosterior(MultivariateNormal(p.mean[...,0],DenseLinearOperator(C)))
+    monkeypatch.setattr(base,"posterior",corrupt)
+    with pytest.raises(EngineError) as caught:
+        engine().condition_directional_posterior(base,evidence)
+    assert caught.value.details["reason"] == "deterministic_covariance_residual"
