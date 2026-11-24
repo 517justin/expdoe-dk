@@ -512,6 +512,45 @@ class Knowledge:
             )
         )
 
+    def with_monotone_v2(
+        self,
+        param: str,
+        effect: PhysicalEffect,
+        *,
+        objective: str | None = None,
+        n_pairs_per_dim: int = 5,
+        epsilon: float = 0.05,
+        softness: float = 1.0,
+        confidence: float = 1.0,
+    ) -> "Knowledge":
+        """Declare opt-in directional evidence, without fabricated response values."""
+        self._require_name(param, "param")
+        if objective is not None:
+            self._require_name(objective, "objective")
+        if effect not in ("increases_objective", "decreases_objective"):
+            raise ValueError("effect must be 'increases_objective' or 'decreases_objective'")
+        if type(n_pairs_per_dim) is not int or not 1 <= n_pairs_per_dim <= 32:
+            raise ValueError("n_pairs_per_dim must be a non-boolean integer in [1, 32]")
+        for name, value in (("epsilon", epsilon), ("softness", softness), ("confidence", confidence)):
+            self._require_v2_number(value, name)
+        if not 0 < epsilon < 0.5:
+            raise ValueError("epsilon must be in (0, 0.5)")
+        if softness <= 0:
+            raise ValueError("softness must be positive")
+        if not 0 <= confidence <= 1:
+            raise ValueError("confidence must be in [0, 1]")
+        return self.add_spec(make_pattern_spec(
+            pattern="monotone", version="2.0",
+            parameters={
+                "direction": "increasing" if effect == "increases_objective" else "decreasing",
+                "n_pairs_per_dim": n_pairs_per_dim,
+                "epsilon": epsilon,
+                "softness": softness,
+            },
+            scope=KnowledgeScope(factors=(param,), objectives=() if objective is None else (objective,)),
+            confidence=confidence,
+        ))
+
     def with_random_augment(self, n: int = 20) -> "Knowledge":
         return self._add_legacy_spec(
             make_pattern_spec(

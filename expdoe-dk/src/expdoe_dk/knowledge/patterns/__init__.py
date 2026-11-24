@@ -15,7 +15,7 @@ from .multiobjective import (
     target_range_definition,
     tradeoff_definition,
 )
-from .physics import arrhenius_definition, monotone_definition
+from .physics import arrhenius_definition, monotone_definition, monotone_v2_definition
 from .prior import GP_PRIOR_PRESETS, gp_prior_definition
 from .shape import (
     exponential_definition,
@@ -46,6 +46,7 @@ def builtin_pattern_definitions():
         quadratic_peak_definition(),
         quadratic_valley_definition(),
         monotone_definition(),
+        monotone_v2_definition(),
         objective_priority_definition(),
         optimum_range_definition(),
         ordinal_categories_definition(),

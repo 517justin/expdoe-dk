@@ -19,6 +19,7 @@ from expdoe_dk.domain import ObservationBatch, Space, constraint_from_dict
 from expdoe_dk.errors import EngineError, ErrorCode
 from expdoe_dk.knowledge import Knowledge
 from expdoe_dk.knowledge.artifacts import ARTIFACT_CATEGORIES, OptimizationArtifact
+from expdoe_dk.knowledge.patterns.shape import _v2_is_finite_number
 
 
 def _invalid(artifact: OptimizationArtifact, reason: str) -> EngineError:
@@ -290,6 +291,59 @@ def _check_conflicts(artifacts, *, multiobjective=False) -> None:
         seen[key] = artifact
 
 
+def check_directional_composition(artifacts) -> None:
+    """Check one projected output's directional declarations, without routing.
+
+    Call separately for each output: the artifact envelope deliberately has no
+    output field. Zero confidence removes pair cost, not declaration validity.
+    Legacy-only sets are left to their existing validators and error codes.
+    """
+    directional = tuple(artifact for artifact in artifacts.virtual_observations
+                        if artifact.kind == "monotone_sign_v2")
+    if not directional:
+        return
+
+    def invalid(reason, sources):
+        return EngineError(ErrorCode.CONFIG_INVALID, reason, details={
+            "pattern_ids": [artifact.source_pattern_id for artifact in sources],
+            "kind": "monotone_sign_v2", "reason": reason,
+        })
+
+    seen = {}
+    active_pairs = 0
+    for artifact in directional:
+        payload = artifact.payload
+        if set(payload) != {"dim", "direction", "n_pairs_per_dim", "epsilon", "softness", "confidence"}:
+            raise invalid("Invalid monotone v2 payload fields", (artifact,))
+        if type(payload["dim"]) is not int or payload["dim"] < 0:
+            raise invalid("Invalid monotone v2 dimension", (artifact,))
+        if payload["direction"] not in ("increasing", "decreasing"):
+            raise invalid("Invalid monotone v2 direction", (artifact,))
+        count = payload["n_pairs_per_dim"]
+        if type(count) is not int or not 1 <= count <= 32:
+            raise invalid("Monotone v2 pair count must be an integer in [1, 32]", (artifact,))
+        for name in ("epsilon", "softness", "confidence"):
+            value = payload[name]
+            if not _v2_is_finite_number(value):
+                raise invalid(f"Monotone v2 {name} must be a finite non-boolean number", (artifact,))
+        if not 0 < payload["epsilon"] < .5 or payload["softness"] <= 0 or not 0 <= payload["confidence"] <= 1:
+            raise invalid("Monotone v2 epsilon, softness or confidence is out of bounds", (artifact,))
+        previous = seen.get(payload["dim"])
+        if previous is not None:
+            reason = ("Opposing monotone v2 directions" if previous.payload["direction"] != payload["direction"]
+                      else "Duplicate monotone v2 factor declaration")
+            raise invalid(reason, (previous, artifact))
+        seen[payload["dim"]] = artifact
+        if payload["confidence"] > 0:
+            active_pairs += count
+    legacy = tuple(artifact for artifact in artifacts.virtual_observations
+                   if artifact.kind in {"monotone", "random_augment"})
+    if legacy:
+        raise invalid("Cannot mix monotone v2 and legacy virtual responses on one output", (*directional, *legacy))
+    if active_pairs > 64:
+        raise invalid("Monotone v2 exceeds 64 active pairs per output", directional)
+
+
 def compile_runtime(space: Space, knowledge: Knowledge,
                     observations: ObservationBatch | None) -> dict[str, tuple]:
     """Return every supported artifact, with executable declarative consumers.
@@ -378,4 +432,4 @@ def outcome_safety_intervals(space: Space) -> dict[str, tuple[float, float]]:
     return {name: bounds[name] for name in space.objectives if name in bounds}
 
 
-__all__ = ["compile_runtime", "outcome_safety_intervals"]
+__all__ = ["check_directional_composition", "compile_runtime", "outcome_safety_intervals"]

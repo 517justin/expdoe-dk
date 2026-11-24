@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import math
 
+from expdoe_dk.errors import EngineError, ErrorCode
+
 from .._frame import flip_for_minimize
 from ..artifacts import OptimizationArtifact, OptimizationArtifacts
 from ..guard import CompatibilityResult, KnowledgeValidationResult
 from ..registry import KnowledgePatternDefinition
+from .shape import _v2_is_finite_number
 
 
 def _factor_index(spec, space) -> int:
@@ -63,6 +66,57 @@ def _compile_monotone(spec, space, observations=None) -> OptimizationArtifacts:
             ),
         )
     )
+
+
+def _compile_monotone_v2(spec, space, observations=None) -> OptimizationArtifacts:
+    if len(space.objectives) != 1:
+        raise EngineError(
+            ErrorCode.CONFIG_INVALID,
+            "monotone@2.0 must be compiled per projected output",
+            details={"pattern_id": spec.pattern_id, "objectives": list(space.objectives)},
+        )
+    parameters = spec.parameters
+    effect = ("increases_objective" if parameters["direction"] == "increasing"
+              else "decreases_objective")
+    return OptimizationArtifacts(virtual_observations=(
+        _artifact(spec, "monotone_sign_v2", {
+            "dim": _factor_index(spec, space),
+            "direction": flip_for_minimize(effect, space.maximize[0]),
+            "n_pairs_per_dim": parameters["n_pairs_per_dim"],
+            "epsilon": parameters["epsilon"],
+            "softness": parameters["softness"],
+            "confidence": spec.confidence,
+        }),
+    ))
+
+
+def _validate_monotone_v2(spec, space, observations=None) -> KnowledgeValidationResult:
+    errors = list(_validate_factor(spec, space).errors)
+    if set(spec.scope.objectives) - set(space.objectives):
+        errors.append("Unknown objective scope")
+    if len(space.objectives) > 1 and not spec.scope.objectives:
+        errors.append("Multiobjective monotone v2 requires explicit objective scope")
+    if spec.scope.conditions is not None or spec.scope.region is not None:
+        errors.append("Conditional and regional monotone v2 scopes are unsupported")
+    # JSON Schema also accepts integral floats; this policy requires an int.
+    if type(spec.parameters["n_pairs_per_dim"]) is not int:
+        errors.append("n_pairs_per_dim must be a non-boolean integer")
+    for name in ("epsilon", "softness"):
+        if not _v2_is_finite_number(spec.parameters[name]):
+            errors.append(f"{name} must be a finite non-boolean number")
+    return KnowledgeValidationResult(
+        pattern_id=spec.pattern_id,
+        state="invalid" if errors else "valid",
+        summary=("Invalid monotone v2 declaration" if errors else
+                 "Inactive monotone v2 declaration (zero confidence)" if spec.confidence == 0 else
+                 "Valid monotone v2 directional declaration"),
+        errors=tuple(errors), effective_confidence=spec.confidence,
+    )
+
+
+def _compatible_monotone_v2(spec, space) -> CompatibilityResult:
+    result = _validate_monotone_v2(spec, space)
+    return CompatibilityResult(compatible=not result.errors, reasons=result.errors)
 
 
 def _validate_factor(spec, space, observations=None) -> KnowledgeValidationResult:
@@ -238,4 +292,25 @@ def monotone_definition() -> KnowledgePatternDefinition:
     )
 
 
-__all__ = ["arrhenius_definition", "monotone_definition"]
+def monotone_v2_definition() -> KnowledgePatternDefinition:
+    return KnowledgePatternDefinition(
+        pattern="monotone", version="2.0", family="shape",
+        schema={
+            "type": "object",
+            "properties": {
+                "direction": {"enum": ["increasing", "decreasing"]},
+                "n_pairs_per_dim": {"type": "integer", "minimum": 1, "maximum": 32},
+                "epsilon": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 0.5},
+                "softness": {"type": "number", "exclusiveMinimum": 0},
+            },
+            "required": ["direction", "n_pairs_per_dim", "epsilon", "softness"],
+            "additionalProperties": False,
+        },
+        compiler=_compile_monotone_v2,
+        validator=_validate_monotone_v2,
+        renderer=_render,
+        compatibility=_compatible_monotone_v2,
+    )
+
+
+__all__ = ["arrhenius_definition", "monotone_definition", "monotone_v2_definition"]

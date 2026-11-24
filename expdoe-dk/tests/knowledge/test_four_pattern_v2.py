@@ -49,7 +49,7 @@ def test_helpers_opt_in_to_v2_without_changing_the_v1_default(v2_knowledge):
     assert v2_knowledge.specs[0].version == "2.0"
     assert v2_knowledge.specs[0].scope.objectives == ("y",)
     assert len({d.pattern for d in builtin_pattern_definitions()}) == 23
-    assert len(builtin_pattern_definitions()) == 27
+    assert len(builtin_pattern_definitions()) == 28
 
 
 def test_each_v2_artifact_has_a_wired_consumer_without_claiming_empirical_support(v2_knowledge):
