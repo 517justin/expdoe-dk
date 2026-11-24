@@ -255,6 +255,13 @@ def _feasible_baseline(space, observations, runtime):
 def resolve_geometry(space: Space, observations: ObservationBatch, runtime: Mapping,
                      config: MultiObjectiveConfig) -> ObjectiveGeometry:
     """Resolve once from the initial observed batch; later draws reuse the result."""
+    return ObjectiveGeometry(**_resolve_geometry_values(space, observations, runtime, config,
+                                                       minimum_success=3))
+
+
+def _resolve_geometry_values(space: Space, observations: ObservationBatch, runtime: Mapping,
+                             config: MultiObjectiveConfig, *, minimum_success: int) -> dict:
+    """Shared math for reports with 1+ rows; never relax persisted geometry validation."""
     config.validate_for_space(space)
     if not isinstance(observations, ObservationBatch):
         raise _invalid("Geometry requires an ObservationBatch")
@@ -262,8 +269,9 @@ def resolve_geometry(space: Space, observations: ObservationBatch, runtime: Mapp
         if not frame.columns.is_unique or set(frame.columns) != set(names):
             raise _invalid("Observation columns must exactly match Space names")
     successful = observations.successful()
-    if len(successful.X) < 3:
-        raise EngineError(ErrorCode.INSUFFICIENT_DATA, "At least three successful observations are required")
+    if len(successful.X) < minimum_success:
+        raise EngineError(ErrorCode.INSUFFICIENT_DATA,
+                          f"At least {minimum_success} successful observations are required")
     weights, provenance = resolve_preference_weights(space, runtime, config)
     feasible = _feasible_baseline(space, successful, runtime)
     ranges = _target_ranges(space, runtime)
@@ -288,12 +296,14 @@ def resolve_geometry(space: Space, observations: ObservationBatch, runtime: Mapp
         acquisition_reference = (_utilities(physical, space, ranges) - location) / scale
         method = "physical"
     ideal = ((acquisition - location) / scale).amax(dim=0)
-    return ObjectiveGeometry(
-        objective_names=tuple(space.objectives), location=tuple(location.tolist()), scale=tuple(scale.tolist()),
-        report_reference=tuple(report_reference.tolist()), acquisition_reference=tuple(acquisition_reference.tolist()),
-        acquisition_ideal=tuple(ideal.tolist()), source_digest=_source_digest(space, observations),
-        source_row_count=len(observations.X), preference_weights=weights, preference_provenance=provenance,
-        physical_reference=config.reference_point, reference_method=method,
+    return dict(
+        objective_names=list(space.objectives), location=location.tolist(), scale=scale.tolist(),
+        report_reference=report_reference.tolist(), acquisition_reference=acquisition_reference.tolist(),
+        acquisition_ideal=ideal.tolist(), source_digest=_source_digest(space, observations),
+        source_row_count=len(observations.X), preference_weights=None if weights is None else list(weights),
+        preference_provenance=[dict(item) for item in provenance],
+        physical_reference=None if config.reference_point is None else dict(config.reference_point),
+        reference_method=method,
     )
 
 

@@ -20,7 +20,9 @@ values).
 from __future__ import annotations
 
 import base64
+import csv
 import html
+import io
 import json
 from datetime import datetime
 from pathlib import Path
@@ -181,10 +183,69 @@ def _cumulative_best(values: list[float], maximize: bool) -> list[float]:
 # ---------------------------------------------------------------------- #
 # Main entry point
 # ---------------------------------------------------------------------- #
+def _render_multiobjective(result: "Result", title: str) -> str:
+    """Offline measured tables; all user text is escaped at the HTML boundary."""
+    def escaped(value):
+        return html.escape("" if value is None else str(value))
+
+    def table(rows, columns):
+        header = "".join(f"<th>{escaped(c)}</th>" for c in columns)
+        body = "".join("<tr>" + "".join(f"<td>{escaped(row.get(c))}</td>" for c in columns) + "</tr>"
+                       for row in rows)
+        return f'<div style="overflow-x:auto"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>'
+
+    def metadata(value):
+        return '<pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + escaped(
+            json.dumps(value, indent=2, ensure_ascii=False)) + '</pre>'
+
+    d = result.multiobjective_diagnostics
+    columns = result.history_columns
+    # Use role mappings even when a response is literally named status or trial_id.
+    pareto_columns = [columns["metadata"]["trial_id"], *columns["parameters"].values(),
+                      *columns["objectives"].values(), columns["metadata"]["status"], columns["metadata"]["kind"]]
+    rows = result.history_df.to_dict("records")
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=list(result.history_df.columns))
+    writer.writeheader()
+    writer.writerows(rows)
+    encoded = base64.b64encode(buffer.getvalue().encode("utf-8")).decode("ascii")
+    content = [f"<h1>{escaped(title)}</h1>",
+               "<p>Observed measured outcomes, not a true or predicted Pareto front. No scalar winner.</p>",
+               "<h2>Objectives</h2>", table(d["objectives"], ["name", "direction", "unit", "target", "priority"]),
+               "<h2>Observed Pareto recipes</h2>"]
+    if result.pareto_rows:
+        content.append(table(result.pareto_rows, pareto_columns))
+    else:
+        content.append("<p>No feasible measurements. Pareto set is empty; HV = 0; reference unresolved.</p>")
+    content += ["<h2>Observed hypervolume progress</h2>",
+                f'<p>HV = {escaped(d["hypervolume"])}. Fixed normalized Objective utilities; '
+                'no preference weights or knowledge target-range penalties.</p>',
+                '<p>Report-only geometry is not comparable across separately finalized reports. '
+                'Only campaign-fixed geometry supports plateau advice.</p>',
+                table([dict(update, hypervolume=value) for update, value in
+                       zip(d["history_updates"], result.hypervolume_history)], ["batch_index", "row_count", "hypervolume"]),
+                "<h2>Reference and scale</h2>", metadata({k: d[k] for k in
+                    ("reference_status", "geometry_scope", "hypervolume_history_scope", "geometry")}),
+                "<h2>Configured route (not a model fit)</h2>", metadata({"noise_mode": d["noise_mode"], "route": d["route"]}),
+                "<h2>Soft preferences</h2>",
+                '<p>Knowledge target ranges and tradeoff weights guide acquisition, not measured HV or hard safety.</p>',
+                metadata(d["soft_preferences"]), "<h2>Advisory stop signals</h2>", metadata(result.stop_signals),
+                "<h2>Trial history</h2>", table(rows, list(result.history_df.columns)),
+                f'<a class="download" download="history.csv" href="data:text/csv;base64,{encoded}">Download CSV</a>',
+                "<h2>Parameter units</h2>", metadata(result.param_units),
+                "<h2>Knowledge (declarations, not measurements)</h2>", metadata(result.knowledge),
+                "".join(f'<p class="note">{escaped(note)}</p>' for note in result.notes)]
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<title>{escaped(title)}</title><meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<style>{_CSS}</style></head><body><main>' + "".join(content) + '</main></body></html>')
+
+
 def render_html(result: "Result", title: str | None = None) -> str:
     """Return a complete HTML document as a string."""
     if title is None:
         title = "expdoe-dk campaign report"
+    if len(result.objectives) > 1:
+        return _render_multiobjective(result, title)
 
     objective = result.objectives[0]
     maximize = bool(result.maximize[0])

@@ -92,6 +92,15 @@ def test_result_to_dict_preserves_param_report_metadata():
     assert payload["param_kinds"] == {"T": "continuous", "conc_A": "discrete"}
 
 
+def test_scalar_result_json_keyset_excludes_multiobjective_fields():
+    result = _make_dummy_result()
+    assert list(result.to_dict()) == [
+        "best_x_physical", "best_y_physical", "n_doe", "n_bo", "objectives", "maximize",
+        "knowledge_summary", "knowledge", "notes", "param_units", "param_kinds", "history_records",
+    ]
+    assert "Observed Pareto" not in result.to_html_string()
+
+
 def test_report_includes_notes_when_present():
     result = _make_dummy_result()
     html = result.to_html_string()

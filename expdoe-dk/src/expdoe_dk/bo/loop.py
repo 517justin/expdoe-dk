@@ -12,7 +12,7 @@ import logging
 import warnings
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -61,6 +61,10 @@ class Result:
     param_kinds: dict[str, str] = field(default_factory=dict)
     knowledge: dict[str, object] | None = None
     history_columns: dict[str, dict[str, str]] | None = None
+    pareto_rows: list[dict] = field(default_factory=list, kw_only=True)
+    hypervolume_history: list[float] = field(default_factory=list, kw_only=True)
+    multiobjective_diagnostics: dict = field(default_factory=dict, kw_only=True)
+    stop_signals: list[dict] = field(default_factory=list, kw_only=True)
 
     def to_dict(self) -> dict:
         result = {
@@ -79,10 +83,18 @@ class Result:
         }
         if self.history_columns is not None:
             result["history_columns"] = deepcopy(self.history_columns)
+        if len(self.objectives) > 1:
+            result.update({name: deepcopy(getattr(self, name)) for name in (
+                "pareto_rows", "hypervolume_history", "multiobjective_diagnostics", "stop_signals")})
+            # JSON has no NaN/Infinity. Raw unsuccessful markers remain in the
+            # authoritative batches/checkpoint; only this presentation uses null.
+            result["history_records"] = [{key: None if value is pd.NA or (
+                isinstance(value, (float, np.floating)) and not np.isfinite(value)) else value
+                for key, value in row.items()} for row in result["history_records"]]
         return result
 
     def to_json(self, path: str | Path) -> None:
-        Path(path).write_text(json.dumps(self.to_dict(), indent=2))
+        Path(path).write_text(json.dumps(self.to_dict(), indent=2, allow_nan=len(self.objectives) == 1))
 
     def to_html(self, path: str | Path, title: str | None = None) -> Path:
         """
@@ -733,8 +745,10 @@ class Campaign:
     # ------------------------------------------------------------------ #
     def finalize(self) -> Result:
         multi = self.space.n_objectives > 1
-        if not (self._observation_batches if multi else self._X_phys):
+        if not multi and not self._X_phys:
             raise RuntimeError("Campaign has no data; cannot finalize.")
+        if multi:
+            self._check_frozen_declaration()
         history = self.history_df()
         # Utilities choose the best; reports retain the measured physical value.
         best_x_phys, best_y_phys = None, None
@@ -758,11 +772,96 @@ class Campaign:
             param_kinds={p.name: p.kind for p in self.space.params},
             history_columns=self.history_columns if multi else None,
         )
+        if multi:
+            self._finalize_multiobjective(result)
         if not (any(spec.enabled for spec in self.knowledge.specs) if multi else self.knowledge.items):
             result.notes.append(
                 "No domain knowledge applied — plain GP baseline."
             )
         return result
+
+    def _finalize_multiobjective(self, result: Result) -> None:
+        """Derive measured progress without fitting or committing any ask state."""
+        from .acquisition import choose_multiobjective_acquisition
+        from .knowledge_runtime import compile_runtime
+        from .multiobjective import resolve_noise_mode
+        from .multiobjective_metrics import hypervolume, pareto_mask, plateau_signal
+        from .objective_geometry import _feasible_baseline, _resolve_geometry_values
+
+        runtime = compile_runtime(self.space, self.knowledge, None)
+        diagnostics = result.multiobjective_diagnostics
+        diagnostics.update(
+            measurement_basis="observed", hypervolume=0., feasible_measurements=0,
+            reference_status="unresolved", geometry=None, geometry_scope="unresolved",
+            hypervolume_history_scope="unresolved", history_updates=[], route=None,
+            noise_mode=self.multiobjective.noise_mode,
+            objectives=[{"name": o.name, "direction": o.direction, "unit": o.unit,
+                         "target": list(o.target) if isinstance(o.target, tuple) else o.target,
+                         "priority": o.priority} for o in self.space.objective_specs],
+            soft_preferences=[deepcopy(spec) for spec in self.knowledge.to_envelope()["specs"]
+                              if spec["enabled"] and spec["pattern"] in
+                              ("target_range", "objective_priority", "tradeoff")],
+        )
+        columns = result.history_columns
+        history = result.history_df
+        successful = history[columns["metadata"]["status"]].eq("success").to_numpy()
+        if not successful.any():
+            return
+        measured = history.loc[successful]
+        observations = ObservationBatch(
+            measured[list(columns["parameters"].values())].rename(
+                columns={v: k for k, v in columns["parameters"].items()}),
+            measured[list(columns["objectives"].values())],
+        )
+        try:
+            feasible = _feasible_baseline(self.space, observations, runtime)
+        except EngineError as error:
+            if error.code == ErrorCode.INSUFFICIENT_DATA and error.details.get("reason") == "no_feasible_baseline":
+                return
+            raise
+        geometry = (self._geometry.to_dict() if self._geometry is not None else
+                    _resolve_geometry_values(self.space, self._combined_observations(), runtime,
+                                             self.multiobjective, minimum_success=1))
+        positions = np.flatnonzero(successful)[feasible.numpy()]
+        measured = history.iloc[positions]
+        raw = np.column_stack([o.to_utility(measured[columns["objectives"][o.name]].to_numpy(dtype=float))
+                               for o in self.space.objective_specs])
+        utilities = (raw - np.asarray(geometry["location"])) / np.asarray(geometry["scale"])
+        result.pareto_rows = measured.loc[pareto_mask(utilities)].to_dict("records")
+        diagnostics.update(
+            feasible_measurements=len(measured), reference_status="resolved", geometry=geometry,
+            geometry_scope="campaign_fixed" if self._geometry is not None else "report_only",
+            hypervolume_history_scope="fixed_geometry_within_report",
+        )
+        # Report routing is prospective, not a claim about a fitted model or past asks.
+        try:
+            noise = resolve_noise_mode(self._combined_observations(), self.multiobjective)
+            weights = geometry["preference_weights"]
+            config = replace(self.multiobjective, noise_mode=noise,
+                             preference_weights=None if weights is None else dict(zip(self.space.objectives, weights)))
+            decision = choose_multiobjective_acquisition(self.space.n_objectives, config,
+                has_pending=self._pending is not None and len(self._pending.X) > 0, has_preferences=weights is not None)
+            diagnostics.update(noise_mode=noise, route={"kind": decision.kind, "reason": decision.reason,
+                                                       "basis": "current_configuration_not_model_fit"})
+        except EngineError as error:
+            diagnostics["route"] = {"kind": None, "reason": error.message, "error_code": error.code.value}
+
+        end = 0
+        for index, batch in enumerate(self._observation_batches):
+            start, end = end, end + len(batch.X)
+            if not successful[start:end].any():
+                continue
+            result.hypervolume_history.append(hypervolume(utilities[positions < end], geometry["report_reference"]))
+            diagnostics["history_updates"].append({"batch_index": index, "row_count": end})
+        diagnostics["hypervolume"] = result.hypervolume_history[-1]
+        if self._geometry is not None:
+            # Earlier batches reconstructed with the initial geometry are not five
+            # new updates after resolution; the final initial prefix is the baseline.
+            before = [i for i, update in enumerate(diagnostics["history_updates"])
+                      if update["row_count"] <= self._geometry.source_row_count]
+            signal = plateau_signal(result.hypervolume_history[before[-1]:])
+            if signal is not None:
+                result.stop_signals.append(signal)
 
     # ------------------------------------------------------------------ #
     # Helpers
