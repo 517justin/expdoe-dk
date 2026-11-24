@@ -20,6 +20,8 @@ passes on the verified current/lower stacks; v2 ties Plain on this fixture,
 while the historical v1 failure remains recorded. This is not a general
 knowledge-performance or laboratory-safety guarantee. See the
 [workflow guide](./docs/multiobjective.md) and [roadmap](./docs/roadmap.md).
+Checkpoint compatibility follows the [documented historical routes and
+intermediate-candidate exclusions](./docs/multiobjective.md#persistence-and-environment).
 
 - Continuous, integer, discrete, categorical, and ordinal parameters with
   physical/model transforms.

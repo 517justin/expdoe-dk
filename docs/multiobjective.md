@@ -15,6 +15,12 @@ measurements are required before recommendation. Failure/warning rows remain
 in history but do not train the models. Partial objective returns and mixed
 known/missing variances across successful batches are unsupported.
 
+Across batches, X/Y/Yvar and public history retain exact physical values and
+distinct None/NaN/pd.NA markers. Columns retain pandas' common dtype when it is
+lossless; otherwise only the affected column uses object dtype. This protects
+large integer recipes before physical exclusion and model-coordinate conversion;
+it does not change numerical policy inside the GP.
+
 Each objective gets an independent physical-response GP. Predictions retain
 physical units and shape `(n, m)`. There is no cross-output correlation model,
 first-objective shortcut, reference-estimator fallback, or random fallback for
@@ -54,6 +60,12 @@ conditioning. Confidence is a fractional evidence weight, **not** a calibrated
 probability or measurement variance. Zero confidence is inactive and preserves
 the ordinary fit and RNG behavior. Wrong knowledge can hurt results; marginal
 measured-trend diagnostics are not causal proof and never rewrite observations.
+
+Before the first successful ask, replacing a v2 declaration or relevant Space
+semantics invalidates its prior empirical verdict and warning suppression.
+Evidence becomes explicitly unassessed until a later validation runs; reading
+diagnostics or restoring a checkpoint does not implicitly revalidate it.
+The existing post-successful-ask declaration freeze still applies.
 
 Pair count per dimension is 1-32, epsilon is strictly between 0 and .5, softness
 is positive and confidence is in [0,1]. Limits are 64 active pairs per output and
@@ -163,6 +175,18 @@ writers emit 0.6.0. Schema 2.2 accepts **only** release writer 0.6.0 with
 matching nested envelopes. The retained 0.5.1 prerelease schema-2.2 fixture is
 not silently relabelled or accepted as a released archive. Never assume all
 0.x payloads are compatible. Historical schema 2.0/2.1 fixtures stay historical.
+
+**Intermediate 0.6.0 development checkpoints are not universally compatible.**
+In particular, unpublished candidates `93a920a`, `412fd2d` and `96e9013` may
+have frozen geometry digests derived from a different combined representation
+when integer Yvar is mixed with missing failed-row variance. Such schema-2.2
+checkpoints can be rejected by the final reader even though their writer says
+0.6.0. This is a parked compatibility limitation (N1), not a repaired migration.
+Do not edit checkpoint contents or hashes to force restoration. Preserve the
+original files; if needed, recreate a Campaign from the original measurements
+and re-establish geometry. That is a new campaign, not same-campaign resume.
+Reviewed historical 0.4/0.5.0/0.5.1 routes above are unchanged; same-revision
+restart at final production `4761df9` passed on both tested stacks.
 
 The resolver-clean lower environment is Python 3.11.15, Ax 1.2.4, BoTorch 0.17.2,
 GPyTorch 1.15.2, Torch 2.2.0, NumPy 1.24.4, SciPy 1.12.0 and pandas 2.0.3.

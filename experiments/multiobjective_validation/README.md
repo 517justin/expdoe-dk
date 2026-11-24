@@ -1,10 +1,10 @@
 # Multiobjective Acceptance
 
 **0.6.0 passed the approved protocol and complete current/lower slow suites.**
-Final production source is clean `412fd2d4ff89ec836f6889bdfebe489dff532f1a`;
+Final production source is clean `4761df9824ffaace1a84a4a412aefe8bddcfbd81`;
 fresh installed-wheel, metadata, examples and artifact checks also passed.
-The later checkpoint-test correction and documentation-only changes are verified
-separately below; they are not misattributed to the full-suite source revision.
+The final documentation-only delta is composed with that source's evidence;
+the full suites and artifacts are not attributed to a later prose revision.
 Protocol `fixed-catalog-monotone`, version `2.0`, reports four methods:
 `random`, `plain_gp`, legacy `knowledge_gp`, and `knowledge_gp_v2`.
 Only the latter adds `monotone@2.0`, increasing on gain, confidence .8,
@@ -17,6 +17,69 @@ Every method still requires exact replay/restart, feasibility 1, duplicates 0,
 and eight q=2 batches. Declared noiseless mode is unchanged: ordinary GPyTorch
 fixed-noise likelihoods clamp zero declared variance to 1e-6 internally.
 This protocol does not claim exact zero fitted noise.
+
+### Final-Review Fix Verification
+
+The single consolidated fix wave binds multiobjective v2 empirical evidence to
+its actual declaration/Space and preserves exact physical values and missing
+markers across batches. It changes neither scalar concatenation nor the
+numerical, search, noise, version or quality protocol. All 54 new regressions
+pass on both stacks. Complete suites ran once each at clean `4761df9`, with
+no duplicate standalone matrix:
+
+| Stack | Passed | Skipped | Warnings | Full suite | Matrix including replay/restart |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Current | 2646 | 0 | 188 | 1559.31s | 1046.97s |
+| Lower | 2645 | 1 | 202 | 1997.35s | 1242.33s |
+
+All nine slow cases ran. The sole lower skip remains Torch 2.2's missing uint64
+tensor capability. Both 20-row matrices retain the four-method/five-seed results
+below: all three release gates pass, v2 ties Plain, and legacy v1 still fails
+separately. Controller-owned independent physical-HV/normalization/provenance
+audits pass both matrices, maximum discrepancy 2.64e-16. No general superiority
+claim follows. Timings overlap and are not isolated performance benchmarks.
+
+Current warnings comprise 36 jitter, 47 fixed-noise clamps, 102 negative-variance,
+two Torch deprecations and one extreme-domain overflow. Lower has 50 jitter,
+47 fixed-noise clamps, 103 negative-variance, one NumPy corruption-test deprecation
+and one overflow. Each matrix separately captures 600 fixed-noise-clamp warnings;
+those are not included in the pytest warning totals. Passing is not warning-free.
+
+Retained evidence under `.superpowers/sdd/2026-11-24-monotone-v2-implementation/`:
+`final-fix-{current,floor}-4761df9.log`,
+`final-fix-{current,floor}-4761df9/test_full_fixed_seed_matrix0/{matrix.jsonl,summary.json}`,
+and `final-fix-{current,floor}-4761df9-independent-audit.json`.
+Commands, RED/GREEN chronology, failures and decisions are in `final-fix-report.md`.
+
+Fresh wheel/sdist legal, dependency and source checks pass. All 63 package files
+match committed source in both artifacts and the noneditable installation.
+Outside-source verification with PYTHONPATH unset passed examples 03/04/05,
+historical checkpoint/Space reads and R1/R2 replacement, exact-value and
+missing-marker smoke checks. Current/lower editable examples and all three pip
+checks pass. The BoTorch-0.11 overlay passes 170 capability tests, not a supported
+Ax dependency resolution.
+
+Artifacts in `final-fix-artifacts-4761df9/`:
+- `expdoe_dk-0.6.0-py3-none-any.whl`, SHA256
+  `b68f2bbad5835f574dc802a971806fea12d0ad66f09a6ce6345cd1893da363fc`.
+- `expdoe_dk-0.6.0.tar.gz`, SHA256
+  `5a1947a53270e92bd39108807c54a597606e782bd3b857d93c7073b5c2a0d4eb`.
+
+**Parked N1 compatibility limitation:** unpublished intermediate 0.6.0
+schema-2.2 checkpoints from `93a920a`, `412fd2d` or `96e9013` that combine integer
+Yvar with missing failed-row variance may fail frozen geometry-digest checking
+under the final representation. These development candidates are not promised
+universal internal-build continuity. Do not edit checkpoint files or hashes to
+force restoration. Preserve originals and, if necessary, recreate a Campaign
+from original measurements and re-establish geometry; this is not same-campaign
+resume. Supported historical 0.4/0.5.x routes are unchanged, and final
+same-revision restart passes. N1 is explicitly excluded/parked, not fixed; see
+the [checkpoint compatibility guide](../../docs/multiobjective.md#persistence-and-environment).
+
+The later root/documentation-only update is not packaged. Production, tests,
+package README and metadata remain byte-identical to the fully tested and
+packaged revision; final provenance evidence composes these results rather than
+claiming a new full-suite run on prose. Prior failures below remain preserved.
 
 ### Approved V2 Results
 
@@ -65,7 +128,7 @@ V2 is opt-in and can be slow. Bounded source-adapter forward/backward observatio
 reached 131-133s excluding setup, not full-recommendation throughput; see
 [numerical scope and cost](../../docs/multiobjective.md#numerical-scope-and-cost).
 
-### Final 0.6.0 Verification
+### Prior 0.6.0 Candidate Verification
 
 Both complete post-bump suites ran on clean source
 `412fd2d4ff89ec836f6889bdfebe489dff532f1a`, with installed metadata 0.6.0:
@@ -85,7 +148,7 @@ captured 600 fixed-noise-clamp warnings. Suite warnings remain visible: jitter,
 fixed-noise clamps, negative-variance warnings, existing overflow and dependency
 deprecations. A passing suite does not mean warning-free numerical execution.
 
-Final logs and retained matrices are under
+Prior candidate logs and retained matrices are under
 `.superpowers/sdd/2026-11-24-monotone-v2-implementation/`:
 `task-6-final-{current,floor}-412fd2d.log` and
 `task-6-final-{current,floor}-412fd2d/test_full_fixed_seed_matrix0/{matrix.jsonl,summary.json}`.
