@@ -30,6 +30,7 @@ ARTIFACT_CONSUMERS: dict[tuple[str, str], str] = {
     ("parameter_constraints", "hard_parameter_constraint"): "bo.knowledge_runtime.RuntimeParameterConstraint",
     ("outcome_constraints", "target_range_constraint"): "bo.knowledge_runtime.RuntimeOutcomeRange",
     ("acquisition_preferences", "objective_priority_preference"): "bo.knowledge_runtime.RuntimePreference",
+    ("acquisition_preferences", "tradeoff_preference"): "bo.knowledge_runtime.RuntimePreference",
     ("virtual_observations", "monotone"): "bo.gp.build_virtual_observation_augmenter",
     ("virtual_observations", "random_augment"): "bo.loop.Campaign.ask",
     ("priors", "gp_prior"): "bo.gp.build_prior_modules",
@@ -42,13 +43,15 @@ def inspect_capabilities(space: Space, knowledge: Knowledge) -> CapabilityReport
     """Classify every enabled pattern instance against Phase 1 consumers.
 
     This is an inspection boundary, not a provider loader or a model fitter.
-    Active declarations incompatible with the single-objective Phase 1 runtime
-    or whose compiled kinds lack consumers appear in ``blocked`` with reasons.
+    Multi-output declarations are checked against their named response or global
+    route. Incompatible declarations and kinds without consumers are blocked.
     """
     if not isinstance(space, Space):
         raise TypeError("space must be a Space")
     if not isinstance(knowledge, Knowledge):
         raise TypeError("knowledge must be a Knowledge")
+    if len(space.objectives) > 1:
+        return _inspect_multiobjective(space, knowledge)
 
     applied: list[str] = []
     blocked: list[str] = []
@@ -130,6 +133,58 @@ def inspect_capabilities(space: Space, knowledge: Knowledge) -> CapabilityReport
                     blocked.append(identity)
             diagnostics.append({"pattern_ids": affected, "reason": error.details.get("reason", "invalid_knowledge"),
                                 "code": error.code.value, "details": error.details})
+    return CapabilityReport(tuple(applied), tuple(blocked), tuple(diagnostics))
+
+
+def _inspect_multiobjective(space, knowledge):
+    from .objective_routing import _compile_route, _knowledge_routes, _subset
+    from .structured_coverage import STRUCTURED_KINDS
+
+    applied, blocked, diagnostics = [], [], []
+
+    def record_error(error, fallback):
+        affected = error.details.get("pattern_ids", error.details.get("source_pattern_ids", []))
+        if not affected:
+            affected = [error.details["pattern_id"]] if "pattern_id" in error.details else fallback
+        for identity in affected:
+            if identity in applied:
+                applied.remove(identity)
+            if identity not in blocked:
+                blocked.append(identity)
+        diagnostics.append({**error.details, "reason": error.details.get("reason", "invalid_knowledge"),
+                            "code": error.code.value, "details": str(error)})
+
+    for spec in knowledge.specs:
+        if not spec.enabled:
+            continue
+        try:
+            routes = _knowledge_routes(space, None, _subset(knowledge, (spec,)))
+            for route in routes:
+                artifacts = _compile_route(route)
+                for category in ARTIFACT_CATEGORIES:
+                    for artifact in getattr(artifacts, category):
+                        entry = {"pattern_id": spec.pattern_id, "pattern": spec.pattern,
+                                 "version": spec.version, "objective_name": route.objective_name,
+                                 "scope": spec.scope.to_dict(), "artifact_kind": artifact.kind,
+                                 "category": category, "consumer": ARTIFACT_CONSUMERS[(category, artifact.kind)]}
+                        if artifact.kind in STRUCTURED_KINDS:
+                            entry.update(coverage_status="not_evaluated", empirical_evidence="not_evaluated")
+                        diagnostics.append(entry)
+        except EngineError as error:
+            record_error(error, [spec.pattern_id])
+        else:
+            applied.append(spec.pattern_id)
+    # Per-pattern success cannot certify composition, prior or global conflicts.
+    try:
+        routes = _knowledge_routes(space, None, knowledge)
+    except EngineError:
+        pass  # The per-pattern pass already recorded malformed scopes.
+    else:
+        for route in routes:
+            try:
+                _compile_route(route)
+            except EngineError as error:
+                record_error(error, [spec.pattern_id for spec in route.knowledge.specs])
     return CapabilityReport(tuple(applied), tuple(blocked), tuple(diagnostics))
 
 

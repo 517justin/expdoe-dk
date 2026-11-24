@@ -95,6 +95,28 @@ def validate_runtime_artifact(space: Space, category: str, artifact: Optimizatio
             finite(payload["upper"])
             if payload["lower"] >= payload["upper"]:
                 raise ValueError("Target range must be ordered")
+        elif artifact.kind == "tradeoff_preference" or (
+                artifact.kind == "objective_priority_preference" and len(space.objectives) > 1):
+            if category != "acquisition_preferences":
+                raise ValueError("Preferences require acquisition_preferences")
+            if set(payload) - {"objectives", "weights", "confidence"}:
+                raise ValueError("Unknown preference payload fields")
+            names, weights = payload["objectives"], payload["weights"]
+            if (not isinstance(names, (list, tuple)) or not isinstance(weights, (list, tuple))
+                    or any(type(name) is not str for name in names)
+                    or len(names) != len(set(names)) or set(names) != set(space.objectives)
+                    or len(names) != len(weights) or len(names) < 2):
+                raise ValueError("Preference must name every objective exactly once")
+            if artifact.kind == "tradeoff_preference" and len(names) != 2:
+                raise ValueError("Tradeoff requires exactly two objectives")
+            for weight in weights:
+                finite(weight, positive=True)
+            if not math.isclose(sum(weights), 1.):
+                raise ValueError("Preference weights must be normalized")
+            if "confidence" in payload:
+                finite(payload["confidence"], positive=True)
+                if payload["confidence"] > 1:
+                    raise ValueError("Preference confidence must not exceed one")
         elif artifact.kind == "objective_priority_preference":
             if len(payload["objectives"]) != len(payload["weights"]) or not payload["weights"]:
                 raise ValueError("Preference objectives and weights must match")
@@ -223,7 +245,7 @@ class RuntimePreference(_Consumer):
         return value
 
 
-def _check_conflicts(artifacts) -> None:
+def _check_conflicts(artifacts, *, multiobjective=False) -> None:
     seen: dict[tuple, OptimizationArtifact] = {}
     for category in ("priors", "virtual_observations", "kernel_components"):
         for artifact in getattr(artifacts, category):
@@ -245,6 +267,27 @@ def _check_conflicts(artifacts) -> None:
                     "kind": artifact.kind,
                 })
             seen[key] = artifact
+    if not multiobjective:
+        return
+    for artifact in (*artifacts.acquisition_preferences, *artifacts.outcome_constraints):
+        if artifact.kind in {"objective_priority_preference", "tradeoff_preference"}:
+            key = ("preference",)
+            value = dict(zip(artifact.payload["objectives"], artifact.payload["weights"], strict=True))
+            previous = seen.get(key)
+            previous_value = (dict(zip(previous.payload["objectives"], previous.payload["weights"], strict=True))
+                              if previous else None)
+            conflict = previous is not None and any(not math.isclose(value[name], previous_value[name]) for name in value)
+        else:
+            key = ("target_range", artifact.payload["objective"])
+            previous = seen.get(key)
+            conflict = previous is not None and any(previous.payload[name] != artifact.payload[name]
+                                                     for name in ("lower", "upper"))
+        if conflict:
+            raise EngineError(ErrorCode.KNOWLEDGE_CONFLICT, "Conflicting global knowledge preferences", details={
+                "pattern_ids": [previous.source_pattern_id, artifact.source_pattern_id],
+                "kind": artifact.kind, "objective_names": list(artifact.payload.get("objectives", (key[-1],))),
+            })
+        seen[key] = artifact
 
 
 def compile_runtime(space: Space, knowledge: Knowledge,
@@ -255,6 +298,10 @@ def compile_runtime(space: Space, knowledge: Knowledge,
     closed. Insufficient empirical coverage never removes hard safety rules.
     Registry artifacts retain provenance; wrappers expose their original
     ``artifact`` plus the interface needed by a downstream numerical consumer.
+
+    For multi-output Spaces this returns only global safety and preferences.
+    Response models consume separately compiled ``project_objective`` results;
+    all response routes are validated here before any global runtime is returned.
     """
     from .capabilities import inspect_capabilities
 
@@ -262,6 +309,14 @@ def compile_runtime(space: Space, knowledge: Knowledge,
         raise TypeError("space and knowledge must be Space and Knowledge")
     if observations is not None and not isinstance(observations, ObservationBatch):
         raise TypeError("observations must be ObservationBatch or None")
+    if len(space.objectives) > 1:
+        from .objective_routing import _compile_route, _knowledge_routes
+        global_artifacts = None
+        for route in _knowledge_routes(space, observations, knowledge):
+            compiled = _compile_route(route)
+            if route.objective_name is None:
+                global_artifacts = compiled
+        return _runtime_from_artifacts(space, global_artifacts)
     # Compile the whole declaration set first so certified conflicts preserve
     # their KNOWLEDGE_CONFLICT code, rather than being reduced to an inventory.
     artifacts = knowledge.compile(space, observations)
@@ -271,6 +326,12 @@ def compile_runtime(space: Space, knowledge: Knowledge,
     if report.blocked:
         raise EngineError(ErrorCode.KNOWLEDGE_INVALID, "Knowledge has no supported runtime route",
                           details=report.to_dict())
+    runtime = _runtime_from_artifacts(space, artifacts)
+    _check_conflicts(artifacts)
+    return runtime
+
+
+def _runtime_from_artifacts(space, artifacts):
     from .capabilities import ARTIFACT_CONSUMERS
 
     runtime = {}
@@ -291,7 +352,6 @@ def compile_runtime(space: Space, knowledge: Knowledge,
             else:
                 routed.append(artifact)
         runtime[category] = tuple(routed)
-    _check_conflicts(artifacts)
     return runtime
 
 

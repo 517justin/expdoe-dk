@@ -75,21 +75,19 @@ def test_every_emitted_kind_has_explicit_consumer_or_block(pattern_cases):
     for space, knowledge in pattern_cases:
         report = inspect_capabilities(space, knowledge)
         entries = [d for d in report.diagnostics if d.get("artifact_kind")]
-        if len(space.objectives) > 1:
-            assert any(d.get("reason") == "multi_objective_unsupported"
-                       for d in report.diagnostics)
-            continue
         assert entries
         assert all(d.get("consumer") or d.get("reason") == "unsupported_artifact"
                    for d in entries)
         assert all(d.get("reason") != "skipped" for d in entries)
 
 
-def test_active_multiobjective_blocks_but_disabled_storage_restores(pattern_cases):
+def test_active_tradeoff_routes_but_disabled_storage_restores(pattern_cases):
     multi_space, active = pattern_cases[-1]
     report = inspect_capabilities(multi_space, active)
-    assert report.blocked == (active.specs[0].pattern_id,)
-    assert any(d["reason"] == "multi_objective_unsupported" for d in report.diagnostics)
+    assert report.applied == (active.specs[0].pattern_id,)
+    assert report.blocked == ()
+    assert any(d.get("artifact_kind") == "tradeoff_preference" and d["objective_name"] is None
+               for d in report.diagnostics)
     original = active.specs[0]
     disabled = Knowledge().add_spec(make_pattern_spec(
         pattern_id=original.pattern_id, pattern=original.pattern,
