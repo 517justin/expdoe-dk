@@ -1,6 +1,6 @@
 # Multiobjective Acceptance
 
-**Approved protocol v2 pending validation; 0.6.0 release remains blocked.**
+**Approved protocol v2 failed numerical validation; 0.6.0 release remains blocked.**
 Protocol `fixed-catalog-monotone`, version `2.0`, reports four methods:
 `random`, `plain_gp`, legacy `knowledge_gp`, and `knowledge_gp_v2`.
 Only the latter adds `monotone@2.0`, increasing on gain, confidence .8,
@@ -13,6 +13,32 @@ Every method still requires exact replay/restart, feasibility 1, duplicates 0,
 and eight q=2 batches. Declared noiseless mode is unchanged: ordinary GPyTorch
 fixed-noise likelihoods clamp zero declared variance to 1e-6 internally.
 This protocol does not claim exact zero fitted noise.
+
+### V2 Execution Hold
+
+Both fixed matrices started from clean source
+`80e7a1b5b2907cd5244d2dbe2760e4acd193212f`. Each completed seed 2's random,
+plain and legacy methods with full replay/restart, then stopped in v2 with
+`MODEL_FIT_FAILED`, reason `negative_covariance`, on gain. There is no complete
+v2 quality summary and no release acceptance claim. All protocol parameters
+remain locked; package and engine versions remain 0.5.1.
+
+| Stack | V2 failing round (zero-based) | Measurements | Source covariance minimum eigenvalue | PSD tolerance |
+| --- | ---: | ---: | ---: | ---: |
+| Current | 2 | 10 | -1.7544614871e-11 | 1.4210707455e-19 |
+| Lower | 1 | 8 | -1.4331936525e-11 | 1.1369598784e-19 |
+
+The failure occurs while validating the base GP query covariance, before the
+directional update. The ill-conditioned measured-data fit subtracts large prior
+and conditioning terms to obtain a small latent covariance. A diagnostic-only
+80-digit recomputation of the frozen Matern-2.5 kernel, fitted hyperparameters,
+physical features and fitted 1e-6 noise gives positive minimum eigenvalues:
+5.0287595946e-13 (current), 6.0729325677e-12 (lower). On the current stack,
+double-precision direct solve and Cholesky subtraction both still yield negative
+eigenvalues; lower-stack direct solve also remains negative.
+This supports a covariance-construction cancellation diagnosis, not permission
+to widen PSD/rank tolerances or change the noise, oracle, seeds or fit parameters.
+A core numerical repair needs separate approval; the fail-closed guard remains.
 
 ## Preserved Historical V1 Failure
 
