@@ -329,8 +329,9 @@ class Campaign:
         if previous_ids.intersection(observations.ids):
             raise EngineError(ErrorCode.CONFIG_INVALID, "Observation IDs must be unique across batches")
         # Validate serializability before mutation, including unsuccessful values.
-        from .checkpoint import _strict_json
-        _strict_json(batch_to_state(observations))
+        from .checkpoint import _strict_json, multiobjective_batch_to_state
+        _strict_json(multiobjective_batch_to_state(observations) if self.space.n_objectives > 1
+                     else batch_to_state(observations))
         self._record_observations(observations)
 
     def _record_observations(self, observations: ObservationBatch) -> None:
@@ -517,9 +518,6 @@ class Campaign:
     ) -> Result:
         # Initial DoE.
         multi = self.space.n_objectives > 1
-        if multi and checkpoint is not None:
-            raise EngineError(ErrorCode.CHECKPOINT_INCOMPATIBLE,
-                "Multiobjective checkpoint support is not available yet")
         if multi:
             self._check_frozen_declaration()
             candidates, candidate_ids = self._prepare_campaign_catalog(candidates, candidate_ids)
@@ -789,15 +787,14 @@ class Campaign:
         return df
 
     def save_checkpoint(self, path: str | Path) -> None:
-        """Save 2.1 atomically, or the explicit lossless legacy archive route.
+        """Save 2.1/2.2 atomically, or the explicit lossless legacy archive route.
 
         Scalar opaque-provider archives retain schema 2.0 only while no newer
-        metadata would be lost. Multiobjective checkpoint writing is unavailable.
+        metadata would be lost. Multiobjective campaigns always use schema 2.2.
         """
         if self.space.n_objectives > 1:
-            raise EngineError(ErrorCode.CHECKPOINT_INCOMPATIBLE,
-                "Multiobjective checkpoint support is not available; cannot downgrade measured vectors")
-        if self._requires_legacy_archive():
+            state = self.to_state()
+        elif self._requires_legacy_archive():
             state = self._legacy_archive_state()
             warnings.warn("Saving legacy archival schema 2.0; Phase-1 restore is unavailable for this declaration", stacklevel=2)
         else:
@@ -827,10 +824,10 @@ class Campaign:
             "trial_kind": list(self._trial_kind)}
 
     def to_state(self) -> dict:
-        """Return detached, validated, single-objective schema-2.1 JSON state."""
+        """Return detached validated JSON: scalar schema 2.1, multiobjective 2.2."""
         if self.space.n_objectives != 1:
-            raise EngineError(ErrorCode.CHECKPOINT_INCOMPATIBLE,
-                "Phase-1 Campaign state requires exactly one objective")
+            from .checkpoint import multiobjective_to_state
+            return multiobjective_to_state(self)
         pending = None if self._pending is None else {
             "ids": list(self._pending.ids), "X": self._pending.X.astype(object).values.tolist()}
         return validate_state({"schema_version": CHECKPOINT_SCHEMA_VERSION,
@@ -845,7 +842,7 @@ class Campaign:
 
     @classmethod
     def from_state(cls, state: dict) -> "Campaign":
-        """Restore declarative 2.1 state, or migrate a known legacy wire format."""
+        """Restore declarative 2.1/2.2 state, or migrate a known legacy format."""
         return restore(state, cls)
 
     @classmethod

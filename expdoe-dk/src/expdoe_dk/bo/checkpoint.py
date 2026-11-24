@@ -1,7 +1,8 @@
 """Declarative Campaign checkpoints; no executable payloads or provider loading.
 
-2.1 persists physical batches and PCG64 state. 2.0 and unversioned v0.4 are
-archival readers (and a legacy-only writer for multiobjective/provider archives).
+2.2 persists multiobjective campaigns with lossless physical frame metadata.
+2.1 persists scalar batches and PCG64 state. 2.0 and unversioned v0.4 are
+archival readers (and a legacy-only writer for opaque provider archives).
 All JSON structure is checked before constructing Space, Knowledge or Campaign.
 Domain readers then apply their semantic invariants before a Campaign is made.
 """
@@ -15,6 +16,7 @@ from pathlib import Path
 import tempfile
 
 from jsonschema import Draft202012Validator, ValidationError, validators
+import numpy as np
 import pandas as pd
 
 from ..domain import ObservationBatch, PendingBatch, Space
@@ -24,6 +26,7 @@ from ..knowledge import Knowledge, COMPATIBLE_ENGINE_VERSIONS
 from ..knowledge.patterns import builtin_pattern_definitions
 
 CHECKPOINT_SCHEMA_VERSION = "2.1"
+MULTIOBJECTIVE_SCHEMA_VERSION = "2.2"
 _Validator = validators.extend(Draft202012Validator, type_checker=
     Draft202012Validator.TYPE_CHECKER.redefine("integer", lambda checker, value: type(value) is int))
 
@@ -118,6 +121,59 @@ _STATE = _object({**_COMMON, "observations": _array(_BATCH), "pending": _PENDING
     "rng_state": _RNG, "ask_iteration": _INTEGER, "validation": _VALIDATION})
 _LEGACY = _object({**_COMMON, "history": _array({"type": "object"})})
 
+# These are finite allowlists, never dtype names interpreted from arbitrary input.
+_NUMPY_DTYPES = {name: np.dtype(name) for name in (
+    "bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
+    "float16", "float32", "float64")}
+_FRAME_DTYPES = {"object": np.dtype(object), **_NUMPY_DTYPES,
+    **{name: cls() for name, cls in (
+        ("Int8", pd.Int8Dtype), ("Int16", pd.Int16Dtype), ("Int32", pd.Int32Dtype),
+        ("Int64", pd.Int64Dtype), ("UInt8", pd.UInt8Dtype), ("UInt16", pd.UInt16Dtype),
+        ("UInt32", pd.UInt32Dtype), ("UInt64", pd.UInt64Dtype),
+        ("Float32", pd.Float32Dtype), ("Float64", pd.Float64Dtype), ("boolean", pd.BooleanDtype))}}
+_STRING_DTYPES = {f"string[{storage}]:{missing}": (storage, missing)
+                  for storage in ("python", "pyarrow") for missing in ("NA", "nan")}
+_MISSING = _object({"missing": {"enum": ["NA", "nan", "+inf", "-inf"]}})
+_CELL = {"anyOf": [_SCALAR, _MISSING, _object({"scalar": {"const": "numpy"},
+    "dtype": {"enum": list(_NUMPY_DTYPES)}, "value": {"anyOf": [_SCALAR, _MISSING]}})]}
+_FRAME = _object({"columns": _NAMES,
+    "dtypes": _array({"enum": [*_FRAME_DTYPES, *_STRING_DTYPES]}), "data": _array(_array(_CELL))})
+_MULTI_BATCH = _object({"X": _FRAME, "Y": _FRAME, "Yvar": _nullable(_FRAME),
+    "status": _BATCH["properties"]["status"], "ids": _NAMES})
+_CONFIG = _object({
+    "acquisition": {"enum": ["auto", "q_log_ehvi", "q_log_nehvi", "q_log_nparego"]},
+    "noise_mode": {"enum": ["auto", "inferred", "known", "noiseless"]},
+    "reference_point": _nullable({"type": "object", "additionalProperties": _NUMBER}),
+    "preference_weights": _nullable({"type": "object", "additionalProperties": _NUMBER}),
+    "min_joint_feasibility": {"type": "number", "minimum": 0, "maximum": 1}})
+_GEOMETRY = _object({"objective_names": _NAMES,
+    **{name: _array(_NUMBER) for name in ("location", "scale", "report_reference",
+        "acquisition_reference", "acquisition_ideal")},
+    "source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_row_count": {"type": "integer", "minimum": 3},
+    "preference_weights": _nullable(_array(_NUMBER)),
+    "preference_provenance": _array({"anyOf": [
+        _object({"source": {"enum": ["config", "objective_priority"]}}),
+        _object({"source": {"const": "knowledge"}, "source_pattern_id": _NAME,
+                 "source_pattern": _NAME, "source_version": _NAME})]}),
+    "physical_reference": _CONFIG["properties"]["reference_point"],
+    "reference_method": {"enum": ["physical", "observed_feasible_min_minus_margin"]}})
+_DIAGNOSTIC = _object({"objective_name": _NAME, "pattern_id": _NAME, "pattern": _NAME,
+    "status": {"enum": ["checked", "not_checked", "unsupported"]},
+    "violation": _nullable(_BOOL), "reason": _nullable(_NAME)})
+_MULTI_STATE = _object({**_COMMON, "schema_version": {"const": MULTIOBJECTIVE_SCHEMA_VERSION},
+    # Task 10 owns the release allowlist expansion; 2.2 has no historical writer.
+    "engine_version": {"const": "0.5.1"},
+    "observations": _array(_MULTI_BATCH), "observation_ids": _array(_NAMES),
+    "batch_kinds": _array({"enum": ["doe", "bo"]}),
+    "pending": _nullable(_object({"X": _FRAME, "ids": _NAMES})),
+    "catalog": _nullable(_object({"X": _FRAME, "ids": _NAMES})),
+    "multiobjective": _CONFIG, "geometry": _nullable(_GEOMETRY),
+    "rng_state": _RNG, "ask_iteration": _INTEGER,
+    "validation": _object({**_VALIDATION["properties"],
+        "emitted": _array(_array(_NAME, minItems=4, maxItems=4), uniqueItems=True),
+        "diagnostics": _array(_DIAGNOSTIC)})})
+
 
 def _invalid(message):
     return EngineError(ErrorCode.CHECKPOINT_INCOMPATIBLE, message)
@@ -186,12 +242,13 @@ def validate_state(state):
         raise _invalid("Campaign checkpoint must be a JSON object")
     state = deepcopy(state)
     schema = state.get("schema_version")
-    if schema not in (None, "2.0", "2.1"):
+    if schema not in (None, "2.0", "2.1", MULTIOBJECTIVE_SCHEMA_VERSION):
         raise _invalid(f"Unsupported Campaign schema version {schema!r}")
     if schema is None:
         _validate_v04(state)
         return state
-    _validate_schema(state, _STATE if schema == "2.1" else _LEGACY)
+    _validate_schema(state, _MULTI_STATE if schema == MULTIOBJECTIVE_SCHEMA_VERSION
+                     else _STATE if schema == "2.1" else _LEGACY)
     _validate_knowledge(state["knowledge"], archival=schema == "2.0")
     names = [p["name"] for p in state["space"]["params"]]
     objectives = [o["name"] for o in state["space"]["objectives"]]
@@ -204,6 +261,10 @@ def validate_state(state):
         if (spec["pattern"], spec["version"]) in {("safe_region", "1.0"), ("forbidden_region", "1.0")}:
             _canonical_node(spec["parameters"]["constraint"]["ast"],
                 frozenset(spec["scope"]["factors"] or names), 1, _AstBudget())
+    if schema == MULTIOBJECTIVE_SCHEMA_VERSION:
+        from .loop import Campaign
+        _restore_multiobjective(state, Campaign)
+        return state
     if schema == "2.1":
         if len(objectives) != 1:
             raise _invalid("Phase-1 Campaign state requires exactly one objective")
@@ -298,8 +359,221 @@ def batch_from_state(raw, space):
         status=None if raw["status"] is None else pd.Series(raw["status"], dtype=object), ids=raw["ids"])
 
 
+def _cell_to_state(value):
+    if isinstance(value, np.generic):
+        dtype = value.dtype.name
+        if dtype not in _NUMPY_DTYPES:
+            raise _invalid(f"Unsupported checkpoint scalar dtype {dtype!r}")
+        return {"scalar": "numpy", "dtype": dtype, "value": _cell_to_state(value.item())}
+    if value is pd.NA:
+        return {"missing": "NA"}
+    if type(value) is float and not math.isfinite(value):
+        return {"missing": "nan" if math.isnan(value) else "+inf" if value > 0 else "-inf"}
+    if value is None or type(value) in (str, bool, int, float):
+        return value
+    raise _invalid(f"Unsupported checkpoint scalar type {type(value).__name__}")
+
+
+def _cell_from_state(value):
+    if type(value) is not dict:
+        return value
+    if "missing" in value:
+        return {"NA": pd.NA, "nan": float("nan"), "+inf": float("inf"), "-inf": -float("inf")}[value["missing"]]
+    decoded = _NUMPY_DTYPES[value["dtype"]].type(_cell_from_state(value["value"]))
+    if _cell_to_state(decoded) != value:
+        raise _invalid("Lossy numpy scalar encoding")
+    return decoded
+
+
+def _dtype_name(dtype):
+    if isinstance(dtype, pd.StringDtype):
+        missing = "NA" if dtype.na_value is pd.NA else "nan"
+        name = f"string[{dtype.storage}]:{missing}"
+        if name in _STRING_DTYPES:
+            return name
+    name = str(dtype)
+    if name in _FRAME_DTYPES and dtype == _FRAME_DTYPES[name]:
+        return name
+    raise _invalid(f"Unsupported checkpoint column dtype {dtype!r}")
+
+
+def frame_to_state(frame):
+    """Encode columns separately: row-wise coercion can round large integers."""
+    columns = []
+    dtypes = []
+    for _, series in frame.items():
+        dtype = _dtype_name(series.dtype)
+        dtypes.append(dtype)
+        columns.append([_cell_to_state(value.item() if dtype != "object"
+            and isinstance(value, np.generic) else value) for value in series.tolist()])
+    return {"columns": list(frame.columns), "dtypes": dtypes,
+            "data": [list(row) for row in zip(*columns)]}
+
+
+def _frame_from_state(raw, names):
+    if (raw["columns"] != list(names) or len(raw["dtypes"]) != len(names)
+            or any(len(row) != len(names) for row in raw["data"])):
+        raise _invalid("Frame columns/dimensions must exactly match the declared space")
+    columns = {}
+    for index, (name, dtype_name) in enumerate(zip(names, raw["dtypes"], strict=True)):
+        if dtype_name in _STRING_DTYPES:
+            storage, missing = _STRING_DTYPES[dtype_name]
+            dtype = (pd.StringDtype(storage=storage) if missing == "NA" else
+                     pd.StringDtype(storage=storage, na_value=np.nan))
+        else:
+            dtype = _FRAME_DTYPES[dtype_name]
+        columns[name] = pd.Series([_cell_from_state(row[index]) for row in raw["data"]], dtype=dtype)
+    frame = pd.DataFrame(columns)
+    # Coercible is not lossless: reject rounding, truncation and marker changes.
+    if json.dumps(frame_to_state(frame), sort_keys=True) != json.dumps(raw, sort_keys=True):
+        raise _invalid("Column dtype changes checkpoint values or missing markers")
+    return frame
+
+
+def multiobjective_batch_to_state(batch):
+    return {"X": frame_to_state(batch.X), "Y": frame_to_state(batch.Y),
+        "Yvar": None if batch.Yvar is None else frame_to_state(batch.Yvar),
+        "status": None if batch.status is None else batch.status.tolist(), "ids": list(batch.ids)}
+
+
+def multiobjective_to_state(campaign):
+    campaign._check_frozen_declaration()
+    from ..domain.space import ENGINE_VERSION
+    return validate_state({"schema_version": MULTIOBJECTIVE_SCHEMA_VERSION,
+        "engine_version": ENGINE_VERSION, "space": campaign.space.to_dict(),
+        "knowledge": campaign.knowledge.to_envelope(), "seed": campaign.seed,
+        "observations": [multiobjective_batch_to_state(batch) for batch in campaign._observation_batches],
+        "observation_ids": [list(ids) for ids in campaign._observation_ids],
+        "batch_kinds": list(campaign._batch_kinds), "trial_kind": list(campaign._trial_kind),
+        "pending": None if campaign._pending is None else {
+            "X": frame_to_state(campaign._pending.X), "ids": list(campaign._pending.ids)},
+        "catalog": None if campaign._catalog is None else {
+            "X": frame_to_state(campaign._catalog), "ids": list(campaign._catalog_ids)},
+        "multiobjective": campaign.multiobjective.to_dict(),
+        "geometry": None if campaign._geometry is None else campaign._geometry.to_dict(),
+        "rng_state": campaign._rng.bit_generator.state, "ask_iteration": campaign._ask_iteration,
+        "validation": {"active": campaign.validate_active, "interval": campaign.validation_interval,
+            "min_obs": campaign.validation_min_obs, "auto_rescue": campaign.auto_rescue,
+            "last_n": campaign._last_validation_n,
+            "emitted": [list(key) for key in sorted(campaign._validation_emitted)],
+            "diagnostics": campaign.validation_diagnostics}})
+
+
+def _restore_multiobjective(state, campaign_class):
+    """Semantic validation without fitting, asking, or replaying empirical callbacks."""
+    from .multiobjective import MultiObjectiveConfig
+    from .objective_geometry import ObjectiveGeometry, resolve_geometry
+    from .knowledge_runtime import compile_runtime
+
+    try:
+        if any(state[key]["engine_version"] != state["engine_version"] for key in ("space", "knowledge")):
+            raise _invalid("Multiobjective engine versions must agree across all envelopes")
+        space = Space.from_dict(state["space"])
+        knowledge = Knowledge.from_envelope(state["knowledge"])
+        config = MultiObjectiveConfig.from_dict(state["multiobjective"])
+        config.validate_for_space(space)
+        batches = []
+        for raw in state["observations"]:
+            batch = ObservationBatch(_frame_from_state(raw["X"], space.param_names),
+                _frame_from_state(raw["Y"], space.objectives),
+                Yvar=None if raw["Yvar"] is None else _frame_from_state(raw["Yvar"], space.objectives),
+                status=None if raw["status"] is None else pd.Series(raw["status"], dtype=object), ids=raw["ids"])
+            validate_frame(space, batch.X)
+            batches.append(batch)
+        ids = state["observation_ids"]
+        kinds = state["batch_kinds"]
+        expected_batch_kinds = ["doe"] + ["bo"] * (len(batches) - 1) if batches else []
+        if len(ids) != len(batches) or kinds != expected_batch_kinds:
+            raise _invalid("Batch kinds/effective IDs must align with observation ingestion order")
+        expected_kinds = []
+        for batch, effective, kind in zip(batches, ids, kinds, strict=True):
+            if len(effective) != len(batch.X) or (batch.ids and list(batch.ids) != effective):
+                raise _invalid("Effective IDs must match original explicit IDs and row counts")
+            expected_kinds.extend([kind] * len(batch.successful().X))
+        all_ids = [identifier for batch_ids in ids for identifier in batch_ids]
+        if len(set(all_ids)) != len(all_ids) or state["trial_kind"] != expected_kinds:
+            raise _invalid("Duplicate trial identity or inconsistent trial kinds")
+        validation = state["validation"]
+        if validation["last_n"] > len(expected_kinds) or state["rng_state"]["state"]["inc"] % 2 != 1:
+            raise _invalid("Invalid validation progress or PCG64 increment")
+        specs = {spec.pattern_id: spec for spec in knowledge.specs}
+        for objective, pattern_id, kind, parameter in validation["emitted"]:
+            spec = specs.get(pattern_id)
+            if (objective not in space.objectives or parameter not in space.param_names or spec is None
+                    or kind != spec.pattern or kind not in {"monotone", "arrhenius", "quadratic_peak"}
+                    or spec.version != "1.0" or not spec.scope.factors or parameter != spec.scope.factors[0]
+                    or (spec.scope.objectives and objective not in spec.scope.objectives)):
+                raise _invalid("Invalid empirical validation warning identity")
+        for diagnostic in validation["diagnostics"]:
+            spec = specs.get(diagnostic["pattern_id"])
+            if (diagnostic["objective_name"] not in space.objectives or spec is None
+                    or diagnostic["pattern"] != spec.pattern
+                    or (diagnostic["status"] == "checked") != (diagnostic["violation"] is not None)
+                    or (diagnostic["status"] == "checked") != (diagnostic["reason"] is None)):
+                raise _invalid("Invalid empirical validation diagnostic")
+        campaign = campaign_class(space, knowledge, seed=state["seed"], validate=False,
+            validation_interval=validation["interval"], validation_min_obs=validation["min_obs"],
+            auto_rescue=validation["auto_rescue"], multiobjective=config)
+        campaign._observation_batches = batches
+        campaign._observation_ids = [tuple(item) for item in ids]
+        campaign._batch_kinds = list(kinds)
+        campaign._trial_kind = list(expected_kinds)
+        pending = state["pending"]
+        if pending is not None:
+            if set(pending["ids"]).intersection(all_ids):
+                raise _invalid("A trial cannot be both observed and pending")
+            campaign.set_pending(PendingBatch(pending["ids"], _frame_from_state(pending["X"], space.param_names)))
+        geometry = state["geometry"]
+        if (geometry is None) != (state["ask_iteration"] == 0) or (geometry is None and state["catalog"] is not None):
+            raise _invalid("Geometry/catalog must agree with successful ask progress")
+        if geometry is not None:
+            geometry = ObjectiveGeometry.from_dict(geometry)
+            remaining = geometry.source_row_count
+            prefix, prefix_ids = [], []
+            for batch, effective in zip(batches, ids, strict=True):
+                if remaining == 0:
+                    break
+                count = min(remaining, len(batch.X))
+                prefix.append(batch._subset(rows=list(range(count))))
+                prefix_ids.append(tuple(effective[:count]))
+                remaining -= count
+            if remaining:
+                raise _invalid("Geometry source prefix exceeds measured history")
+            # Later mixed-variance batches may be archival-only. Combine only the
+            # original source prefix so they cannot change or invalidate geometry.
+            campaign._observation_batches, campaign._observation_ids = prefix, prefix_ids
+            observations = campaign._combined_observations()
+            campaign._observation_batches, campaign._observation_ids = batches, [tuple(item) for item in ids]
+            expected = resolve_geometry(space, observations, compile_runtime(space, knowledge, observations), config)
+            if expected.to_dict() != geometry.to_dict():
+                raise _invalid("Frozen geometry or source digest does not match its measured prefix")
+            campaign._geometry = geometry
+            campaign._resolved_declaration = campaign._declaration()
+        catalog = state["catalog"]
+        if catalog is not None:
+            if catalog["ids"] != sorted(catalog["ids"]):
+                raise _invalid("Bound catalog IDs must be in canonical order")
+            frame = _frame_from_state(catalog["X"], space.param_names)
+            campaign._catalog, campaign._catalog_ids = campaign._prepare_campaign_catalog(frame, catalog["ids"])
+        campaign._rng.bit_generator.state = state["rng_state"]
+        campaign._ask_iteration = state["ask_iteration"]
+        campaign.validate_active = validation["active"]
+        campaign._last_validation_n = validation["last_n"]
+        campaign._validation_emitted = {tuple(item) for item in validation["emitted"]}
+        campaign._validation_diagnostics = deepcopy(validation["diagnostics"])
+        return campaign
+    except EngineError as error:
+        if error.code is ErrorCode.CHECKPOINT_INCOMPATIBLE:
+            raise
+        raise _invalid(f"Invalid multiobjective checkpoint: {error}") from error
+    except (TypeError, ValueError, KeyError, OverflowError, ImportError) as error:
+        raise _invalid(f"Invalid multiobjective checkpoint: {error}") from error
+
+
 def restore(state, campaign_class):
     state = validate_state(state)
+    if state.get("schema_version") == MULTIOBJECTIVE_SCHEMA_VERSION:
+        return _restore_multiobjective(state, campaign_class)
     try:
         # Migration seam for a patch reader: preflight has already checked the
         # outer checkpoint AND both nested envelopes against the exact table.

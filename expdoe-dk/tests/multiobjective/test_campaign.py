@@ -218,11 +218,10 @@ def test_oracle_callback_error_never_records_predictions(at):
 
 def test_multiobjective_checkpoint_cannot_downgrade(tmp_path):
     campaign = initial()
-    for write in (lambda: campaign.save_checkpoint(tmp_path / "bad.json"), campaign.to_state):
-        with pytest.raises(EngineError) as caught:
-            write()
-        assert caught.value.code == ErrorCode.CHECKPOINT_INCOMPATIBLE
-    assert not (tmp_path / "bad.json").exists()
+    campaign.save_checkpoint(tmp_path / "multi.json")
+    assert campaign.to_state()["schema_version"] == "2.2"
+    restored = Campaign.load_checkpoint(tmp_path / "multi.json")
+    pd.testing.assert_frame_equal(restored.history_df(), campaign.history_df())
 
 
 def test_configuration_rejected_for_scalar_and_frozen_for_multiobjective():

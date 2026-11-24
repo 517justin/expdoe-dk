@@ -148,17 +148,13 @@ def test_batch_boundaries_reject_invalid_input_without_mutation(method, value):
     assert campaign.to_state() == before
 
 
-def test_multiobjective_records_full_vectors_but_checkpoint_is_not_yet_supported(tmp_path):
+def test_multiobjective_records_full_vectors_in_separate_checkpoint_schema(tmp_path):
     campaign = Campaign(Space([Parameter("x", bounds=(0., 1.))], objectives=["a", "b"]))
     campaign.tell_batch(ObservationBatch(pd.DataFrame({"x": [0.]}), pd.DataFrame({"a": [1.], "b": [2.]})))
     assert campaign.history_df()[["a", "b"]].values.tolist() == [[1., 2.]]
-    with pytest.raises(EngineError) as caught:
-        campaign.to_state()
-    assert caught.value.code == ErrorCode.CHECKPOINT_INCOMPATIBLE
-    with pytest.raises(EngineError) as caught:
-        campaign.save_checkpoint(tmp_path / "multi.json")
-    assert caught.value.code == ErrorCode.CHECKPOINT_INCOMPATIBLE
-    assert not (tmp_path / "multi.json").exists()
+    assert campaign.to_state()["schema_version"] == "2.2"
+    campaign.save_checkpoint(tmp_path / "multi.json")
+    assert Campaign.load_checkpoint(tmp_path / "multi.json").to_state() == campaign.to_state()
 
 
 @pytest.fixture
@@ -188,6 +184,34 @@ def test_actual_050_schema20_remains_readable(schema_20_fixture):
     assert schema_20_fixture["engine_version"] == "0.5.0"
     assert schema_20_fixture["space"]["engine_version"] == "0.5.0"
     assert schema_20_fixture["knowledge"]["engine_version"] == "0.5.0"
+
+
+def test_literal_050_schema21_remains_scalar_and_is_not_rewritten_in_place():
+    raw = {
+        "schema_version": "2.1", "engine_version": "0.5.0",
+        "space": {"schema_version": "1.0", "engine_version": "0.5.0",
+            "params": [{"name": "x", "kind": "continuous", "bounds": [0., 1.],
+                "values": None, "step": None, "unit": "", "transform": "linear"}],
+            "constraints": [], "objectives": [{"name": "y", "direction": "maximize",
+                "target": None, "unit": "", "priority": 0}], "outcome_constraints": []},
+        "knowledge": {"schema_version": "1.0", "engine_version": "0.5.0",
+            "strict": False, "specs": [], "providers": []},
+        "seed": 17, "trial_kind": ["doe"],
+        "observations": [{"X": [[.25]], "Y": [[1.5]], "Yvar": None, "status": None, "ids": []}],
+        "pending": None, "ask_iteration": 0,
+        "rng_state": {"bit_generator": "PCG64", "state": {
+            "state": 191425278619858320667688084520535371943,
+            "inc": 78856291631749604729656725519709880197}, "has_uint32": 0, "uinteger": 0},
+        "validation": {"active": False, "interval": 5, "min_obs": 10, "auto_rescue": True,
+            "last_n": 0, "emitted": []},
+    }
+    before = json.dumps(raw)
+    rewritten = Campaign.from_state(raw).to_state()
+    assert rewritten["schema_version"] == "2.1"
+    assert rewritten["observations"] == raw["observations"]
+    assert "geometry" not in rewritten and "multiobjective" not in rewritten
+    assert rewritten["engine_version"] == "0.5.1"
+    assert json.dumps(raw) == before
 
 
 def test_knowledge_050_explicit_compatibility_survives_reader_patch_bump(schema_20_fixture, monkeypatch):
