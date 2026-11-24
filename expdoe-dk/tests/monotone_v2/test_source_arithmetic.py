@@ -26,6 +26,43 @@ def test_positive_variance_range_fails_before_any_outer_rescaling(value):
     assert caught.value.details["reason"] == "source_output_range"
 
 
+@pytest.mark.parametrize("above_maximum", [False, True])
+def test_variance_mp_upper_bound_even_when_cast_is_finite(above_maximum):
+    a = arithmetic()
+    c = mpmath.mp.clone()
+    c.dps = 100
+    maximum = float.fromhex("0x1.fffffffffffffp+1023")
+    value = c.mpf(5.)*c.mpf(3.5953862697246315e307) if above_maximum else c.mpf(maximum)
+    assert float(value) == maximum
+    assert (value > c.mpf(maximum)) == above_maximum
+    # Signed outputs retain section 14's finite-cast, local absolute budget.
+    assert a.round_scalar(c, value, c.zero, value) == maximum
+    if above_maximum:
+        with pytest.raises(EngineError) as caught:
+            a.round_scalar(c, value, c.zero, value, variance=True)
+        assert caught.value.details["reason"] == "source_output_range"
+    else:
+        assert a.round_scalar(c, value, c.zero, value, variance=True) == maximum
+
+
+@pytest.mark.parametrize("above_maximum", [False, True])
+def test_conditional_variance_mp_upper_bound_with_certified_zero_row(above_maximum):
+    a = arithmetic()
+    maximum = float.fromhex("0x1.fffffffffffffp+1023")
+    scale, diagonal = (5., 3.5953862697246315e307) if above_maximum else (1., maximum)
+    assert scale*diagonal == maximum
+    model = a.Conditional([[]], [0.], [0.], [1.],
+        {"kind": None, "lengthscale": [], "scales": [scale],
+         "tables": [[[1., 0., 0.], [0., diagonal, 0.], [0., 0., 0.]]]}, [[0]])
+    if above_maximum:
+        with pytest.raises(EngineError) as caught:
+            model.moments([[], []], [[1], [2]], [0., 0.])
+        assert caught.value.details["reason"] == "source_output_range"
+    else:
+        result = model.moments([[], []], [[1], [2]], [0., 0.])
+        assert result.covariance == [[maximum, 0.], [0., 0.]]
+
+
 @pytest.mark.parametrize("value", ["0", "1e-330", "-1e-330", "1e-310", "-1e-310"])
 def test_signed_cancellation_and_small_outputs_use_absolute_budget(value):
     a = arithmetic()

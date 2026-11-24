@@ -12,6 +12,9 @@ from fractions import Fraction
 from ..errors import EngineError, ErrorCode
 
 
+_MAX_NORMAL = float.fromhex("0x1.fffffffffffffp+1023")
+
+
 class PrecisionFailure(Exception):
     """Retry this same source at the next approved precision pair."""
 
@@ -27,10 +30,12 @@ def round_scalar(c, value, error, scale, *, variance=False):
         raise PrecisionFailure("undefined local bound")
     if variance and value <= 0:
         raise PrecisionFailure("unresolved positive variance")
+    if variance and (value < c.mpf(2)**-1022 or value > c.mpf(_MAX_NORMAL)):
+        raise _failure("source_output_range")
     result = float(value)
     if not math.isfinite(result):
         raise _failure("source_output_range")
-    if variance and (value < c.mpf(2)**-1022 or result < math.ldexp(1., -1022)):
+    if variance and result < math.ldexp(1., -1022):
         raise _failure("source_output_range")
     if error + abs(c.mpf(result) - value) > 32 * c.mpf(2)**-53 * scale:
         raise PrecisionFailure("local output budget")
@@ -62,7 +67,8 @@ def audit_affine(values, scales, offsets, products, actual, errors, variances):
                          + 8*_gamma(c, 2)*F)
                 if variance and x != 0:
                     if (product <= 0 or reference <= 0 or p <= 0 or f <= 0
-                            or min(product, reference, c.mpf(p), c.mpf(f)) < c.mpf(2)**-1022):
+                            or min(product, reference, c.mpf(p), c.mpf(f)) < c.mpf(2)**-1022
+                            or max(product, reference) > c.mpf(_MAX_NORMAL)):
                         raise _failure("source_output_range")
                 # A multiply's rounding is separately inspected against this
                 # same fixed-map local scale, not a neighbouring output's scale.

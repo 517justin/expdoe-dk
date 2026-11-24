@@ -26,6 +26,40 @@ def test_affine_forward_rejects_nonfinite_intermediate():
     assert caught.value.details["reason"] == "source_output_range"
 
 
+def test_affine_variance_accepts_exact_maximum_and_certified_zero():
+    maximum = float.fromhex("0x1.fffffffffffffp+1023")
+    assert affine(tensor([maximum, 0.]), 1., variance=True).tolist() == [maximum, 0.]
+    assert affine(tensor([0.]), maximum, variance=True).item() == 0.
+
+
+@pytest.mark.parametrize("stage", ["product", "intermediate", "result"])
+@pytest.mark.parametrize("route", ["auditor", "torch_adapter"])
+def test_affine_variance_rejects_mp_above_maximum_despite_finite_cast(stage, route):
+    import mpmath
+    from expdoe_dk.bo.directional_source_arithmetic import audit_affine
+    maximum = float.fromhex("0x1.fffffffffffffp+1023")
+    value, scale, offset = (maximum, 1., 2.**969) if stage == "result" else (
+        3.5953862697246315e307, 5., -1e292 if stage == "intermediate" else 0.)
+    product, actual = value*scale, value*scale+offset
+    c = mpmath.mp.clone()
+    c.dps = 100
+    mp_product = c.mpf(value)*c.mpf(scale)
+    mp_result = mp_product+c.mpf(offset)
+    assert product == maximum and actual <= maximum
+    assert (mp_result if stage == "result" else mp_product) > c.mpf(maximum)
+    if stage == "intermediate":
+        assert mp_result < c.mpf(maximum)
+    def evaluate(variance):
+        if route == "auditor":
+            return audit_affine([value], [scale], [offset], [product], [actual], [0.], [variance])
+        return affine(tensor([value]), scale, offset, variance=True if variance else None)
+    # The same finite signed maps remain valid under the local absolute budget.
+    evaluate(False)
+    with pytest.raises(EngineError) as caught:
+        evaluate(True)
+    assert caught.value.details["reason"] == "source_output_range"
+
+
 def test_affine_backward_and_double_backward_guard_scale_products():
     x = tensor([1e-300]).requires_grad_()
     y = affine(x, 1e300)
