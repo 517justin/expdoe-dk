@@ -9,7 +9,7 @@ No provider loading or fitted model is exposed here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Mapping
 import math
 
@@ -18,7 +18,7 @@ import numpy as np
 from expdoe_dk.domain import ObservationBatch, Space, constraint_from_dict
 from expdoe_dk.errors import EngineError, ErrorCode
 from expdoe_dk.knowledge import Knowledge
-from expdoe_dk.knowledge.artifacts import ARTIFACT_CATEGORIES, OptimizationArtifact
+from expdoe_dk.knowledge.artifacts import ARTIFACT_CATEGORIES, OptimizationArtifact, OptimizationArtifacts
 from expdoe_dk.knowledge.patterns.shape import _v2_is_finite_number
 
 
@@ -31,6 +31,16 @@ def _invalid(artifact: OptimizationArtifact, reason: str) -> EngineError:
 
 def validate_runtime_artifact(space: Space, category: str, artifact: OptimizationArtifact) -> None:
     """Validate numerical preconditions beyond a registry's JSON schema."""
+    if artifact.kind == "monotone_sign_v2":
+        check_directional_composition(OptimizationArtifacts(virtual_observations=(artifact,)))
+        dim = artifact.payload["dim"]
+        if (category != "virtual_observations" or artifact.source_pattern != "monotone"
+                or artifact.source_version != "2.0" or dim >= space.n_dims
+                or space.params[dim].kind not in {"continuous", "integer", "discrete"}):
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Invalid monotone v2 runtime route", details={
+                "pattern_ids": [artifact.source_pattern_id], "kind": artifact.kind,
+                "reason": "invalid_directional_route"})
+        return
     from .structured_coverage import STRUCTURED_KINDS
     if artifact.kind in STRUCTURED_KINDS:
         from .structured_mean import _validate
@@ -344,6 +354,12 @@ def check_directional_composition(artifacts) -> None:
         raise invalid("Monotone v2 exceeds 64 active pairs per output", directional)
 
 
+def _base_fit_artifacts(artifacts):
+    """Keep separately validated directional factors out of legacy mean checks."""
+    return replace(artifacts, virtual_observations=tuple(
+        a for a in artifacts.virtual_observations if a.kind != "monotone_sign_v2"))
+
+
 def compile_runtime(space: Space, knowledge: Knowledge,
                     observations: ObservationBatch | None) -> dict[str, tuple]:
     """Return every supported artifact, with executable declarative consumers.
@@ -374,8 +390,9 @@ def compile_runtime(space: Space, knowledge: Knowledge,
     # Compile the whole declaration set first so certified conflicts preserve
     # their KNOWLEDGE_CONFLICT code, rather than being reduced to an inventory.
     artifacts = knowledge.compile(space, observations)
+    check_directional_composition(artifacts)
     from .structured_coverage import check_structured_composition
-    check_structured_composition(space, artifacts)
+    check_structured_composition(space, _base_fit_artifacts(artifacts))
     report = inspect_capabilities(space, knowledge)
     if report.blocked:
         raise EngineError(ErrorCode.KNOWLEDGE_INVALID, "Knowledge has no supported runtime route",

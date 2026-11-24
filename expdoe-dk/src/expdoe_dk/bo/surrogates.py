@@ -17,6 +17,7 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from ..domain import ObservationBatch, Space
 from ..errors import EngineError, ErrorCode
 from ..knowledge import Knowledge
+from ..knowledge.artifacts import OptimizationArtifacts
 from .contracts import Prediction
 from .gp import build_gp, build_virtual_observation_augmenter
 from .knowledge_runtime import compile_runtime
@@ -310,7 +311,8 @@ def fit_surrogate(space: Space, observations: ObservationBatch, *,
     return _fit_surrogate(space, observations, knowledge=knowledge, seed=seed, minimum=3)
 
 
-def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
+def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2,
+                   parameter_constraints=()):
     # Two-row fits are necessary only inside three-row leave-one-out evaluation.
     batch, exclusions = _eligible(space, observations, minimum=minimum)
     if knowledge is not None and not isinstance(knowledge, Knowledge):
@@ -319,6 +321,7 @@ def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
         raise EngineError(ErrorCode.CONFIG_INVALID, "seed must be a non-negative integer")
     knowledge = knowledge if knowledge is not None else Knowledge()
     runtime = compile_runtime(space, knowledge, batch)
+    parameter_constraints = (*parameter_constraints, *runtime["parameter_constraints"])
     if space.n_objectives > 1:
         _multioutput_types()
         fitted = []
@@ -326,7 +329,8 @@ def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
             projected, selected, scoped = project_objective(space, batch, knowledge, name)
             try:
                 fitted.append(_fit_surrogate(projected, selected, knowledge=scoped,
-                                             seed=seed, minimum=minimum))
+                                             seed=seed, minimum=minimum,
+                                             parameter_constraints=parameter_constraints))
             except EngineError as error:
                 raise EngineError(error.code, f"Objective {name!r} fitting failed: {error}",
                     details={**error.details, "objective_name": name,
@@ -348,6 +352,13 @@ def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
                   "normalized_yvar": None if variance is None else variance[:, 0].tolist(),
                   "virtual_rows": 0}
     structured_diagnostics = {}
+    directional = tuple(a for a in runtime["virtual_observations"] if a.kind == "monotone_sign_v2")
+    directional_diagnostics = None
+    if directional:
+        # Directional factors never enter the legacy function-value augmenter,
+        # including the builder's returned augmenter and structured base fits.
+        runtime = {**runtime, "virtual_observations": tuple(
+            a for a in runtime["virtual_observations"] if a.kind != "monotone_sign_v2")}
     try:
         with torch.random.fork_rng(devices=[]), settings.validate_input_scaling(False):
             torch.manual_seed(seed)
@@ -387,8 +398,41 @@ def _fit_surrogate(space, observations, *, knowledge=None, seed=0, minimum=2):
                     runtime=runtime, normalize_outcome=False)
                 fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))
             model.eval()
+            if directional:
+                from .directional_pairs import build_directional_pairs
+                from .directional_posterior import condition_directional_posterior
+                pairs = build_directional_pairs(space, batch,
+                    OptimizationArtifacts(virtual_observations=directional), seed=seed,
+                    parameter_constraints=parameter_constraints)
+                likelihood_noise = model.likelihood.noise.detach().tolist()
+                model, directional_diagnostics = condition_directional_posterior(model, pairs)
+                directional_diagnostics.update(objective_name=space.objectives[0],
+                    actual_measurement_count=len(batch.X),
+                    base_noise_mode="inferred" if variance is None else "known",
+                    declared_noise_mode=("inferred" if variance is None else
+                                         "known_zero" if not torch.count_nonzero(variance) else "known"),
+                    normalized_measured_variance=transforms["normalized_yvar"],
+                    fitted_likelihood_noise=likelihood_noise)
+                by_id = {a.source_pattern_id: a for a in directional}
+                for detail in directional_diagnostics["pair_diagnostics"]:
+                    artifact = by_id[detail["pattern_id"]]
+                    payload = artifact.payload
+                    direction = payload["direction"]
+                    if sign == -1.:
+                        direction = "decreasing" if direction == "increasing" else "increasing"
+                    endpoints = [space.model_to_physical(pair).to_dict(orient="records")
+                                 for pair, identity in zip(pairs.endpoints, pairs.pattern_ids)
+                                 if identity == artifact.source_pattern_id]
+                    detail.update(pattern=artifact.source_pattern, version=artifact.source_version,
+                        objective_name=space.objectives[0], factor=space.param_names[payload["dim"]],
+                        seed=seed, direction=direction, internal_direction=payload["direction"],
+                        confidence=payload["confidence"], softness=payload["softness"],
+                        softness_units="standardized_response_per_model_coordinate",
+                        physical_endpoints=endpoints)
         fitted = FittedSurrogate(space, model, location, scale, sign, transforms, exclusions)
         fitted._diagnostics["structured_mean"] = deepcopy(structured_diagnostics)
+        if directional_diagnostics is not None:
+            fitted._diagnostics["directional"] = directional_diagnostics
         fitted.predict(batch.X)  # Reject non-finite fits before exposing a fitted object.
         return fitted
     except EngineError:

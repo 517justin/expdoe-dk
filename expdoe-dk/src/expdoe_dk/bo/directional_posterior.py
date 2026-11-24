@@ -44,30 +44,34 @@ def _finite(*values):
 
 
 def _joint_latent_moments(model, X):
-    """Represent exactly observed latent coordinates without subtraction residue.
+    """Validate GP construction roundoff before using posterior-scale PSD checks.
 
-    The prior-scale allowance validates only mathematically known zero entries;
-    it never selects a covariance eigenvalue or positive-noise observation to drop.
-    Both fitting and queries use this representation, including cross covariance.
+    A GP subtracts a training correction from its prior covariance. Prior-scale
+    roundoff can therefore exceed a symmetry budget based on the small residual.
+    The construction allowance validates skew and certified deterministic entries
+    only; it never selects an eigenvalue or positive-noise observation to drop.
     """
     posterior = model.posterior(X)
     mean, covariance = posterior.mean[..., 0], posterior.distribution.covariance_matrix
     _finite(mean, covariance)
-    if not (isinstance(model, SingleTaskGP)
-            and isinstance(model.likelihood, FixedNoiseGaussianLikelihood)):
+    if not isinstance(model, SingleTaskGP):
         return mean, covariance
     with torch.no_grad():
-        noise = model.likelihood.noise
-        if not (noise == 0).any():
-            return mean, covariance
         # posterior() has put the model in eval mode and transformed train_inputs.
         transformed = model.transform_inputs(X)
         training = model.train_inputs[0]
-        matches = (transformed.unsqueeze(-2) == training.unsqueeze(-3)).all(dim=-1)
-        known = (matches & (noise == 0).unsqueeze(-2)).any(dim=-1)
-        if not known.any():
+        zero_entries = None
+        if isinstance(model.likelihood, FixedNoiseGaussianLikelihood):
+            noise = model.likelihood.noise
+            if (noise == 0).any():
+                matches = (transformed.unsqueeze(-2) == training.unsqueeze(-3)).all(dim=-1)
+                known = (matches & (noise == 0).unsqueeze(-2)).any(dim=-1)
+                if known.any():
+                    zero_entries = known.unsqueeze(-1) | known.unsqueeze(-2)
+        skew = (covariance - covariance.mT).abs()
+        has_skew = bool(skew.any())
+        if not has_skew and zero_entries is None:
             return mean, covariance
-        zero_entries = known.unsqueeze(-1) | known.unsqueeze(-2)
         prior = GPyTorchPosterior(model.forward(transformed))
         if hasattr(model, "outcome_transform"):
             prior = model.outcome_transform.untransform_posterior(prior, X=transformed)
@@ -79,11 +83,21 @@ def _joint_latent_moments(model, X):
         budget = (_RANK_MULTIPLIER * (training.shape[-2] + X.shape[-2]) * _EPS
                   * sd.unsqueeze(-1) * sd.unsqueeze(-2))
         _finite(budget)
-        residual = torch.where(zero_entries, covariance.detach().abs(), 0.)
-        if (residual > budget).any():
-            raise _failure("deterministic_covariance_residual",
-                           maximum_residual=residual.max().item(),
+        if (skew > budget).any():
+            raise _failure("asymmetric_covariance", maximum_residual=skew.max().item(),
                            maximum_budget=budget.max().item())
+        if zero_entries is not None:
+            residual = torch.where(zero_entries, covariance.detach().abs(), 0.)
+            if (residual > budget).any():
+                raise _failure("deterministic_covariance_residual",
+                               maximum_residual=residual.max().item(),
+                               maximum_budget=budget.max().item())
+    # This projects only validated roundoff onto the same symmetric target;
+    # gradients follow the symmetric covariance, not a detached value repair.
+    if has_skew:
+        covariance = (covariance + covariance.mT) / 2
+    if zero_entries is None:
+        return mean, covariance
     # A known value is deterministic, but its derivative covariance with an
     # unobserved query need not vanish. Correct values without masking gradients.
     return mean, covariance - torch.where(zero_entries, covariance, 0.).detach()

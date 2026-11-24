@@ -88,12 +88,16 @@ def _knowledge_routes(space, observations, knowledge):
 
 def _compile_route(route: _ObjectiveRoute) -> OptimizationArtifacts:
     from .capabilities import ARTIFACT_CONSUMERS
-    from .knowledge_runtime import _check_conflicts, validate_runtime_artifact
+    from .knowledge_runtime import (
+        _base_fit_artifacts, _check_conflicts, check_directional_composition, validate_runtime_artifact,
+    )
     from .structured_coverage import check_structured_composition
 
     try:
         artifacts = route.knowledge.compile(route.space, route.observations)
-        check_structured_composition(route.space, artifacts)
+        if route.objective_name is not None:
+            check_directional_composition(artifacts)
+        check_structured_composition(route.space, _base_fit_artifacts(artifacts))
         allowed = _GLOBAL_CATEGORIES if route.objective_name is None else _MODEL_CATEGORIES
         specs = {spec.pattern_id: spec for spec in route.knowledge.specs}
         numerical_sources = set()

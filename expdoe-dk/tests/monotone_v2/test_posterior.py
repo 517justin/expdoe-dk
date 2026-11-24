@@ -663,3 +663,150 @@ def test_noiseless_residue_budget_uses_returned_response_frame(monkeypatch,respo
     with pytest.raises(EngineError) as caught:
         engine().condition_directional_posterior(base,evidence)
     assert caught.value.details["reason"] == "deterministic_covariance_residual"
+
+
+@pytest.mark.parametrize("amplitude", [1e-20, 1., 1e20])
+@pytest.mark.parametrize("batched,transformed", [(False, False), (False, True), (True, True)])
+def test_gp_source_skew_uses_construction_scale_not_cancelled_residual(
+        monkeypatch, amplitude, batched, transformed):
+    base, _ = training_field(noise=1e-8*amplitude, amplitude=amplitude,
+                             batched=batched, transformed=transformed)
+    X = tensor([[[[0.], [.3], [.7], [1.]]], [[[0.], [.3], [.7], [1.]]]]).requires_grad_()
+    original = base.posterior
+    reference = original(X)
+    C = reference.distribution.covariance_matrix
+    expected = (C+C.mT)/2
+
+    def roundoff(X, **kwargs):
+        p = original(X, **kwargs)
+        covariance = p.distribution.covariance_matrix.clone()
+        # Antisymmetric, differentiable construction error; well below the
+        # prior-scale budget, but above a residual-scale symmetry threshold.
+        delta = amplitude*1e-14*(1 + X[..., 0, 0])
+        covariance[..., 0, 1] += delta
+        covariance[..., 1, 0] -= delta
+        return GPyTorchPosterior(MultivariateNormal(p.mean[..., 0], DenseLinearOperator(covariance)))
+
+    monkeypatch.setattr(base, "posterior", roundoff)
+    mean, actual = engine()._joint_latent_moments(base, X)
+    torch.testing.assert_close(actual, actual.mT, rtol=0, atol=0)
+    torch.testing.assert_close(actual, expected, rtol=1e-12, atol=amplitude*1e-28)
+    torch.testing.assert_close(mean, reference.mean[..., 0], rtol=0, atol=0)
+    torch.testing.assert_close(actual.diagonal(dim1=-2, dim2=-1),
+                               C.diagonal(dim1=-2, dim2=-1), rtol=0, atol=0)
+    assert (actual.diagonal(dim1=-2, dim2=-1) > 0).all()
+    for matrix in actual.detach().reshape(-1, 4, 4):
+        assert engine()._psd(matrix)[3].sum() == 4
+    weights = torch.arange(16, dtype=torch.double).reshape(4, 4)
+    actual_gradient, = torch.autograd.grad((actual*weights).sum(), X)
+    expected_gradient, = torch.autograd.grad((expected*weights).sum(), X)
+    torch.testing.assert_close(actual_gradient, expected_gradient, rtol=1e-9, atol=amplitude*1e-12)
+    assert torch.isfinite(actual_gradient).all()
+
+
+@pytest.mark.parametrize("where", ["endpoints", "query"])
+@pytest.mark.parametrize("bad", ["asymmetric", "negative", "nonfinite"])
+@pytest.mark.parametrize("amplitude", [1e-20, 1.])
+def test_gp_construction_budget_does_not_hide_material_invalid_covariance(
+        monkeypatch, where, bad, amplitude):
+    base, evidence = training_field(noise=.03*amplitude, amplitude=amplitude)
+    if where == "query":
+        model, _ = engine().condition_directional_posterior(base, evidence)
+    original = base.posterior
+
+    def corrupt(X, **kwargs):
+        p = original(X, **kwargs)
+        C = p.distribution.covariance_matrix.clone()
+        if bad == "asymmetric":
+            C[..., 0, 1] += .01*amplitude
+        elif bad == "negative":
+            C[..., 0, 0] = -amplitude
+        else:
+            C[..., 0, 1] = float("nan")
+        return GPyTorchPosterior(MultivariateNormal(p.mean[..., 0], DenseLinearOperator(C)))
+
+    monkeypatch.setattr(base, "posterior", corrupt)
+    with pytest.raises(EngineError) as caught:
+        if where == "endpoints":
+            engine().condition_directional_posterior(base, evidence)
+        else:
+            model.posterior(tensor([[.2], [.8]]))
+    assert caught.value.code == ErrorCode.MODEL_FIT_FAILED
+    assert caught.value.details["reason"] == {
+        "asymmetric": "asymmetric_covariance", "negative": "negative_covariance",
+        "nonfinite": "nonfinite"}[bad]
+
+
+@pytest.mark.parametrize("response_scale", [1e-4, 1e4])
+def test_source_skew_budget_is_in_returned_outcome_frame(monkeypatch, response_scale):
+    from botorch.models import SingleTaskGP
+    from botorch.models.transforms.outcome import Standardize
+    from gpytorch import settings
+    X, Y = tensor([[0.], [.3], [.7], [1.]]), tensor([[.5], [.2], [-.3], [-.1]])*response_scale
+    with settings.min_fixed_noise(double_value=0.):
+        base = SingleTaskGP(X, Y, train_Yvar=torch.full_like(Y, 1e-8*response_scale**2),
+                            outcome_transform=Standardize(m=1))
+    original = base.posterior
+    reference = original(X).distribution.covariance_matrix
+
+    def roundoff(X, **kwargs):
+        p = original(X, **kwargs)
+        C = p.distribution.covariance_matrix.clone()
+        C[..., 0, 1] += 1e-14*Y.var()
+        C[..., 1, 0] -= 1e-14*Y.var()
+        return GPyTorchPosterior(MultivariateNormal(p.mean[..., 0], DenseLinearOperator(C)))
+
+    monkeypatch.setattr(base, "posterior", roundoff)
+    _, actual = engine()._joint_latent_moments(base, X)
+    torch.testing.assert_close(actual, actual.mT, rtol=0, atol=0)
+    torch.testing.assert_close(actual, (reference+reference.mT)/2, rtol=1e-12, atol=response_scale**2*1e-28)
+
+    def corrupt(X, **kwargs):
+        p = original(X, **kwargs)
+        C = p.distribution.covariance_matrix.clone()
+        C[..., 0, 1] += 1e-7*Y.var()
+        return GPyTorchPosterior(MultivariateNormal(p.mean[..., 0], DenseLinearOperator(C)))
+
+    monkeypatch.setattr(base, "posterior", corrupt)
+    with pytest.raises(EngineError) as caught:
+        engine()._joint_latent_moments(base, X)
+    assert caught.value.details["reason"] == "asymmetric_covariance"
+
+
+@pytest.mark.parametrize("amplitude", [1e-20, 1., 1e20])
+def test_source_skew_allowance_is_not_an_eigenvalue_tolerance(monkeypatch, amplitude):
+    base, _ = training_field(noise=1e-8*amplitude, amplitude=amplitude)
+    original = base.posterior
+
+    def corrupt(X, **kwargs):
+        p = original(X, **kwargs)
+        C = p.distribution.covariance_matrix.clone()
+        C[..., 0, :] = 0.
+        C[..., :, 0] = 0.
+        # This eigenvalue is below the prior construction allowance but is
+        # materially negative relative to the cancelled posterior covariance.
+        C[..., 0, 0] = -1e-16*amplitude
+        C[..., 0, 1] = 1e-14*amplitude
+        C[..., 1, 0] = -1e-14*amplitude
+        return GPyTorchPosterior(MultivariateNormal(p.mean[..., 0], DenseLinearOperator(C)))
+
+    monkeypatch.setattr(base, "posterior", corrupt)
+    _, C = engine()._joint_latent_moments(base, base.train_inputs[0])
+    with pytest.raises(EngineError) as caught:
+        engine()._psd(C)
+    assert caught.value.details["reason"] == "negative_covariance"
+
+
+@pytest.mark.parametrize("noise", [0., .03])
+def test_real_gp_repeated_query_samples_and_gradients_survive_source_correction(noise):
+    from botorch.sampling.normal import IIDNormalSampler
+    base, evidence = training_field(noise=noise)
+    model, _ = engine().condition_directional_posterior(base, evidence)
+    X = tensor([[[.2], [.2], [.3]], [[.8], [.8], [.7]]]).requires_grad_()
+    posterior = model.posterior(X)
+    samples = IIDNormalSampler(sample_shape=torch.Size([128]), seed=73)(posterior)
+    torch.testing.assert_close(samples[..., 0, :], samples[..., 1, :], rtol=0, atol=1e-12)
+    gradient, = torch.autograd.grad(samples.square().sum(), X)
+    assert torch.isfinite(gradient).all() and gradient.abs().max() > 0
+    if noise == 0:
+        assert (posterior.variance[..., 2, :] == 0).all()

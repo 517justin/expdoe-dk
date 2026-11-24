@@ -32,6 +32,7 @@ ARTIFACT_CONSUMERS: dict[tuple[str, str], str] = {
     ("acquisition_preferences", "objective_priority_preference"): "bo.knowledge_runtime.RuntimePreference",
     ("acquisition_preferences", "tradeoff_preference"): "bo.knowledge_runtime.RuntimePreference",
     ("virtual_observations", "monotone"): "bo.gp.build_virtual_observation_augmenter",
+    ("virtual_observations", "monotone_sign_v2"): "bo.directional_posterior.condition_directional_posterior",
     ("virtual_observations", "random_augment"): "bo.loop.Campaign.ask",
     ("priors", "gp_prior"): "bo.gp.build_prior_modules",
     ("diagnostics", "knowledge_validation"): "bo.capabilities.inspect_capabilities",
@@ -98,6 +99,8 @@ def inspect_capabilities(space: Space, knowledge: Knowledge) -> CapabilityReport
                 from .structured_coverage import STRUCTURED_KINDS
                 if artifact.kind in STRUCTURED_KINDS:
                     entry.update(coverage_status="not_evaluated", empirical_evidence="not_evaluated")
+                if artifact.kind == "monotone_sign_v2":
+                    entry["conditioning_status"] = "inactive" if artifact.payload.get("confidence") == 0 else "not_evaluated"
                 if consumer is None:
                     unsupported = True
                     diagnostics.append({**entry, "reason": "unsupported_artifact"})
@@ -118,10 +121,13 @@ def inspect_capabilities(space: Space, knowledge: Knowledge) -> CapabilityReport
         (blocked if unsupported else applied).append(spec.pattern_id)
     # Composition is a whole-declaration property, never a per-pattern check.
     if any(spec.enabled and spec.version == "2.0" and spec.pattern in
-           {"saturation", "threshold", "synergy", "antagonism"} for spec in knowledge.specs):
+           {"saturation", "threshold", "synergy", "antagonism", "monotone"} for spec in knowledge.specs):
         from .structured_coverage import check_structured_composition
+        from .knowledge_runtime import _base_fit_artifacts, check_directional_composition
         try:
-            check_structured_composition(space, knowledge.compile(space))
+            artifacts = knowledge.compile(space)
+            check_directional_composition(artifacts)
+            check_structured_composition(space, _base_fit_artifacts(artifacts))
         except EngineError as error:
             affected = error.details.get("pattern_ids", [])
             if not affected:
@@ -171,6 +177,8 @@ def _inspect_multiobjective(space, knowledge):
                                  "category": category, "consumer": ARTIFACT_CONSUMERS[(category, artifact.kind)]}
                         if artifact.kind in STRUCTURED_KINDS:
                             entry.update(coverage_status="not_evaluated", empirical_evidence="not_evaluated")
+                        if artifact.kind == "monotone_sign_v2":
+                            entry["conditioning_status"] = "inactive" if artifact.payload["confidence"] == 0 else "not_evaluated"
                         diagnostics.append(entry)
         except EngineError as error:
             record_error(error, [spec.pattern_id])

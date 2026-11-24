@@ -200,7 +200,9 @@ def test_versions_roundtrip_without_legacy_item_or_auto_rescue_leakage():
 
 
 @pytest.mark.parametrize("confidence", [0., 1.])
-def test_capability_and_runtime_remain_blocked_until_consumer_exists(confidence):
+def test_capability_and_runtime_remain_blocked_until_consumer_exists(confidence, monkeypatch):
+    from expdoe_dk.bo.capabilities import ARTIFACT_CONSUMERS
+    monkeypatch.delitem(ARTIFACT_CONSUMERS, ("virtual_observations", "monotone_sign_v2"), raising=False)
     knowledge = Knowledge().with_monotone_v2("x", "increases_objective", confidence=confidence)
     assert inspect_capabilities(_space(), knowledge).blocked
     with pytest.raises(EngineError) as caught:
