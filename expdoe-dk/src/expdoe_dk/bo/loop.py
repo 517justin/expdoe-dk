@@ -402,11 +402,24 @@ class Campaign:
         if any(known) and not all(known):
             raise EngineError(ErrorCode.CONFIG_INVALID,
                 "Mixed missing variance across successful batches is unsupported")
+        if (self.space.n_objectives > 1 and known and not any(known)
+                and any(b.Yvar is not None and b.Yvar.notna().to_numpy().any() for b in batches)):
+            raise EngineError(ErrorCode.CONFIG_INVALID,
+                "Recorded unsuccessful variance cannot be combined with missing successful variance")
         variance = None
         if known and all(known):
-            variance = pd.concat([b.Yvar if b.Yvar is not None else
-                pd.DataFrame(0., index=range(len(b.X)), columns=self.space.objectives)
-                for b in batches], ignore_index=True)
+            if self.space.n_objectives > 1 and any(
+                    b.Yvar is None or b.Yvar.isna().to_numpy().any() for b in batches):
+                # Object columns retain None / NaN / pd.NA across pandas versions;
+                # absent unsuccessful-batch variances are unknown, never zero.
+                variance = pd.DataFrame({name: pd.Series([
+                    value for b in batches for value in
+                    ([None] * len(b.X) if b.Yvar is None else b.Yvar[name].tolist())
+                ], dtype=object) for name in self.space.objectives})
+            else:
+                variance = pd.concat([b.Yvar if b.Yvar is not None else
+                    pd.DataFrame(0., index=range(len(b.X)), columns=self.space.objectives)
+                    for b in batches], ignore_index=True)
         status = pd.concat([b.status if b.status is not None else
             pd.Series(["success"] * len(b.X), dtype=object) for b in batches], ignore_index=True)
         identifiers = []
@@ -589,8 +602,7 @@ class Campaign:
             for spec in knowledge.specs:
                 if not spec.enabled:
                     continue
-                keys = [(spec.pattern, factor) for factor in spec.scope.factors]
-                results = [checked[key] for key in keys if key in checked]
+                results = [checked[spec.pattern_id]] if spec.pattern_id in checked else []
                 supported = spec.version == "1.0" and spec.pattern in {"monotone", "arrhenius", "quadratic_peak"}
                 unsupported_shape = spec.pattern in {"arrhenius", "quadratic_peak"} and not shape_supported
                 supported = supported and not unsupported_shape
@@ -604,18 +616,27 @@ class Campaign:
                         "insufficient_or_inapplicable_data" if supported else "no_empirical_validator")})
         self._validation_diagnostics = diagnostics
 
+    @staticmethod
+    def _validator_items(knowledge, kinds, *, scoped):
+        if not scoped:
+            return [(None, item) for item in knowledge.items if item.kind in kinds]
+        from ..knowledge import _legacy_item_from_spec
+        # The legacy item view omits identity; keep each original spec beside it.
+        return [(spec.pattern_id, item) for spec in knowledge.specs if spec.enabled
+                if (item := _legacy_item_from_spec(spec)) is not None and item.kind in kinds]
+
     def _run_monotone_validators(self, *, context=None) -> dict:
         space, knowledge = self.space, self.knowledge
         objective_name = None
         if context is not None:
             space, batch, knowledge, objective_name = context
-        mono_items = knowledge.items_of("monotone")
+        mono_items = self._validator_items(knowledge, {"monotone"}, scoped=context is not None)
         checked = {}
         if not mono_items:
             return checked
         X_phys = (self.history_df()[space.param_names] if context is None else batch.X).to_numpy()
         y_user = np.asarray(self._y_physical if context is None else batch.Y.iloc[:, 0], dtype=np.float64)
-        for item in mono_items:
+        for pattern_id, item in mono_items:
             try:
                 idx = space.param_names.index(item.param)
             except ValueError:
@@ -628,15 +649,15 @@ class Campaign:
                 declared_effect=item.effect,
                 min_observations=self.validation_min_obs,
             )
-            checked[("monotone", item.param)] = result
+            checked[("monotone", item.param) if context is None else pattern_id] = result
             if result is None or not result.violation:
                 continue
-            key = ("monotone", item.param) if objective_name is None else (objective_name, "monotone", item.param)
+            key = ("monotone", item.param) if objective_name is None else (objective_name, pattern_id, "monotone", item.param)
             if key in self._validation_emitted:
                 continue
             self._validation_emitted.add(key)
             message = result.to_warning()
-            warnings.warn(message if objective_name is None else type(message)(f"{objective_name}: {message}"), stacklevel=3)
+            warnings.warn(message if objective_name is None else type(message)(f"{objective_name}: [{pattern_id}] {message}"), stacklevel=3)
         return checked
 
     def _run_shape_validators(self, *, context=None) -> dict:
@@ -645,10 +666,7 @@ class Campaign:
         if context is not None:
             space, batch, knowledge, objective_name = context
         checked = {}
-        shape_items = [
-            it for it in knowledge.items
-            if getattr(it, "kind", None) in ("arrhenius", "quadratic_peak")
-        ]
+        shape_items = self._validator_items(knowledge, {"arrhenius", "quadratic_peak"}, scoped=context is not None)
         if not shape_items:
             return checked
         # Build mean predictions in unit / Y_norm space.
@@ -663,7 +681,7 @@ class Campaign:
             return checked
         y_norm = ((y_int - y_int.mean()) / y_int.std()).cpu().numpy()
 
-        for item in shape_items:
+        for pattern_id, item in shape_items:
             try:
                 dim_idx = space.param_names.index(item.param)
             except ValueError:
@@ -701,15 +719,15 @@ class Campaign:
                 param=item.param,
                 min_observations=self.validation_min_obs,
             )
-            checked[(kind, item.param)] = result
+            checked[(kind, item.param) if context is None else pattern_id] = result
             if result is None or not result.violation:
                 continue
-            key = (kind, item.param) if objective_name is None else (objective_name, kind, item.param)
+            key = (kind, item.param) if objective_name is None else (objective_name, pattern_id, kind, item.param)
             if key in self._validation_emitted:
                 continue
             self._validation_emitted.add(key)
             message = result.to_warning()
-            warnings.warn(message if objective_name is None else type(message)(f"{objective_name}: {message}"), stacklevel=3)
+            warnings.warn(message if objective_name is None else type(message)(f"{objective_name}: [{pattern_id}] {message}"), stacklevel=3)
         return checked
 
     # ------------------------------------------------------------------ #

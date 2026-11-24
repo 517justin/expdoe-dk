@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 import math
-from numbers import Real
+from numbers import Integral, Real
 
 import numpy as np
 import pandas as pd
@@ -70,6 +70,30 @@ def _validate_yvar(Yvar: pd.DataFrame, Y: pd.DataFrame) -> None:
         raise ValueError("Yvar must be numeric, finite, and non-negative.")
 
 
+def _align_multioutput_yvar(Yvar: pd.DataFrame, Y: pd.DataFrame, status: pd.Series) -> pd.DataFrame:
+    if len(Yvar) != len(Y):
+        raise ValueError("Yvar row count must equal Y row count.")
+    if set(Yvar.columns) != set(Y.columns):
+        raise ValueError("Yvar columns must exactly match Y columns.")
+    aligned = Yvar.loc[:, Y.columns]
+    for row_status, row in zip(status, aligned.itertuples(index=False, name=None), strict=True):
+        for value in row:
+            missing = (value is None or value is pd.NA or
+                       isinstance(value, (float, np.floating)) and np.isnan(value))
+            if missing and row_status != "success":
+                continue
+            valid = not isinstance(value, (bool, np.bool_)) and isinstance(value, Real)
+            if valid:
+                try:
+                    valid = math.isfinite(float(value)) and value >= 0
+                except (OverflowError, TypeError, ValueError):
+                    valid = False
+            if not valid:
+                raise ValueError("Yvar must be finite real non-boolean and non-negative; "
+                                 "only unsuccessful rows may have missing variances.")
+    return aligned
+
+
 def _validate_successful_objectives(Y: pd.DataFrame, status: pd.Series) -> None:
     successful = status.eq("success").to_numpy()
     if not successful.any():
@@ -116,7 +140,8 @@ class ObservationBatch:
         copied_Yvar = None
         if Yvar is not None:
             copied_Yvar = _clone_frame(Yvar, "Yvar")
-            _validate_yvar(copied_Yvar, copied_Y)
+            if len(copied_Y.columns) <= 1:
+                _validate_yvar(copied_Yvar, copied_Y)
 
         copied_status = None
         effective_status = pd.Series(["success"] * len(copied_X), dtype="object")
@@ -132,6 +157,9 @@ class ObservationBatch:
                     "status values must be one of: success, warning, failed."
                 )
             effective_status = copied_status
+
+        if copied_Yvar is not None and len(copied_Y.columns) > 1:
+            copied_Yvar = _align_multioutput_yvar(copied_Yvar, copied_Y, effective_status)
 
         normalized_ids = _normalize_ids(
             ids, len(copied_X), "ObservationBatch", optional=True
@@ -169,6 +197,31 @@ class ObservationBatch:
         """Stable optional observation identifiers."""
         return self._ids
 
+    def _subset(self, *, rows: Sequence[int] | None = None,
+                objectives: Sequence[str] | None = None) -> "ObservationBatch":
+        """Detach only existing validated rows/outputs, retaining their metadata.
+
+        Projection must not reinterpret a multioutput variance column through
+        the stricter public scalar-input contract. No new data is admitted here.
+        """
+        positions = list(range(len(self._X))) if rows is None else list(rows)
+        if (any(isinstance(i, (bool, np.bool_)) or not isinstance(i, Integral)
+                or not 0 <= i < len(self._X) for i in positions)
+                or len(set(positions)) != len(positions)):
+            raise ValueError("Subset rows must be unique existing row positions.")
+        names = list(self._Y.columns) if objectives is None else list(objectives)
+        if len(set(names)) != len(names) or not set(names) <= set(self._Y.columns):
+            raise ValueError("Subset objectives must be unique existing columns.")
+        subset = object.__new__(ObservationBatch)
+        object.__setattr__(subset, "_X", _clone_frame(self._X.iloc[positions], "X"))
+        object.__setattr__(subset, "_Y", _clone_frame(self._Y.iloc[positions][names], "Y"))
+        object.__setattr__(subset, "_Yvar", None if self._Yvar is None else
+                           _clone_frame(self._Yvar.iloc[positions][names], "Yvar"))
+        object.__setattr__(subset, "_status", None if self._status is None else
+                           _copy_series(self._status.iloc[positions], "status"))
+        object.__setattr__(subset, "_ids", tuple(self._ids[i] for i in positions) if self._ids else ())
+        return subset
+
     def successful(self) -> "ObservationBatch":
         """Return a detached batch containing only successful observations."""
         status = (
@@ -177,19 +230,9 @@ class ObservationBatch:
             else self._status.copy(deep=True)
         )
         mask = status.eq("success").to_numpy()
-        return ObservationBatch(
-            X=_clone_frame(self._X.iloc[mask], "X"),
-            Y=_clone_frame(self._Y.iloc[mask], "Y"),
-            Yvar=(
-                None
-                if self._Yvar is None
-                else _clone_frame(self._Yvar.iloc[mask], "Yvar")
-            ),
-            status=status.iloc[mask].reset_index(drop=True),
-            ids=()
-            if not self._ids
-            else tuple(identifier for identifier, keep in zip(self._ids, mask, strict=True) if keep),
-        )
+        subset = self._subset(rows=np.flatnonzero(mask).tolist())
+        object.__setattr__(subset, "_status", status.iloc[mask].reset_index(drop=True))
+        return subset
 
 
 @dataclass(frozen=True, init=False)

@@ -498,3 +498,122 @@ def test_reused_catalog_detects_new_observation_collision_before_oracle():
     campaign.tell(X, oracle(X))
     with pytest.raises(EngineError, match="collision"):
         campaign.run(lambda X: pytest.fail("must reject before oracle"), n_doe=3, n_iter=0)
+
+
+@pytest.mark.parametrize("order", [("matching", "mismatch"), ("mismatch", "matching")])
+def test_shape_diagnostics_keep_original_pattern_identity_independent_of_order(order):
+    from expdoe_dk.knowledge.validators import ShapePriorMismatchWarning
+    declaration = Space([Parameter("x", bounds=(0., 12.))], objectives=space().objective_specs)
+    X = pd.DataFrame({"x": np.arange(13, dtype=float)})
+    Y = pd.DataFrame({"gain": -(X.x - 6.) ** 2, "cost": X.x})
+
+    def check(names):
+        knowledge = Knowledge()
+        for name in names:
+            knowledge.add(make_pattern_spec(pattern_id=name, pattern="quadratic_peak", version="1.0",
+                scope=KnowledgeScope(factors=("x",), objectives=("gain",)), confidence=.8,
+                parameters={"center": 6. if name == "matching" else 0., "direction": "peak", "frozen": True}))
+        campaign = Campaign(declaration, knowledge, validation_min_obs=3, validation_interval=1)
+        with warnings.catch_warnings(record=True) as notices:
+            warnings.simplefilter("always")
+            campaign.tell(X, Y)
+        assert sum(isinstance(w.message, ShapePriorMismatchWarning) for w in notices) == ("mismatch" in names)
+        return {d["pattern_id"]: (d["status"], d["violation"]) for d in campaign.validation_diagnostics}
+
+    assert check(("matching",)) == {"matching": ("checked", False)}
+    assert check(("mismatch",)) == {"mismatch": ("checked", True)}
+    assert check(order) == {"matching": ("checked", False), "mismatch": ("checked", True)}
+
+
+@pytest.mark.parametrize("mode", ["known", "noiseless"])
+def test_campaign_recommendation_preserves_missing_variance_markers_and_prefix(mode):
+    campaign = Campaign(space(), validate=False, multiobjective=MultiObjectiveConfig(noise_mode=mode))
+    X = pd.DataFrame({"x": [0, 2, 4, 6, 8, 10]})
+    Y = oracle(X)
+    Y.iloc[3:] = np.nan
+    recorded = 0. if mode == "noiseless" else .1
+    variance = pd.DataFrame({"gain": pd.Series([recorded] * 3 + [None, np.nan, pd.NA], dtype=object),
+                             "cost": pd.Series([recorded] * 3 + [pd.NA, None, np.nan], dtype=object)})
+    batch = ObservationBatch(X, Y, Yvar=variance,
+        status=pd.Series(["success"] * 3 + ["failed", "warning", "failed"]))
+    campaign.tell_batch(batch)
+    result = campaign.ask_with_diagnostics(q=2)
+    assert result.diagnostics["noise_mode"] == mode
+    assert result.predictions.mean.shape == (2, 2)
+    assert not set(result.frame.x) & set(X.x)
+    original = campaign._combined_observations()
+    assert original.Yvar.gain.iloc[3] is None
+    assert np.isnan(original.Yvar.gain.iloc[4])
+    assert original.Yvar.gain.iloc[5] is pd.NA
+    assert _source_digest(campaign.space, original) == campaign._geometry.source_digest
+    campaign.tell_batch(ObservationBatch(pd.DataFrame({"x": [12]}),
+        pd.DataFrame({"gain": [None], "cost": [None]}), status=pd.Series(["failed"])))
+    combined = campaign._combined_observations()
+    assert combined.Yvar.iloc[-1].isna().all()
+    prefix = ObservationBatch(combined.X.iloc[:6], combined.Y.iloc[:6], Yvar=combined.Yvar.iloc[:6],
+        status=combined.status.iloc[:6], ids=combined.ids[:6])
+    assert _source_digest(campaign.space, prefix) == campaign._geometry.source_digest
+    assert campaign._observation_batches[-1].Yvar is None
+    pd.testing.assert_frame_equal(batch.Yvar, variance[Y.columns])
+
+
+def test_combined_variance_does_not_invent_zeros_for_unmeasured_failed_batch():
+    campaign = Campaign(space(), validate=False)
+    X = pd.DataFrame({"x": [0, 2, 4]})
+    campaign.tell_batch(ObservationBatch(X, oracle(X), Yvar=oracle(X) * 0 + .1))
+    campaign.tell_batch(ObservationBatch(pd.DataFrame({"x": [6]}),
+        pd.DataFrame({"gain": [None], "cost": [None]}), status=pd.Series(["failed"])))
+    assert campaign._combined_observations().Yvar.iloc[-1].isna().all()
+    assert campaign._observation_batches[-1].Yvar is None
+
+
+@pytest.mark.parametrize("status", ["failed", "warning"])
+@pytest.mark.parametrize("recorded", [0., .25])
+def test_combined_rejects_recorded_unsuccessful_variance_when_success_noise_is_missing(status, recorded):
+    campaign = initial()
+    batch = ObservationBatch(pd.DataFrame({"x": [6]}),
+        pd.DataFrame({"gain": [None], "cost": [None]}),
+        Yvar=pd.DataFrame({"gain": pd.Series([pd.NA], dtype=object), "cost": [recorded]}),
+        status=pd.Series([status]))
+    campaign.tell_batch(batch)
+    for consume in (campaign._combined_observations, campaign.ask):
+        with pytest.raises(EngineError, match="variance") as caught:
+            consume()
+        assert caught.value.code == ErrorCode.CONFIG_INVALID
+    assert campaign._observation_batches[0].Yvar is None
+    assert campaign._observation_batches[1].Yvar.cost.iloc[0] == recorded
+    assert len(campaign.history_df()) == 4
+    assert campaign._ask_iteration == 0 and campaign._geometry is None
+
+
+def test_combined_accepts_only_missing_unsuccessful_variance_with_unknown_success_noise():
+    campaign = initial()
+    batch = ObservationBatch(pd.DataFrame({"x": [6]}),
+        pd.DataFrame({"gain": [None], "cost": [None]}),
+        Yvar=pd.DataFrame({"gain": pd.Series([pd.NA], dtype=object),
+                           "cost": pd.Series([None], dtype=object)}), status=pd.Series(["failed"]))
+    campaign.tell_batch(batch)
+    assert campaign._combined_observations().Yvar is None
+    pd.testing.assert_frame_equal(campaign._observation_batches[-1].Yvar, batch.Yvar)
+
+
+def test_empirical_projection_handles_object_and_nullable_missing_variance():
+    from expdoe_dk.knowledge.validators import MonotoneViolationWarning
+    knowledge = Knowledge().add(make_pattern_spec(pattern_id="both", pattern="monotone", version="1.0",
+        scope=KnowledgeScope(factors=("x",), objectives=("gain", "cost")), confidence=.8,
+        parameters={"direction": "increasing", "epsilon": "auto", "delta_norm": .5, "n_pairs_per_dim": 3}))
+    campaign = Campaign(space(), knowledge, validation_min_obs=3, validation_interval=1)
+    X = pd.DataFrame({"x": list(range(13))})
+    Y = oracle(X)
+    Y.iloc[10:] = np.nan
+    variance = pd.DataFrame({"gain": pd.Series([.1] * 10 + [None, np.nan, pd.NA], dtype=object),
+                             "cost": pd.Series([.2] * 10 + [pd.NA] * 3, dtype="Float64")})
+    batch = ObservationBatch(X, Y, Yvar=variance,
+        status=pd.Series(["success"] * 10 + ["failed", "warning", "failed"]))
+    with pytest.warns(MonotoneViolationWarning, match=r"cost: \[both\]"):
+        campaign.tell_batch(batch)
+    assert {d["objective_name"]: (d["pattern_id"], d["status"], d["violation"])
+            for d in campaign.validation_diagnostics} == {
+                "gain": ("both", "checked", False), "cost": ("both", "checked", True)}
+    pd.testing.assert_frame_equal(campaign._observation_batches[0].Yvar, variance[space().objectives])
+    pd.testing.assert_frame_equal(batch.Yvar, variance[Y.columns])

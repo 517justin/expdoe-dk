@@ -59,8 +59,13 @@ def _eligible(space, observations, *, minimum):
         if not valid:
             raise EngineError(ErrorCode.CONFIG_INVALID,
                 "Known variance must be finite and non-negative for every successful row; mixed missing variance is unsupported")
-    batch = ObservationBatch(observations.X.iloc[indices], responses.iloc[indices],
-        Yvar=None if variance is None else variance.iloc[indices],
+    selected = observations._subset(rows=indices, objectives=space.objectives)
+    variance = selected.Yvar
+    if variance is not None and any(dtype == object for dtype in variance.dtypes):
+        # Only the validated, successful fitting copy needs numeric dtype;
+        # original/projected audit batches retain their missing-value markers.
+        variance = variance.astype(float)
+    batch = ObservationBatch(selected.X, selected.Y, Yvar=variance,
         ids=tuple(observations.ids[i] if observations.ids else str(i) for i in indices))
     _model_inputs(space, batch.X)
     return batch, exclusions

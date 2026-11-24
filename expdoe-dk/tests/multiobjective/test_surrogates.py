@@ -51,6 +51,37 @@ def test_named_outputs_align_y_and_yvar(data):
     assert empty.mean.shape == empty.variance.shape == (0, 2)
 
 
+@pytest.mark.parametrize("dtype", [object, "Float64"])
+def test_real_fit_and_projection_retain_missing_unsuccessful_variances(data, dtype):
+    space, source = data
+    X = pd.concat([source.X, source.X.iloc[:3]], ignore_index=True)
+    Y = pd.concat([source.Y, pd.DataFrame({"cost": [None] * 3, "response": [None] * 3})], ignore_index=True)
+    variance = pd.DataFrame({"response": pd.Series([.01] * 5 + [None, np.nan, pd.NA], dtype=dtype),
+                             "cost": pd.Series([1., 2., 3., 4., 5., pd.NA, None, np.nan], dtype=dtype)})
+    batch = ObservationBatch(X, Y, Yvar=variance,
+        status=pd.Series(["success"] * 5 + ["failed", "warning", "failed"]),
+        ids=(*source.ids, "f", "w", "f2"))
+    projected, selected, knowledge = project_objective(space, batch, Knowledge(), "response")
+    assert selected.ids == batch.ids
+    if dtype is object:
+        assert selected.Yvar.response.iloc[5] is None
+        assert np.isnan(selected.Yvar.response.iloc[6])
+    else:
+        assert selected.Yvar.response.iloc[5] is pd.NA
+        assert selected.Yvar.response.iloc[6] is pd.NA
+    assert selected.Yvar.response.iloc[7] is pd.NA
+    pd.testing.assert_frame_equal(selected.successful().Yvar, variance[["response"]].iloc[:5])
+    fitted = fit_surrogate(space, batch, seed=13)
+    reference = fit_surrogate(space, source, seed=13)
+    prediction, expected = fitted.predict(source.X), reference.predict(source.X)
+    np.testing.assert_allclose(prediction.mean, expected.mean, rtol=1e-10, atol=1e-10)
+    np.testing.assert_allclose(prediction.variance, expected.variance, rtol=1e-10, atol=1e-10)
+    single = fit_surrogate(projected, selected, knowledge=knowledge, seed=13).predict(source.X)
+    np.testing.assert_allclose(single.mean[:, 0], expected.mean[:, 0], rtol=1e-10, atol=1e-10)
+    assert [row["id"] for row in fitted.exclusions] == ["f", "w", "f2"]
+    pd.testing.assert_frame_equal(batch.Yvar, variance[source.Y.columns])
+
+
 def test_target_model_preserves_both_sides(data):
     space, batch = data
     fitted = fit_surrogate(space, batch)

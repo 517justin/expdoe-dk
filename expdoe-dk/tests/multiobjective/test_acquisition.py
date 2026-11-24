@@ -80,6 +80,29 @@ def test_noise_resolution_preserves_original_metadata(mode, variance, expected):
         pd.testing.assert_frame_equal(observations.Yvar, original)
 
 
+@pytest.mark.parametrize("missing", [None, np.nan, pd.NA])
+@pytest.mark.parametrize("status", ["failed", "warning"])
+@pytest.mark.parametrize("recorded", [0., .25])
+def test_noiseless_checks_recorded_unsuccessful_variance_without_filling_missing(missing, status, recorded):
+    from expdoe_dk.bo.multiobjective import resolve_noise_mode
+    variance = pd.DataFrame({"a": pd.Series([0., missing], dtype=object),
+                             "b": pd.Series([0., recorded], dtype=object)})
+    observations = ObservationBatch(pd.DataFrame({"x": [0., 1.]}),
+        pd.DataFrame({"a": [1., None], "b": [2., None]}), Yvar=variance,
+        status=pd.Series(["success", status]))
+    assert resolve_noise_mode(observations, MultiObjectiveConfig()) == "known"
+    assert resolve_noise_mode(observations, MultiObjectiveConfig(noise_mode="known")) == "known"
+    if recorded:
+        with pytest.raises(EngineError) as caught:
+            resolve_noise_mode(observations, MultiObjectiveConfig(noise_mode="noiseless"))
+        assert caught.value.code == ErrorCode.CONFIG_INVALID
+    else:
+        assert resolve_noise_mode(observations, MultiObjectiveConfig(noise_mode="noiseless")) == "noiseless"
+    pd.testing.assert_frame_equal(observations.Yvar, variance)
+    if missing is None or missing is pd.NA:
+        assert observations.Yvar.a.iloc[1] is missing
+
+
 @pytest.mark.parametrize("kind,mode,pending,preferences", [
     ("q_log_ehvi", "inferred", False, False),
     ("q_log_ehvi", "known", False, False),

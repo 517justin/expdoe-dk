@@ -80,10 +80,7 @@ def _knowledge_routes(space, observations, knowledge):
         projected = Space(space.params, constraints=space.constraints, objectives=(objective,))
         batch = None
         if observations is not None:
-            variance = observations.Yvar
-            batch = ObservationBatch(observations.X, observations.Y[[objective.name]],
-                Yvar=None if variance is None else variance[[objective.name]],
-                status=observations.status, ids=observations.ids)
+            batch = observations._subset(objectives=[objective.name])
         routes.append(_ObjectiveRoute(objective.name, projected, batch,
                                       _subset(knowledge, model_specs[objective.name])))
     return tuple(routes)

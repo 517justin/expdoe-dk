@@ -185,8 +185,12 @@ def resolve_noise_mode(observations, config: MultiObjectiveConfig) -> str:
         raise EngineError(ErrorCode.CONFIG_INVALID, "known noise requires complete Yvar")
     if mode == "inferred" and variance is not None:
         raise EngineError(ErrorCode.CONFIG_INVALID, "inferred noise rejects supplied Yvar")
-    if mode == "noiseless" and variance is not None and (variance.to_numpy() != 0).any():
-        raise EngineError(ErrorCode.CONFIG_INVALID, "noiseless noise requires absent or all-zero Yvar")
+    if mode == "noiseless" and variance is not None:
+        # The batch boundary permits missing variance only on unsuccessful rows.
+        # Check every recorded value, including unsuccessful trials, without imputation.
+        recorded = variance.to_numpy()[variance.notna().to_numpy()]
+        if (recorded != 0).any():
+            raise EngineError(ErrorCode.CONFIG_INVALID, "noiseless noise requires absent or all-zero Yvar")
     return mode
 
 

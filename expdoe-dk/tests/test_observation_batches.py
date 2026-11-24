@@ -182,6 +182,103 @@ def test_yvar_rejects_complex_values_without_complex_warning():
             )
 
 
+def test_multioutput_yvar_aligns_independent_column_order_without_mutating_input():
+    X = pd.DataFrame({"x": [1., 2.]})
+    Y = pd.DataFrame({"a": [3., 4.], "b": [5., 6.]})
+    variance = pd.DataFrame({"b": [.5, .6], "a": [.3, .4]}, index=[8, 9])
+    original = variance.copy(deep=True)
+    batch = ObservationBatch(X, Y, Yvar=variance)
+    pd.testing.assert_frame_equal(batch.Yvar, original[["a", "b"]].reset_index(drop=True))
+    pd.testing.assert_frame_equal(variance, original)
+    variance.iloc[0, 0] = 100.
+    assert batch.Yvar.b.tolist() == [.5, .6]
+
+
+@pytest.mark.parametrize("missing", [None, np.nan, pd.NA])
+@pytest.mark.parametrize("status", ["failed", "warning"])
+def test_multioutput_missing_unsuccessful_variance_preserves_original_marker(missing, status):
+    variance = pd.DataFrame({"a": pd.Series([.1, missing], dtype=object),
+                             "b": pd.Series([.2, 0.], dtype=object)})
+    batch = ObservationBatch(pd.DataFrame({"x": [1., 2.]}),
+        pd.DataFrame({"a": [3., None], "b": [4., None]}), Yvar=variance,
+        status=pd.Series(["success", status]), ids=("measured", "not-successful"))
+    actual = batch.Yvar.a.iloc[1]
+    if missing is None or missing is pd.NA:
+        assert actual is missing
+    else:
+        assert isinstance(actual, float) and np.isnan(actual)
+    pd.testing.assert_frame_equal(batch.Yvar, variance)
+    assert batch.successful().Yvar.values.tolist() == [[.1, .2]]
+
+
+@pytest.mark.parametrize("status", ["success", "failed", "warning"])
+@pytest.mark.parametrize("value", [-.1, np.inf, -np.inf, True, np.bool_(False), "0.1", 1 + 0j, [0.]])
+def test_multioutput_rejects_every_invalid_recorded_variance(value, status):
+    variance = pd.DataFrame({"a": pd.Series([value], dtype=object), "b": [.1]})
+    with pytest.raises(ValueError, match="Yvar"):
+        ObservationBatch(pd.DataFrame({"x": [1.]}), pd.DataFrame({"a": [3.], "b": [4.]}),
+                         Yvar=variance, status=pd.Series([status]))
+
+
+@pytest.mark.parametrize("missing", [None, np.nan, pd.NA])
+@pytest.mark.parametrize("status", [None, pd.Series(["success"])])
+def test_multioutput_successful_variance_cannot_be_missing(missing, status):
+    variance = pd.DataFrame({"a": pd.Series([missing], dtype=object), "b": [.1]})
+    with pytest.raises(ValueError, match="Yvar"):
+        ObservationBatch(pd.DataFrame({"x": [1.]}), pd.DataFrame({"a": [3.], "b": [4.]}),
+                         Yvar=variance, status=status)
+
+
+@pytest.mark.parametrize("columns", [["a"], ["a", "extra"], ["a", "b", "extra"], ["a", "a"]])
+def test_multioutput_variance_names_must_be_exact_and_unique(columns):
+    with pytest.raises(ValueError, match="columns"):
+        ObservationBatch(pd.DataFrame({"x": [1.]}), pd.DataFrame({"a": [3.], "b": [4.]}),
+                         Yvar=pd.DataFrame([[.1] * len(columns)], columns=columns))
+
+
+@pytest.mark.parametrize("status", ["success", "failed", "warning"])
+@pytest.mark.parametrize("variance", [pd.Series([.1], dtype=object), pd.Series([None], dtype=object),
+                                     pd.Series([np.nan]), pd.Series([pd.NA], dtype="Float64")])
+def test_scalar_variance_validation_does_not_adopt_multioutput_relaxations(status, variance):
+    with pytest.raises((ValueError, TypeError)):
+        ObservationBatch(pd.DataFrame({"x": [1.]}), pd.DataFrame({"a": [3.]}),
+                         Yvar=pd.DataFrame({"a": variance}), status=pd.Series([status]))
+
+
+def test_validated_subset_projects_and_reorders_without_reinterpreting_scalar_input():
+    batch = ObservationBatch(pd.DataFrame({"x": [1., 2., 3.]}),
+        pd.DataFrame({"a": [3., None, None], "b": [4., None, None]}),
+        Yvar=pd.DataFrame({"a": pd.Series([.1, None, pd.NA], dtype=object),
+                           "b": pd.Series([.2, np.nan, None], dtype=object)}),
+        status=pd.Series(["success", "failed", "warning"]), ids=("s", "f", "w"))
+    selected = batch._subset(rows=[2, 0, 1], objectives=["a"])
+    assert selected.ids == ("w", "s", "f")
+    assert selected.status.tolist() == ["warning", "success", "failed"]
+    assert selected.Yvar.a.iloc[0] is pd.NA and selected.Yvar.a.iloc[2] is None
+    assert selected.successful().ids == ("s",)
+    assert selected.successful().Yvar.a.tolist() == [.1]
+    assert selected._Yvar is not batch._Yvar
+    detached_variance = selected.Yvar
+    detached_variance.iloc[0, 0] = 99.
+    assert batch.Yvar.a.iloc[2] is pd.NA
+    with pytest.raises(ValueError, match="Yvar"):
+        ObservationBatch(selected.X, selected.Y, Yvar=selected.Yvar, status=selected.status, ids=selected.ids)
+    from dataclasses import FrozenInstanceError
+    with pytest.raises(FrozenInstanceError):
+        selected._ids = ("new",)
+
+
+@pytest.mark.parametrize("selection", [
+    {"rows": [0, 0]}, {"rows": [3]}, {"rows": [-1]}, {"rows": [True]},
+    {"objectives": ["a", "a"]}, {"objectives": ["unknown"]},
+])
+def test_validated_subset_rejects_non_subset_selection(selection):
+    batch = ObservationBatch(pd.DataFrame({"x": [1., 2.]}),
+                             pd.DataFrame({"a": [3., 4.], "b": [5., 6.]}))
+    with pytest.raises((ValueError, IndexError, KeyError)):
+        batch._subset(**selection)
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
