@@ -22,7 +22,11 @@
 
 ## 0.6.0 多目標實作與驗收
 
-原規劃的具名多目標推薦、qLogEHVI／qLogNEHVI／qLogNParEGO 式路由、實測 Pareto／固定尺度超體積報告、schema 2.2 checkpoint 已實作。0.6.0 原始碼 `412fd2d` 在乾淨工作樹通過固定五種子的 current／lower 品質協定與完整 slow suites：current 2592 passed；lower 2591 passed、1 項 Torch uint64 能力限制跳過。發布前 `226379f` 的驗收與 `93a920a` 的版本相容性失敗另行保留，不混作最終通過證據。後續只有測試與文件修正；checkpoint 測試檔另於兩個環境各通過 72 項，套件程式碼及已驗證 wheel 仍對應 `412fd2d`。此案例的 monotone v2 與 Plain 成績相同，不能宣稱優於 Plain。歷史 v1 與數值失敗證據仍保留，詳見[逐方法結果](../experiments/multiobjective_validation/README.md)。
+原規劃的具名多目標推薦、qLogEHVI／qLogNEHVI／qLogNParEGO 式路由、實測 Pareto／固定尺度超體積報告、schema 2.2 checkpoint 已實作。最終修正版本 `4761df9` 修復多目標 v2 宣告替換後沿用舊驗證結果，以及跨批次串接遺失精確值的問題；套件版本維持 0.6.0。乾淨工作樹上的完整 slow suites 結果為 current **2646 passed、188 warnings**；lower **2645 passed、1 skipped、202 warnings**。唯一跳過項目仍是 Torch 2.2 缺少 uint64 tensor 能力。兩組環境各自執行固定五種子、四方法的 20 列矩陣，獨立稽核均通過；此案例的 monotone v2 與 Plain 成績相同，不能宣稱優於 Plain。
+
+新 wheel／sdist 與非 editable 安裝驗證均對應 `4761df9`；之後的根目錄與說明文件更新不改套件程式碼、測試或套件 README，也不冒稱已對後續文件 commit 重跑完整測試。先前 `412fd2d` 的 2592／2591 項通過結果、發布前 `226379f` 驗收、`93a920a` 版本相容性失敗及歷史 v1／數值失敗證據均保留，詳見[最終修正驗收與歷史結果](../experiments/multiobjective_validation/README.md#final-review-fix-verification)。
+
+未發布的中間 0.6.0 checkpoint 並非一律可延續：`93a920a`／`412fd2d`／`96e9013` 若混合整數 Yvar 與失敗列缺失變異，可能因 frozen geometry digest 的表示方式差異而被拒絕。此 N1 限制已明確列為不支援的中間版本相容性，不是已修復的遷移功能。應保留原檔，不修改內容或雜湊強迫還原；必要時由原始量測重建 Campaign 並重新建立 geometry，不能稱為同一 campaign 的續跑。已核准的歷史版本讀取路徑不變，最終同版本續跑已通過測試，詳見[checkpoint 相容性範圍](multiobjective.md#persistence-and-environment)。
 
 `with_monotone` 仍為 v1，不自動升級；v2 以柔性方向證據調整已擬合 GP，不捏造量測值。v2 計算可能很慢，不保證互動速度；已觀察的 source-adapter 耗時並非完整推薦流程基準。最低 Python 版本已依 Ax 相依條件修正為 3.11。教材原始資料、Colab、其他作業系統與 GPU 仍未驗收。
 

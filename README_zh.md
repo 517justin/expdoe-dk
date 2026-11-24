@@ -16,6 +16,7 @@ v2 計算可能很慢，不保證互動速度。
 兩組環境；此案例的 v2 與 Plain 成績相同，歷史 v1 失敗結果仍保留。
 這不代表知識在所有實驗都有效，也不是實驗室安全保證。
 詳見[多目標指南](./docs/multiobjective.md)與[路線圖](./docs/roadmap.md)。
+Checkpoint 相容性以[文件列明的歷史版本讀取路徑與中間開發版本排除範圍](./docs/multiobjective.md#persistence-and-environment)為準。
 
 - 連續、整數、離散、類別與序位參數，以及物理／模型座標轉換。
 - 明確的最大化、最小化與目標區間 objective。
