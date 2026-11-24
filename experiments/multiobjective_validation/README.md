@@ -1,6 +1,22 @@
 # Multiobjective Acceptance
 
-**2026-11-24: quality gate FAILED; 0.6.0 release blocked.** This is a named
+**Approved protocol v2 pending validation; 0.6.0 release remains blocked.**
+Protocol `fixed-catalog-monotone`, version `2.0`, reports four methods:
+`random`, `plain_gp`, legacy `knowledge_gp`, and `knowledge_gp_v2`.
+Only the latter adds `monotone@2.0`, increasing on gain, confidence .8,
+three pairs, epsilon .05 and softness 1. Initial design, seeds, catalog,
+reference, objective functions, geometry, budget and 1.10 tolerances are unchanged.
+Release gates require Plain <= 1.10 * Random, V2 <= 1.10 * Random and
+V2 <= 1.10 * Plain (each denominator floored at 1e-12). Legacy comparisons
+remain explicitly separate under `legacy_v1`; they do not become v2 successes.
+Every method still requires exact replay/restart, feasibility 1, duplicates 0,
+and eight q=2 batches. Declared noiseless mode is unchanged: ordinary GPyTorch
+fixed-noise likelihoods clamp zero declared variance to 1e-6 internally.
+This protocol does not claim exact zero fitted noise.
+
+## Preserved Historical V1 Failure
+
+**2026-11-24: original quality gate FAILED; release blocked at that revision.** This is a named
 sequential experiment, not general multiobjective cross-validation. Package and
 engine versions remain 0.5.1. No successful release acceptance is claimed.
 
@@ -128,8 +144,9 @@ env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   python -m experiments.multiobjective_validation.run --output-dir outputs/multiobjective-validation
 ```
 
-The CLI returns nonzero if quality fails. `run_matrix(*, seeds, output_dir)`
-returns all rows; `quality_summary(rows)` applies the unmodified gates. JSONL
+The CLI returns nonzero if v2 quality fails. `run_matrix(*, seeds, output_dir)`
+returns all four-method rows; `quality_summary(rows)` applies the approved v2
+gates and reports legacy comparisons separately. JSONL
 contains source SHA, dirty status/details, dependencies/platform, geometry,
 reference, scale, seed, method, budget, batches, runtime, actual counts,
 feasibility/duplicates, raw and normalized HV, regret, replay/restart results
@@ -144,7 +161,7 @@ env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   python -m pytest -q --run-slow
 ```
 
-The full slow suite deliberately exposes the failing quality gate. Fast tests
+The full slow suite exercises the approved v2 quality gate. Fast tests
 prove oracle/geometry and actual 2/3/4/5/6-objective routing with named-column,
 catalog, pending, noise and hard-constraint checks; they do not replace quality
 acceptance. Logs and full JSONL evidence for this local run are in the ignored

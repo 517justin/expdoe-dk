@@ -19,6 +19,31 @@ def runner():
     return importlib.import_module("experiments.multiobjective_validation.run")
 
 
+def test_approved_protocol_is_explicit_and_locked():
+    f = fixture()
+    assert f.METHODS == ("random", "plain_gp", "knowledge_gp", "knowledge_gp_v2")
+    assert f.PROTOCOL == "fixed-catalog-monotone"
+    assert f.PROTOCOL_VERSION == "2.0"
+    assert f.SEEDS == (2, 5, 11, 23, 47)
+    assert (f.INITIAL, f.ROUNDS, f.Q) == (6, 8, 2)
+    assert f.config().noise_mode == "noiseless"
+    assert dict(f.config().reference_point) == {"gain": 0., "retention": 0.}
+    spec, = f.knowledge("knowledge_gp_v2").to_envelope()["specs"]
+    assert spec["pattern"] == "monotone" and spec["version"] == "2.0"
+    assert spec["confidence"] == .8
+    assert spec["scope"] == {"factors": ["x"], "objectives": ["gain"],
+                             "region": None, "conditions": None}
+    assert spec["parameters"] == {"direction": "increasing", "n_pairs_per_dim": 3,
+                                  "epsilon": .05, "softness": 1.}
+    old, = f.knowledge("knowledge_gp").to_envelope()["specs"]
+    assert old["version"] == "1.0" and old["confidence"] == .8
+    assert old["parameters"] == {"direction": "increasing", "epsilon": "auto",
+                                 "delta_norm": .5, "n_pairs_per_dim": 3}
+    assert not f.knowledge("random").specs and not f.knowledge("plain_gp").specs
+    with pytest.raises(ValueError, match="method"):
+        f.knowledge("knowledge_gp_latest")
+
+
 def test_oracle_exact_feasible_catalog_hypervolume():
     from expdoe_dk.bo.multiobjective_metrics import hypervolume
     f = fixture()
@@ -85,19 +110,42 @@ def test_real_catalog_route_smoke(m, noise, pending, route):
 def test_runner_contract_and_quality_gate_rejects_bad_results():
     r = runner()
     rows = [{"method": m, "hv_regret": v} for m, v in
-            [("random", .1), ("plain_gp", .12), ("knowledge_gp", .09)]]
+            [("random", .1), ("plain_gp", .12), ("knowledge_gp", .9), ("knowledge_gp_v2", .09)]]
     assert not r.quality_summary(rows)["passed"]
     rows[1]["hv_regret"] = .1
-    assert r.quality_summary(rows)["passed"]
+    summary = r.quality_summary(rows)
+    assert summary["passed"]
+    assert not summary["legacy_v1"]["passed"]
+    assert set(summary["gates"]) == {"plain_gp_vs_random", "knowledge_gp_v2_vs_random", "knowledge_gp_v2_vs_plain"}
+    rows[-1]["hv_regret"] = .111
+    assert not r.quality_summary(rows)["passed"]
+    rows[1]["hv_regret"], rows[-1]["hv_regret"] = .05, .06
+    assert not r.quality_summary(rows)["passed"]  # v2 vs plain alone fails
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -.1])
+def test_quality_gate_rejects_invalid_regret(bad):
+    rows = [{"method": m, "hv_regret": .1} for m in fixture().METHODS]
+    rows[-1]["hv_regret"] = bad
+    with pytest.raises(ValueError, match="regret"):
+        runner().quality_summary(rows)
+
+
+def test_quality_gate_requires_all_methods():
+    with pytest.raises(ValueError, match="method"):
+        runner().quality_summary([{"method": "random", "hv_regret": .1}])
 
 
 @pytest.mark.slow
 def test_full_fixed_seed_matrix(tmp_path):
     r = runner()
     rows = r.run_matrix(seeds=(2, 5, 11, 23, 47), output_dir=tmp_path)
-    assert len(rows) == 15
-    assert len((tmp_path / "matrix.jsonl").read_text().splitlines()) == 15
+    assert len(rows) == 20
+    assert len((tmp_path / "matrix.jsonl").read_text().splitlines()) == 20
     for row in rows:
+        assert row["protocol"] == fixture().PROTOCOL
+        assert row["protocol_version"] == fixture().PROTOCOL_VERSION
+        assert row["knowledge"] == fixture().knowledge(row["method"]).to_envelope()
         assert row["measurement_count"] == 22
         assert row["parameter_feasible_rate"] == 1.
         assert row["duplicate_rate"] == 0.

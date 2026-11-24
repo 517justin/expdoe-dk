@@ -36,12 +36,20 @@ def provenance():
 
 
 def quality_summary(rows):
+    if {row["method"] for row in rows} != set(f.METHODS):
+        raise ValueError("Quality summary requires exactly the four declared methods")
+    if any(not np.isfinite(row["hv_regret"]) or row["hv_regret"] < 0 for row in rows):
+        raise ValueError("Quality summary requires finite nonnegative regret")
     means = {method: float(np.mean([row["hv_regret"] for row in rows if row["method"] == method]))
              for method in f.METHODS}
     gates = {method + "_vs_random": means[method] <= 1.10 * max(means["random"], 1e-12)
-             for method in ("plain_gp", "knowledge_gp")}
-    gates["knowledge_vs_plain"] = means["knowledge_gp"] <= 1.10 * max(means["plain_gp"], 1e-12)
-    return {"mean_hv_regret": means, "tolerance": 1.10, "gates": gates, "passed": all(gates.values())}
+             for method in ("plain_gp", "knowledge_gp_v2")}
+    gates["knowledge_gp_v2_vs_plain"] = means["knowledge_gp_v2"] <= 1.10 * max(means["plain_gp"], 1e-12)
+    legacy = {"knowledge_gp_vs_random": means["knowledge_gp"] <= 1.10 * max(means["random"], 1e-12),
+              "knowledge_gp_vs_plain": means["knowledge_gp"] <= 1.10 * max(means["plain_gp"], 1e-12)}
+    return {"protocol": f.PROTOCOL, "protocol_version": f.PROTOCOL_VERSION,
+            "mean_hv_regret": means, "tolerance": 1.10, "gates": gates, "passed": all(gates.values()),
+            "legacy_v1": {"gates": legacy, "passed": all(legacy.values())}}
 
 
 def _trajectory(seed, method, geometry, *, restart=None):
@@ -105,6 +113,8 @@ def run_matrix(*, seeds, output_dir) -> list[dict]:
                 values = history[f.space().objectives].to_numpy()
                 hv = hypervolume((values - geometry.location) / geometry.scale, geometry.report_reference)
                 row = {**source, "seed": seed, "method": method, "initial_x": f.initial(seed).x.tolist(),
+                    "protocol": f.PROTOCOL, "protocol_version": f.PROTOCOL_VERSION,
+                    "knowledge": f.knowledge(method).to_envelope(), "declared_noise_mode": f.config().noise_mode,
                     "budget": {"initial": f.INITIAL, "rounds": f.ROUNDS, "q": f.Q},
                     "geometry": geometry.to_dict(), "reference_raw": [0., 0.], "scale": list(geometry.scale),
                     "measurement_count": len(history), "batch_sizes": [len(b) for b in batches],

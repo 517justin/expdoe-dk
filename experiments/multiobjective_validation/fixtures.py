@@ -9,7 +9,9 @@ from expdoe_dk.bo.knowledge_runtime import compile_runtime
 from expdoe_dk.bo.objective_geometry import resolve_geometry
 
 SEEDS = (2, 5, 11, 23, 47)
-METHODS = ("random", "plain_gp", "knowledge_gp")
+PROTOCOL = "fixed-catalog-monotone"
+PROTOCOL_VERSION = "2.0"
+METHODS = ("random", "plain_gp", "knowledge_gp", "knowledge_gp_v2")
 INITIAL, ROUNDS, Q = 6, 8, 2
 
 
@@ -43,11 +45,18 @@ def config():
 
 
 def knowledge(method):
+    if method not in METHODS:
+        raise ValueError(f"Unknown acceptance method: {method!r}")
     result = Knowledge()
     if method == "knowledge_gp":
         result.add(make_pattern_spec(pattern_id="gain-increases", pattern="monotone", version="1.0",
             scope=KnowledgeScope(factors=("x",), objectives=("gain",)),
             parameters={"direction": "increasing", "epsilon": "auto", "delta_norm": .5,
+                        "n_pairs_per_dim": 3}, confidence=.8))
+    elif method == "knowledge_gp_v2":
+        result.add(make_pattern_spec(pattern_id="gain-increases-v2", pattern="monotone", version="2.0",
+            scope=KnowledgeScope(factors=("x",), objectives=("gain",)),
+            parameters={"direction": "increasing", "epsilon": .05, "softness": 1.,
                         "n_pairs_per_dim": 3}, confidence=.8))
     return result
 
