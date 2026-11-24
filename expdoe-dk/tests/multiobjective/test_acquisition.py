@@ -274,14 +274,16 @@ def test_missing_capability_is_lazy_and_typed(real_models, monkeypatch, kind, mo
 ])
 def test_high_utility_unsafe_points_are_suppressed(real_models, kind, mode):
     space, batch, fitted = real_models[mode]
-    constrained, _, geometry = build(real_models, kind, mode)
+    _, _, geometry = build(real_models, kind, mode)
     free_space = Space(space.params, objectives=space.objective_specs)
     runtime = compile_runtime(free_space, Knowledge(), batch)
-    # The counterfactual has the same physical posterior, but only measured
-    # safe incumbents, so an unsafe incumbent cannot hide the candidate's gain.
+    # Hold posterior, safe baseline, geometry and RNG fixed; vary only constraints.
     safe = batch.Y["y0"] <= 13.5
     safe_batch = ObservationBatch(batch.X.loc[safe], batch.Y.loc[safe],
                                  Yvar=None if batch.Yvar is None else batch.Yvar.loc[safe])
+    constrained, _ = api().build_multiobjective_acquisition(space, fitted, safe_batch, None,
+        compile_runtime(space, Knowledge(), safe_batch),
+        MultiObjectiveConfig(acquisition=kind, noise_mode=mode), geometry, seed=23, slot=0)
     free, _ = api().build_multiobjective_acquisition(free_space, fitted, safe_batch, None, runtime,
         MultiObjectiveConfig(acquisition=kind, noise_mode=mode), geometry, seed=23, slot=0)
     unsafe = pd.DataFrame({"x": [2.999, 3.001]})

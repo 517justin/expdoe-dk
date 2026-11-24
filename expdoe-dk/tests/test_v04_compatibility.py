@@ -306,6 +306,7 @@ def test_int64_discrete_snap_uses_arbitrary_precision_distances():
     assert snapped.device == values.device
 
 
+@pytest.mark.skipif(not hasattr(torch, "uint64"), reason="Torch build has no uint64 dtype (including Torch 2.2)")
 def test_uint64_tensor_snap_preserves_unsigned_dtype_and_device():
     """Catches representability checks comparing tensors to uint64 maxima."""
     parameter = ed.Parameter("count", kind="integer", bounds=(0, 10), step=2)
