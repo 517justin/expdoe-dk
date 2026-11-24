@@ -117,4 +117,54 @@ class MultiObjectiveConfig:
         return cls(**payload)
 
 
-__all__ = ["MultiObjectiveConfig"]
+def resolve_preference_weights(space: Space, runtime: Mapping, config: MultiObjectiveConfig):
+    """Reconcile config, knowledge, then ranks without silently overriding any.
+
+    Weights follow Space objective order. Equivalent knowledge declarations
+    remain separate provenance entries but constitute one numerical preference.
+    These weights belong to scalarization, never weighted hypervolume.
+    """
+    from .knowledge_runtime import RuntimePreference, validate_runtime_artifact
+
+    config.validate_for_space(space)
+    candidates = []
+
+    def add(values, provenance):
+        numbers = tuple(_finite_number(v, "preference weight") for v in values)
+        if len(numbers) != len(space.objectives) or any(v <= 0 for v in numbers):
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Preferences require positive weights for all objectives")
+        largest = max(numbers)
+        scaled = tuple(v / largest for v in numbers)
+        total = math.fsum(scaled)
+        normalized = tuple(v / total for v in scaled)
+        if any(v <= 0 for v in normalized):
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Preference normalization underflows")
+        candidates.append((normalized, provenance))
+
+    if config.preference_weights is not None:
+        add([config.preference_weights[name] for name in space.objectives], {"source": "config"})
+    for preference in runtime.get("acquisition_preferences", ()):
+        if not isinstance(preference, RuntimePreference):
+            raise EngineError(ErrorCode.CONFIG_INVALID, "Expected compiled RuntimePreference")
+        validate_runtime_artifact(space, "acquisition_preferences", preference.artifact)
+        weights = dict(zip(preference.payload["objectives"], preference.payload["weights"], strict=True))
+        add([weights[name] for name in space.objectives], {
+            "source": "knowledge", "source_pattern_id": preference.source_pattern_id,
+            "source_pattern": preference.source_pattern, "source_version": preference.source_version,
+        })
+    priorities = tuple(objective.priority for objective in space.objective_specs)
+    if len(set(priorities)) > 1:
+        add([1 / (1 + rank) for rank in priorities], {"source": "objective_priority"})
+    if not candidates:
+        return None, ()
+    first = candidates[0][0]
+    if any(not all(math.isclose(a, b, rel_tol=1e-9, abs_tol=0.)
+                   for a, b in zip(first, weights, strict=True)) for weights, _ in candidates[1:]):
+        raise EngineError(ErrorCode.CONFIG_INVALID, "Conflicting preference sources", details={
+            "sources": [provenance for _, provenance in candidates],
+            "objective_names": space.objectives,
+        })
+    return first, tuple(provenance for _, provenance in candidates)
+
+
+__all__ = ["MultiObjectiveConfig", "resolve_preference_weights"]
