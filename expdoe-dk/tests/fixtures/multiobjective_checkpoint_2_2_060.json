@@ -1,0 +1,39 @@
+{
+  "schema_version": "2.2",
+  "engine_version": "0.6.0",
+  "space": {
+    "schema_version": "1.0", "engine_version": "0.6.0",
+    "params": [{"name": "x", "kind": "integer", "bounds": [0.0, 20.0], "values": null, "step": null, "unit": "", "transform": "linear"}],
+    "objectives": [
+      {"name": "gain", "direction": "maximize", "target": null, "unit": "", "priority": 0},
+      {"name": "cost", "direction": "minimize", "target": null, "unit": "", "priority": 0}
+    ],
+    "constraints": [], "outcome_constraints": []
+  },
+  "knowledge": {"schema_version": "1.0", "engine_version": "0.6.0", "strict": false, "specs": [], "providers": []},
+  "seed": 17,
+  "trial_kind": ["doe", "doe", "doe"],
+  "observations": [{
+    "X": {"columns": ["x"], "dtypes": ["int64"], "data": [[0], [2], [4], [6]]},
+    "Y": {"columns": ["gain", "cost"], "dtypes": ["object", "object"], "data": [[1.0, 30.0], [5.0, 28.0], [17.0, 26.0], [{"missing": "nan"}, {"missing": "NA"}]]},
+    "Yvar": {"columns": ["gain", "cost"], "dtypes": ["object", "object"], "data": [[0.1, 0.2], [0.1, 0.2], [0.1, 0.2], [null, {"missing": "NA"}]]},
+    "status": ["success", "success", "success", "failed"], "ids": []
+  }],
+  "observation_ids": [["unidentified:0:0", "unidentified:0:1", "unidentified:0:2", "unidentified:0:3"]],
+  "batch_kinds": ["doe"],
+  "pending": {"ids": ["repeat-trial"], "X": {"columns": ["x"], "dtypes": ["int64"], "data": [[0]]}},
+  "rng_state": {"bit_generator": "PCG64", "state": {"state": 191425278619858320667688084520535371943, "inc": 78856291631749604729656725519709880197}, "has_uint32": 0, "uinteger": 0},
+  "ask_iteration": 1,
+  "validation": {"active": false, "interval": 5, "min_obs": 10, "auto_rescue": true, "last_n": 0, "emitted": [], "diagnostics": []},
+  "multiobjective": {"acquisition": "auto", "noise_mode": "auto", "reference_point": null, "preference_weights": null, "min_joint_feasibility": 0.95},
+  "geometry": {
+    "objective_names": ["gain", "cost"],
+    "location": [1.0, -30.0], "scale": [16.0, 4.0],
+    "report_reference": [-0.1, -0.1], "acquisition_reference": [-0.1, -0.1],
+    "acquisition_ideal": [1.0, 1.0],
+    "source_digest": "db4178d37627a503d45d95c21722b3e78178eb75ddccaf672703ff5839717042",
+    "source_row_count": 4, "preference_weights": null, "preference_provenance": [],
+    "physical_reference": null, "reference_method": "observed_feasible_min_minus_margin"
+  },
+  "catalog": null
+}

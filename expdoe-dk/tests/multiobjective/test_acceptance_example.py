@@ -13,3 +13,7 @@ def test_multiobjective_catalog_example():
     assert result.best_x_physical is None
     assert result.pareto_rows
     assert len(result.hypervolume_history) == 3
+    assert len(result.knowledge["specs"]) == 1
+    spec, = result.knowledge["specs"]
+    assert spec["pattern"] == "monotone" and spec["version"] == "2.0"
+    assert spec["scope"]["objectives"] == ["gain"]

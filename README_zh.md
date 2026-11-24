@@ -4,7 +4,18 @@
 
 為實驗室的物理單位與混合變數流程提供實驗設計（DoE）與貝葉斯優化，並支援明確限制式及有版本的領域知識。
 
-## v0.5 功能
+## v0.6.0 功能
+
+新增具名多目標推薦、固定候選清單、qLogEHVI／qLogNEHVI／qLogNParEGO 式路由、
+待回填實驗、實測 Pareto／超體積報告與 schema 2.2 checkpoint。
+明確選用的 `monotone@2.0` 以柔性方向證據調整已擬合 GP，不捏造反應值或量測變異數。
+`with_monotone` 仍使用 v1；v2 須透過 `with_monotone_v2` 或明確版本的 spec 選用。
+v2 計算可能很慢，不保證互動速度。
+
+[固定品質協定](./experiments/multiobjective_validation/README.md) 已通過本機 current／lower
+兩組環境；此案例的 v2 與 Plain 成績相同，歷史 v1 失敗結果仍保留。
+這不代表知識在所有實驗都有效，也不是實驗室安全保證。
+詳見[多目標指南](./docs/multiobjective.md)與[路線圖](./docs/roadmap.md)。
 
 - 連續、整數、離散、類別與序位參數，以及物理／模型座標轉換。
 - 明確的最大化、最小化與目標區間 objective。
@@ -21,7 +32,7 @@
 pip install -e ./expdoe-dk
 ```
 
-支援 Python 3.10–3.12。執行時相依套件宣告於
+最低需要 Python 3.11；本機已驗證 Python 3.11、3.12。執行時相依套件宣告於
 [`expdoe-dk/pyproject.toml`](./expdoe-dk/pyproject.toml)，其中包含驗證知識定義所需的直接相依 `jsonschema>=4.18`。
 
 ## 混合空間、objectives 與 constraints
@@ -135,7 +146,7 @@ Observer 與實驗室 device integration 是未來的外部工作，本 reposito
 - [既有候選清單推薦](./docs/candidate-catalog.md)：保留原始配方和穩定 ID，沿用限制與已測／待測排除。
 - [量測流程範例](./docs/measurement-workflow.md)：部分回填、失敗、取消、重複量測及狀態還原。
 - [對數反應值指南](./docs/log-objectives.md)：反應單位、不確定性與最佳化方向。
-- [範圍與驗收](./docs/textbook-improvements.md)：本機驗證範圍；多目標推薦仍依原實裝計畫另行處理。
+- [範圍與驗收](./docs/textbook-improvements.md)：本機驗證、多目標後續實作，以及尚未驗收的教材／Colab 流程。
 
 ## 開發
 

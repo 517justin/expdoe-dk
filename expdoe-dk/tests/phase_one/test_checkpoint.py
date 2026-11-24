@@ -43,14 +43,14 @@ def test_restore_preserves_next_batch(populated_campaign):
     np.testing.assert_array_equal(restored._rng.random(5), populated_campaign._rng.random(5))
 
 
-def test_checkpoint_writer_identifies_all_envelopes_as_051():
+def test_checkpoint_writer_identifies_all_envelopes_as_060():
     campaign = Campaign(Space([Parameter("x", bounds=(0., 1.))]), seed=7)
 
     state = campaign.to_state()
 
-    assert state["engine_version"] == "0.5.1"
-    assert state["space"]["engine_version"] == "0.5.1"
-    assert state["knowledge"]["engine_version"] == "0.5.1"
+    assert state["engine_version"] == "0.6.0"
+    assert state["space"]["engine_version"] == "0.6.0"
+    assert state["knowledge"]["engine_version"] == "0.6.0"
 
 
 @pytest.mark.parametrize("section", [None, "space", "knowledge"])
@@ -178,23 +178,24 @@ def test_actual_050_schema20_remains_readable(schema_20_fixture):
     assert restored.history_df().y.tolist() == [1.5]
     assert restored.seed == 7
     assert restored.to_state()["schema_version"] == "2.1"
-    assert restored.to_state()["engine_version"] == "0.5.1"
-    assert restored.to_state()["space"]["engine_version"] == "0.5.1"
-    assert restored.to_state()["knowledge"]["engine_version"] == "0.5.1"
+    assert restored.to_state()["engine_version"] == "0.6.0"
+    assert restored.to_state()["space"]["engine_version"] == "0.6.0"
+    assert restored.to_state()["knowledge"]["engine_version"] == "0.6.0"
     assert schema_20_fixture["engine_version"] == "0.5.0"
     assert schema_20_fixture["space"]["engine_version"] == "0.5.0"
     assert schema_20_fixture["knowledge"]["engine_version"] == "0.5.0"
 
 
-def test_literal_050_schema21_remains_scalar_and_is_not_rewritten_in_place():
+@pytest.mark.parametrize("writer", ["0.5.0", "0.5.1"])
+def test_literal_historical_schema21_remains_scalar_and_is_not_rewritten_in_place(writer):
     raw = {
-        "schema_version": "2.1", "engine_version": "0.5.0",
-        "space": {"schema_version": "1.0", "engine_version": "0.5.0",
+        "schema_version": "2.1", "engine_version": writer,
+        "space": {"schema_version": "1.0", "engine_version": writer,
             "params": [{"name": "x", "kind": "continuous", "bounds": [0., 1.],
                 "values": None, "step": None, "unit": "", "transform": "linear"}],
             "constraints": [], "objectives": [{"name": "y", "direction": "maximize",
                 "target": None, "unit": "", "priority": 0}], "outcome_constraints": []},
-        "knowledge": {"schema_version": "1.0", "engine_version": "0.5.0",
+        "knowledge": {"schema_version": "1.0", "engine_version": writer,
             "strict": False, "specs": [], "providers": []},
         "seed": 17, "trial_kind": ["doe"],
         "observations": [{"X": [[.25]], "Y": [[1.5]], "Yvar": None, "status": None, "ids": []}],
@@ -210,7 +211,7 @@ def test_literal_050_schema21_remains_scalar_and_is_not_rewritten_in_place():
     assert rewritten["schema_version"] == "2.1"
     assert rewritten["observations"] == raw["observations"]
     assert "geometry" not in rewritten and "multiobjective" not in rewritten
-    assert rewritten["engine_version"] == "0.5.1"
+    assert rewritten["engine_version"] == "0.6.0"
     assert json.dumps(raw) == before
 
 

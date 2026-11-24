@@ -175,8 +175,8 @@ _DIRECTIONAL_STATE = _object({**_STATE["properties"],
     "validation": _object({**_VALIDATION["properties"],
         "directional_emitted": _WARNING_IDENTITIES, "diagnostics": _array(_DIRECTIONAL_DIAGNOSTIC)})})
 _MULTI_STATE = _object({**_COMMON, "schema_version": {"const": MULTIOBJECTIVE_SCHEMA_VERSION},
-    # Task 10 owns the release allowlist expansion; 2.2 has no historical writer.
-    "engine_version": {"const": "0.5.1"},
+    # Schema 2.2 first releases in 0.6.0; prerelease tags are not release writers.
+    "engine_version": {"const": "0.6.0"},
     "observations": _array(_MULTI_BATCH), "observation_ids": _array(_NAMES),
     "batch_kinds": _array({"enum": ["doe", "bo"]}),
     "pending": _nullable(_object({"X": _FRAME, "ids": _NAMES})),

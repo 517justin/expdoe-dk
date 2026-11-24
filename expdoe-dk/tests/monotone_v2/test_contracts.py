@@ -56,7 +56,7 @@ def test_v2_defaults_and_exact_envelope():
         "confidence": 1.0, "evidence": [], "enabled": True,
     }
     assert knowledge.to_envelope() == {
-        "schema_version": "1.0", "engine_version": "0.5.1", "strict": False,
+        "schema_version": "1.0", "engine_version": "0.6.0", "strict": False,
         "specs": [spec.to_dict()], "providers": [],
     }
     with pytest.raises(TypeError):

@@ -1,5 +1,18 @@
 # expdoe-dk
 
+## 0.6.0
+
+Named multiobjective recommendations support fixed catalogs, pending trials,
+qLogEHVI/qLogNEHVI/qLogNParEGO-style routing, measured Pareto/HV reports and
+schema-2.2 checkpoints. Explicit `monotone@2.0` uses soft directional conditioning
+of a fixed fitted GP, not fabricated measurements. `with_monotone` remains v1;
+`with_monotone_v2` opts in. Confidence is an evidence weight, not a probability.
+V2 can be slow; interactive latency is not guaranteed. The fixed local quality
+fixture passes with v2 tied with Plain, not superior to it; the historical v1
+failure remains separate. See the [workflow and limits](../docs/multiobjective.md)
+and [full acceptance evidence](../experiments/multiobjective_validation/README.md).
+No laboratory-safety, global-optimality or general knowledge-benefit claim follows.
+
 **Experimental Design of Experiments + Bayesian Optimization, with Domain Knowledge injection — for chemistry, materials, and lab experimentalists.**
 
 If you're a chemist or materials researcher running a few dozen experiments to find the best conditions, this library gives you:
@@ -182,7 +195,9 @@ pip install -e .
 # pip install expdoe-dk
 ```
 
-Requires Python 3.10+, BoTorch ≥ 0.11, Ax ≥ 1.2.4.
+Requires Python 3.11+, BoTorch ≥ 0.11, Ax ≥ 1.2.4 and mpmath >=1.3,<1.4.
+The resolver-clean lower stack uses BoTorch 0.17.2 through Ax's constraints;
+the separate BoTorch 0.11 capability overlay is not a supported Ax resolution.
 
 ---
 
@@ -212,9 +227,9 @@ The old import path still works via `expdoe_dk.legacy.ax_doe_bo`, but emits `Dep
 | v0.2 | Empirical validators (Spearman monotone + frozen-mean shape) auto-running every K observations |
 | v0.3 | ε auto-rescue: combining `with_monotone` + `with_gp_prior` now transparently raises ε to the Exp-14 safe value |
 | v0.4 | HTML report (`result.to_html(path)`) — self-contained file with best point, convergence chart, history table, CSV download, knowledge spec |
-| v0.5 (this) | Mixed-domain parameters, objectives, constraints, diagnostic designs, and a versioned knowledge registry with explicit provider allow-lists |
-| v0.6 | MCP server (stateless tools) |
-| v0.7 | Multi-objective (qLogEHVI, Pareto reports) |
+| v0.5 | Mixed-domain parameters, objectives, constraints, diagnostic designs, and a versioned knowledge registry with explicit provider allow-lists |
+| v0.6.0 (this) | Named multiobjective workflows, Pareto/HV reports, schema-2.2 checkpoints and opt-in monotone v2 |
+| Future, unscheduled | MCP/platform adapters and external laboratory integrations |
 | v1.0 | Stable API, remove legacy shim |
 
 ---

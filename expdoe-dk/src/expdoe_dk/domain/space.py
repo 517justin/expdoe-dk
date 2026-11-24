@@ -23,7 +23,7 @@ from .objective import Objective, normalize_objectives
 from .parameter import Parameter, _json_scalars_equal
 
 SPACE_SCHEMA_VERSION = "1.0"
-ENGINE_VERSION = "0.5.1"
+ENGINE_VERSION = "0.6.0"
 
 
 def _config_invalid(message: str) -> EngineError:

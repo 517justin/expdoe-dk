@@ -5,9 +5,13 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from email.parser import Parser
 from pathlib import Path
+import tomllib
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -46,7 +50,12 @@ def test_release_dependency_and_legal_inputs_are_clean():
 
     assert PROHIBITED not in text
     assert REMOVED_DEPENDENCY not in text
-    assert "version = \"0.5.1\"" in text
+    project = tomllib.loads((PACKAGE_ROOT / "pyproject.toml").read_text())["project"]
+    assert project["version"] == "0.6.0"
+    assert project["requires-python"] == ">=3.11"
+    assert "Programming Language :: Python :: 3.10" not in project["classifiers"]
+    dependencies = {r.name: r for r in map(Requirement, project["dependencies"])}
+    assert dependencies["mpmath"].specifier == SpecifierSet(">=1.3,<1.4")
     assert "scipy>=1.12" in text
 
 
@@ -73,6 +82,8 @@ def test_built_wheel_and_sdist_are_clean_and_complete(tmp_path):
         assert PROHIBITED not in text
         assert REMOVED_DEPENDENCY not in text
         assert any(name.endswith("expdoe_dk/__init__.py") for name in names)
+        for module in ("directional_source", "directional_source_state", "directional_source_arithmetic"):
+            assert any(name.endswith(f"expdoe_dk/bo/{module}.py") for name in names)
         assert any(
             name.endswith("expdoe_dk/knowledge/registry/providers.py")
             for name in names
@@ -91,5 +102,9 @@ def test_built_wheel_and_sdist_are_clean_and_complete(tmp_path):
                 for name, payload in members.items()
                 if name.endswith("PKG-INFO")
             )
-        assert "Version: 0.5.1" in metadata
+        parsed = Parser().parsestr(metadata)
+        assert parsed["Version"] == "0.6.0"
+        assert parsed["Requires-Python"] == ">=3.11"
+        dependencies = {r.name: r for r in map(Requirement, parsed.get_all("Requires-Dist"))}
+        assert dependencies["mpmath"].specifier == SpecifierSet(">=1.3,<1.4")
         assert "Requires-Dist:scipy>=1.12" in metadata.replace(" ", "")

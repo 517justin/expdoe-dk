@@ -117,7 +117,7 @@ def resolved_state():
 
 @pytest.mark.parametrize("path,value", [
     (("schema_version",), "2.3"), (("schema_version",), "2.1"),
-    (("engine_version",), "0.6.0"), (("space", "engine_version"), "0.5.99"),
+    (("engine_version",), "0.6.1"), (("space", "engine_version"), "0.5.99"),
     (("knowledge", "engine_version"), "0.5.99"),
     (("geometry", "location"), [0.]),
     (("geometry", "report_reference"), [float("inf"), 0.]),
@@ -193,11 +193,35 @@ def test_multiobjective_run_can_checkpoint(tmp_path):
     assert Campaign.load_checkpoint(path).to_state() == campaign.to_state()
 
 
-def test_literal_schema22_fixture():
+def test_prerelease_schema22_fixture_is_preserved_but_not_a_release_writer():
     path = Path(__file__).parents[1] / "fixtures" / "multiobjective_checkpoint_2_2.json"
+    before = path.read_bytes()
     raw = json.loads(path.read_text())
     assert raw["engine_version"] == raw["space"]["engine_version"] == raw["knowledge"]["engine_version"] == "0.5.1"
+    with pytest.raises(EngineError) as caught:
+        Campaign.load_checkpoint(path)
+    assert caught.value.code == ErrorCode.CHECKPOINT_INCOMPATIBLE
+    assert path.read_bytes() == before
+
+
+def test_literal_release_schema22_fixture():
+    path = Path(__file__).parents[1] / "fixtures" / "multiobjective_checkpoint_2_2_060.json"
+    raw = json.loads(path.read_text())
+    assert raw["engine_version"] == raw["space"]["engine_version"] == raw["knowledge"]["engine_version"] == "0.6.0"
+    assert type(raw["rng_state"]["state"]["state"]) is int
+    assert raw["rng_state"]["state"]["state"] == 191425278619858320667688084520535371943
+    assert raw["rng_state"]["state"]["inc"] == 78856291631749604729656725519709880197
+    assert type(raw["observations"][0]["Y"]["data"][0][0]) is float
     assert Campaign.load_checkpoint(path).to_state() == raw
+
+
+@pytest.mark.parametrize("writer", ["0.5.0", "0.5.1", "0.6.1"])
+def test_schema22_rejects_all_nonrelease_writers(writer):
+    raw = initial().to_state()
+    raw["engine_version"] = raw["space"]["engine_version"] = raw["knowledge"]["engine_version"] = writer
+    with pytest.raises(EngineError) as caught:
+        Campaign.from_state(raw)
+    assert caught.value.code == ErrorCode.CHECKPOINT_INCOMPATIBLE
 
 
 @pytest.mark.parametrize("dtype", ["Float64", "Float32", "object"])

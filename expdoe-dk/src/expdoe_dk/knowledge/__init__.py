@@ -42,9 +42,10 @@ from .validators import (
 )
 
 # Exact, reviewed wire compatibility table. 0.5.0 and 0.5.1 declarations use
-# Space 1.0, Knowledge 1.0 and Campaign 2.0/2.1. No major/minor or
-# future-version match; standalone Space readers remain exact-current-version.
-COMPATIBLE_ENGINE_VERSIONS = frozenset({"0.5.0", "0.5.1"})
+# Space 1.0, Knowledge 1.0 and Campaign 2.0/2.1. The 0.6.0 writer also
+# supports Campaign 2.2, whose release writer is checked separately. No future
+# version matching; standalone Space readers remain exact-current-version.
+COMPATIBLE_ENGINE_VERSIONS = frozenset({"0.5.0", "0.5.1", "0.6.0"})
 
 # --------------------------------------------------------------------- #
 # Knowledge item dataclasses (JSON-serializable, no torch tensors stored)

@@ -6,7 +6,20 @@ Design of Experiments (DoE) and Bayesian optimization for physical-unit,
 mixed-variable laboratory workflows, with explicit constraints and versioned
 domain knowledge.
 
-## v0.5 capabilities
+## v0.6.0 capabilities
+
+Named multiobjective recommendations now include fixed candidate catalogs,
+qLogEHVI/qLogNEHVI/qLogNParEGO-style routing, pending trials, measured Pareto/HV
+reports and schema-2.2 checkpoints. Opt-in `monotone@2.0` conditions a fitted GP
+on soft directional evidence without fabricating responses or variances.
+`with_monotone` still selects v1; use `with_monotone_v2` or an explicit v2 spec
+to opt in. V2 can be slow and has no interactive-latency guarantee.
+
+The [fixed quality protocol](./experiments/multiobjective_validation/README.md)
+passes on the verified current/lower stacks; v2 ties Plain on this fixture,
+while the historical v1 failure remains recorded. This is not a general
+knowledge-performance or laboratory-safety guarantee. See the
+[workflow guide](./docs/multiobjective.md) and [roadmap](./docs/roadmap.md).
 
 - Continuous, integer, discrete, categorical, and ordinal parameters with
   physical/model transforms.
@@ -27,7 +40,7 @@ domain knowledge.
 pip install -e ./expdoe-dk
 ```
 
-Python 3.10–3.12 is supported. Runtime dependencies are declared in
+Requires Python >=3.11; locally verified on Python 3.11 and 3.12. Runtime dependencies are declared in
 [`expdoe-dk/pyproject.toml`](./expdoe-dk/pyproject.toml), including the direct
 `jsonschema>=4.18` dependency used to validate knowledge definitions.
 
@@ -154,8 +167,8 @@ implemented in this repository.
   failed or cancelled trials, repeated measurements and state restoration.
 - [Log-response guide](./docs/log-objectives.md): response units, uncertainty and
   optimization direction (guides are in Traditional Chinese).
-- [Scope and acceptance](./docs/textbook-improvements.md): local verification and
-  the original roadmap for multi-objective recommendation, which remains deferred.
+- [Scope and acceptance](./docs/textbook-improvements.md): local verification,
+  multiobjective follow-up and unverified textbook/Colab workflows.
 
 ## Development
 

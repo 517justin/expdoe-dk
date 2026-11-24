@@ -1,6 +1,8 @@
 # Multiobjective Acceptance
 
-**Approved protocol v2 failed numerical validation; 0.6.0 release remains blocked.**
+**Approved protocol v2 passed both complete pre-release suites and matrices.**
+The 0.6.0 candidate's metadata, post-bump suites and fresh wheel are the next
+verification stage; this paragraph does not claim they have already passed.
 Protocol `fixed-catalog-monotone`, version `2.0`, reports four methods:
 `random`, `plain_gp`, legacy `knowledge_gp`, and `knowledge_gp_v2`.
 Only the latter adds `monotone@2.0`, increasing on gain, confidence .8,
@@ -14,14 +16,61 @@ and eight q=2 batches. Declared noiseless mode is unchanged: ordinary GPyTorch
 fixed-noise likelihoods clamp zero declared variance to 1e-6 internally.
 This protocol does not claim exact zero fitted noise.
 
-### V2 Execution Hold
+### Approved V2 Results
+
+Source `226379f3bef0e2ab1bbf41468d7fad37a4f0944e`, clean at both matrix starts.
+Each complete `pytest --run-slow` suite includes the fixed 20-row matrix; no
+duplicate standalone matrix was run on the same source. Both stacks passed
+all three quality gates and every row's replay/restart, feasibility 1.0,
+duplicate rate 0.0, 22 measured rows and eight q=2 batches. V2 ties Plain on
+this fixture; no superiority or general optimizer-ranking claim is made.
+
+| Seed | Scale (each objective) | Random regret | Plain regret | Legacy v1 regret | V2 regret |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | .57 | .0643274854 | .0341643583 | .1735918744 | .0341643583 |
+| 5 | .62 | .0616545265 | .0309573361 | .1636316337 | .0309573361 |
+| 11 | .53 | .0857956568 | .0416518334 | .2328230687 | .0416518334 |
+| 23 | .51 | .2037677816 | .0445982314 | .4063821607 | .0445982314 |
+| 47 | .52 | .1142751479 | .0417899408 | .2740384615 | .0417899408 |
+| Mean | per-seed fixed | **.1059641197** | **.0386323400** | **.2500934398** | **.0386323400** |
+
+These are normalized regrets, not raw HV differences. V2 raw regrets are
+.0111, .0119, .0117, .0116 and .0113 in seed order, equal to Plain. Reference,
+geometry, seeds, knowledge parameters, declared noise and tolerances did not
+change. The same-frozen-GP source-construction repair resolves numerical
+cancellation without new pseudo data, noise, rank cutoffs or modified fitting.
+
+Current full suite: **2582 passed, 0 skipped, 188 warnings, 1497.75s**.
+Lower full suite: **2581 passed, 1 skipped, 200 warnings, 1934.10s**; sole skip is
+Torch 2.2's unavailable uint64 dtype. Both include all nine slow tests and
+wheel/sdist legal/dependency checks. Matrix runtimes including replay/restart
+were 1017.96s/current and 1204.62s/lower under overlapping suite load, not an
+isolated performance benchmark. Per-row warnings remain in JSONL; full-suite
+warning summaries remain in the retained logs. Each matrix captured 600 expected
+fixed-noise-clamp warnings across primary/replay/restart fits; these are separate
+from the pytest warning-summary counts. Both use mpmath 1.3.0 in addition
+to the dependency versions listed below. The legacy BoTorch overlay passed 170
+tests; examples 03/04/05 passed outside source on both editable environments.
+
+Retained pre-release artifacts are under
+`.superpowers/sdd/2026-11-24-monotone-v2-implementation/task-6-pre-{current,floor}-226379f/`:
+`test_full_fixed_seed_matrix0/{matrix.jsonl,summary.json}`. Controller-owned
+stdlib-only audits independently recomputed physical rectangle-union HV and
+normalization; both passed, maximum metric discrepancy 2.64e-16. They do not
+replace full suites or fresh installed-wheel verification.
+
+V2 is opt-in and can be slow. Bounded source-adapter forward/backward observations
+reached 131-133s excluding setup, not full-recommendation throughput; see
+[numerical scope and cost](../../docs/multiobjective.md#numerical-scope-and-cost).
+
+### Historical V2 Execution Hold
 
 Both fixed matrices started from clean source
 `80e7a1b5b2907cd5244d2dbe2760e4acd193212f`. Each completed seed 2's random,
 plain and legacy methods with full replay/restart, then stopped in v2 with
 `MODEL_FIT_FAILED`, reason `negative_covariance`, on gain. There is no complete
-v2 quality summary and no release acceptance claim. All protocol parameters
-remain locked; package and engine versions remain 0.5.1.
+v2 quality summary or release acceptance at that revision. All protocol
+parameters stayed locked; package and engine versions remained 0.5.1.
 
 | Stack | V2 failing round (zero-based) | Measurements | Source covariance minimum eigenvalue | PSD tolerance |
 | --- | ---: | ---: | ---: | ---: |
@@ -38,13 +87,15 @@ double-precision direct solve and Cholesky subtraction both still yield negative
 eigenvalues; lower-stack direct solve also remains negative.
 This supports a covariance-construction cancellation diagnosis, not permission
 to widen PSD/rank tolerances or change the noise, oracle, seeds or fit parameters.
-A core numerical repair needs separate approval; the fail-closed guard remains.
+The separately approved source-construction repair subsequently resolved this
+hold, as recorded above; the fail-closed numerical policy remains.
 
 ## Preserved Historical V1 Failure
 
 **2026-11-24: original quality gate FAILED; release blocked at that revision.** This is a named
 sequential experiment, not general multiobjective cross-validation. Package and
-engine versions remain 0.5.1. No successful release acceptance is claimed.
+engine versions remained 0.5.1 at that revision. No successful acceptance is
+attributed to this historical v1 run.
 
 ## Frozen Protocol
 

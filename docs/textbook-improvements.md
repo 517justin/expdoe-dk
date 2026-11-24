@@ -1,6 +1,6 @@
 # 教科書改進：範圍與驗收
 
-本次改進依循 [2026-11-23 實作計畫](superpowers/plans/2026-11-23-textbook-improvements.md)。現行 `recommend` 與生產用 GP 都只支援單一目標；[對數反應值指南](log-objectives.md) 說明如何用現有介面處理反應尺度，並未新增轉換 API。
+本文件保留 [2026-11-23 實作計畫](superpowers/plans/2026-11-23-textbook-improvements.md) 的單目標改進紀錄。後續 0.6.0 已加入具名多目標推薦與明確選用的 monotone v2，詳見[多目標指南](multiobjective.md)。[對數反應值指南](log-objectives.md) 說明既有反應尺度介面，並未新增轉換 API。
 
 ## 本次實作
 
@@ -18,11 +18,15 @@
 - 等式若涉及採用 log 編碼的連續參數，模型座標中就不再是線性等式；目前明確拒絕這種連續搜尋，請改提供已符合條件的候選清單。不會忽略等式。
 - 混合搜尋的有限組合數上限為 100,000；超過上限的等式搜尋也須改提供候選清單。
 - 其他 expression／知識限制仍會在物理單位檢查，但此補強不是任意非線性等式求解器。有限的取樣與多起點搜尋不保證找到所有可行配方或全域最佳解。
-- 無法組成完整且不重複的批次就報錯；數值求解失敗也不以隨機配方替代。單一目標限制保持不變。
+- 無法組成完整且不重複的批次就報錯；數值求解失敗也不以隨機配方替代。這是當時單目標補強的紀錄；現行多目標支援邊界見[多目標指南](multiobjective.md)。
 
-## 延後：多目標推薦
+## 0.6.0 多目標後續實作
 
-以下是後續工作，不是本次提供的功能：
+原規劃的具名多目標推薦、qLogEHVI／qLogNEHVI／qLogNParEGO 式路由、實測 Pareto／固定尺度超體積報告、schema 2.2 checkpoint 已實作。固定五種子的 current／lower 品質協定與完整 slow suites 均通過；此案例的 monotone v2 與 Plain 成績相同，不能宣稱優於 Plain。歷史 v1 失敗與後來的數值失敗證據仍保留，詳見[逐方法結果](../experiments/multiobjective_validation/README.md)。
+
+`with_monotone` 仍為 v1，不自動升級；v2 以柔性方向證據調整已擬合 GP，不捏造量測值。v2 計算可能很慢，不保證互動速度；已觀察的 source-adapter 耗時並非完整推薦流程基準。最低 Python 版本已依 Ax 相依條件修正為 3.11。教材原始資料、Colab、其他作業系統與 GPU 仍未驗收。
+
+以下保留原計畫對應，描述當時尚待執行的項目，不代表目前功能仍未實作：
 
 - 原 [optimization pipeline Task 3](superpowers/plans/2026-08-05-optimization-pipeline-implementation-plan.md#task-3-implement-acquisition-policy-routing-and-constructors) 規劃 2 至 4 個目標使用 qLogEHVI；有已知噪音或待回填實驗時改走 qLogNEHVI。5 個以上目標規劃以 qLogNParEGO 方式做 Chebyshev 純量化，並記錄權重。應測試各條件的路由與建構結果。
 - Pareto 候選列、超體積歷史與停止訊號的結果回報屬於原 [optimization pipeline Task 8](superpowers/plans/2026-08-05-optimization-pipeline-implementation-plan.md#task-8-add-evidence-backed-stopping-suggestions-and-result-reporting)。同一份計畫的 Task 7 是 schema-v2 checkpoint 與 v0.4 遷移，不是 Pareto 結果回報。
@@ -50,7 +54,7 @@ PYTHONPATH=src OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 ../.venv/bin/python -m p
 
 部分既有稽核測試會呼叫 Git。本機系統 Git 當時被 Xcode 授權提示阻擋，因此驗證時將可用的獨立 Git 與 conda 環境的執行檔目錄放在 `PATH` 前方；未修改系統授權或略過這些測試。
 
-## 本機結果
+## 2026-11-23 本機結果（歷史）
 
 - 獨立 review 的八項問題修正後，完整 `pytest -q --run-slow`：**1,328 passed**，0 failed、0 skipped，耗時 204.60 秒。
 - 候選清單、量測流程兩個範例都執行成功；對數反應值指南的 Python 範例也已執行。

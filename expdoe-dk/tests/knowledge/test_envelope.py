@@ -134,7 +134,7 @@ def test_versioned_knowledge_envelope_is_bidirectional_and_keeps_audit_specs():
 
     assert envelope == {
         "schema_version": "1.0",
-        "engine_version": "0.5.1",
+        "engine_version": "0.6.0",
         "strict": False,
         "specs": [spec.to_dict() for spec in knowledge.specs],
         "providers": [PROVIDER],
@@ -163,17 +163,17 @@ def test_unknown_knowledge_envelope_versions_are_typed(field, value):
 def test_engine_compatibility_allow_list_is_exactly_reviewed_versions():
     from expdoe_dk.knowledge import COMPATIBLE_ENGINE_VERSIONS
 
-    assert COMPATIBLE_ENGINE_VERSIONS == {"0.5.0", "0.5.1"}
+    assert COMPATIBLE_ENGINE_VERSIONS == {"0.5.0", "0.5.1", "0.6.0"}
 
 
-@pytest.mark.parametrize("engine_version", ["0.5.0", "0.5.1"])
+@pytest.mark.parametrize("engine_version", ["0.5.0", "0.5.1", "0.6.0"])
 def test_knowledge_reader_accepts_each_reviewed_version(engine_version):
     envelope = Knowledge().to_envelope()
     envelope["engine_version"] = engine_version
 
     restored = Knowledge.from_envelope(envelope)
 
-    assert restored.to_envelope()["engine_version"] == "0.5.1"
+    assert restored.to_envelope()["engine_version"] == "0.6.0"
     assert envelope["engine_version"] == engine_version
 
 
@@ -366,7 +366,7 @@ def test_checkpoint_and_result_preserve_versioned_knowledge_and_provider_provena
     result_payload = restored.finalize().to_dict()
 
     assert payload["schema_version"] == "2.0"
-    assert payload["engine_version"] == "0.5.1"
+    assert payload["engine_version"] == "0.6.0"
     assert payload["knowledge"] == knowledge.to_envelope()
     assert restored.knowledge.to_envelope() == knowledge.to_envelope()
     assert result_payload["knowledge"] == knowledge.to_envelope()
