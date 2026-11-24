@@ -23,6 +23,7 @@ from torch import Tensor
 
 from ..errors import EngineError, ErrorCode
 from .directional_pairs import DirectionalPairs
+from .directional_source_state import eligible as _source_eligible
 
 
 _EPS = torch.finfo(torch.double).eps
@@ -44,6 +45,13 @@ def _finite(*values):
 
 
 def _joint_latent_moments(model, X):
+    if _source_eligible(model):
+        from .directional_source import _FrozenExactGPSource
+        return _FrozenExactGPSource(model).joint_moments(X)
+    return _generic_joint_latent_moments(model, X)
+
+
+def _generic_joint_latent_moments(model, X):
     """Validate GP construction roundoff before using posterior-scale PSD checks.
 
     A GP subtracts a training correction from its prior covariance. Prior-scale
@@ -269,11 +277,16 @@ class _DirectionalPosterior(GPyTorchPosterior):
 
 
 class _DirectionalModel(Model):
-    def __init__(self, source, endpoints, states):
+    _directional_affine = True
+
+    def __init__(self, source, endpoints, states, moment_source=None):
         super().__init__()
         self._source = source
         self.register_buffer("_endpoints", endpoints.detach().clone().flatten(0, 1))
         self._fits = torch.nn.ModuleList(_FitBuffers(state) for state in states)
+        self._moment_source = moment_source
+        if moment_source is not None:
+            moment_source.bind(self)
 
     @property
     def num_outputs(self):
@@ -298,7 +311,8 @@ class _DirectionalModel(Model):
         if X.dtype != torch.double:
             raise _failure("expected_double_query")
         endpoints = self._endpoints.expand(X.shape[:-2] + self._endpoints.shape)
-        mean, covariance = _joint_latent_moments(self._source, torch.cat([X, endpoints], dim=-2))
+        mean, covariance = (self._moment_source.joint_moments(X, adapter=self) if self._moment_source is not None
+                            else _generic_joint_latent_moments(self._source, torch.cat([X, endpoints], dim=-2)))
         q, n = X.shape[-2], len(self._endpoints)//2
         cross = covariance[..., :q, q+1::2] - covariance[..., :q, q::2]
         batch_shape = mean.shape[:-1]
@@ -362,8 +376,13 @@ def condition_directional_posterior(model: Model, pairs: DirectionalPairs) -> tu
         endpoints, signs, widths, softness, weights = (
             v[active] for v in (endpoints, signs, widths, softness, weights))
         pattern_ids = [pid for pid, keep in zip(pairs.pattern_ids, active.tolist()) if keep]
+        moment_source = None
+        if _source_eligible(model):
+            from .directional_source import _FrozenExactGPSource
+            moment_source = _FrozenExactGPSource(model, endpoints)
         with torch.no_grad():
-            mean, C = _joint_latent_moments(model, endpoints.flatten(0,1))
+            mean, C = (moment_source.joint_moments(endpoints.new_empty((0, endpoints.shape[-1])))
+                       if moment_source is not None else _generic_joint_latent_moments(model, endpoints.flatten(0,1)))
             n = len(endpoints)
             dm = mean[...,1::2] - mean[...,::2]
             K = C[...,1::2,1::2] - C[...,1::2,::2] - C[...,::2,1::2] + C[...,::2,::2]
@@ -375,7 +394,7 @@ def condition_directional_posterior(model: Model, pairs: DirectionalPairs) -> tu
                            pattern_ids=pattern_ids, endpoints=endpoints.tolist(),
                            signs=signs.tolist(), widths=widths.tolist(), softness=softness.tolist(),
                            weights=weights.tolist())
-        return _DirectionalModel(model, endpoints, states), diagnostics
+        return _DirectionalModel(model, endpoints, states, moment_source), diagnostics
     except EngineError:
         raise
     except (RuntimeError, ValueError, np.linalg.LinAlgError) as exc:

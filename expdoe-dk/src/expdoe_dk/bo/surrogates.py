@@ -173,6 +173,10 @@ class _PhysicalAcquisitionModel(Model):
         super().__init__()
         self._source = model
         self._location, self._scale, self._sign = location, scale, sign
+        self._directional_guard = None
+        if getattr(model, "_directional_affine", False):
+            from .directional_source import PhysicalGuard
+            self._directional_guard = PhysicalGuard(self, "_source")
 
     @property
     def num_outputs(self):
@@ -186,7 +190,20 @@ class _PhysicalAcquisitionModel(Model):
         if output_indices not in (None, [0]) or observation_noise is not False:
             raise EngineError(ErrorCode.CONFIG_INVALID,
                 "Acquisition adapter supports only the single latent response")
+        if self._directional_guard is not None:
+            self._directional_guard.check()
         posterior = self._source.posterior(X)
+        if self._directional_guard is not None:
+            from .directional_source import checked_affine, checked_square
+            guard = self._directional_guard
+            guard.check()
+            multiplier = self._sign * self._scale
+            squared = checked_square(self._scale, guard)
+            physical = TransformedPosterior(posterior,
+                sample_transform=lambda samples: checked_affine(samples, multiplier, self._location, guard=guard),
+                mean_transform=lambda mean, variance: checked_affine(mean, multiplier, self._location, guard=guard),
+                variance_transform=lambda mean, variance: checked_affine(variance, squared, guard=guard, variance=True))
+            return physical if posterior_transform is None else posterior_transform(physical)
         multiplier = self._sign * self._scale
         physical = TransformedPosterior(posterior,
             sample_transform=lambda samples: samples * multiplier + self._location,
@@ -209,6 +226,10 @@ class FittedSurrogate:
         self._transforms, self._exclusions = deepcopy(transforms), deepcopy(exclusions)
         self._diagnostics = {"response_location": location, "response_scale": scale,
                              "structured_mean": {}}
+        self._directional_guard = None
+        if getattr(model, "_directional_affine", False):
+            from .directional_source import PhysicalGuard
+            self._directional_guard = PhysicalGuard(self, "_model")
 
     @property
     def diagnostics(self):
@@ -240,9 +261,19 @@ class FittedSurrogate:
             return Prediction(np.empty((0, 1)), np.empty((0, 1)))
         try:
             with torch.no_grad():
+                if self._directional_guard is not None:
+                    self._directional_guard.check()
                 posterior = self._model.posterior(inputs)
-                mean = posterior.mean.numpy() * self._sign * self._scale + self._location
-                variance = posterior.variance.numpy() * self._scale ** 2
+                if self._directional_guard is None:
+                    mean = posterior.mean.numpy() * self._sign * self._scale + self._location
+                    variance = posterior.variance.numpy() * self._scale ** 2
+                else:
+                    from .directional_source import checked_affine, checked_square
+                    guard = self._directional_guard
+                    signed = checked_affine(posterior.mean, self._sign, guard=guard)
+                    mean = checked_affine(signed, self._scale, self._location, guard=guard).numpy()
+                    variance = checked_affine(posterior.variance, checked_square(self._scale, guard),
+                                              guard=guard, variance=True).numpy()
             return Prediction(mean, variance)
         except EngineError:
             raise

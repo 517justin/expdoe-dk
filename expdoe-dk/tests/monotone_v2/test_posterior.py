@@ -559,13 +559,17 @@ def training_field(*, noise=0., amplitude=None, batched=False, transformed=False
 @pytest.mark.parametrize("batched,transformed", [(False,False),(False,True),(True,True)])
 def test_noiseless_endpoint_representation_preserves_query_cross_gradients(batched,transformed):
     base,evidence = training_field(batched=batched,transformed=transformed)
+    X = tensor([[[[0.],[.55]]],[[[.3],[.85]]]]).requires_grad_()
+    # Native Normalize replaces buffer views during posterior(); obtain this
+    # reference before the fixed-source generation begins, not between passes.
+    expected = base.posterior(X)
+    b = expected.mean.sum()+expected.distribution.covariance_matrix.sum()
+    expected_gradient = torch.autograd.grad(b,X)[0]
     model,diagnostics = engine().condition_directional_posterior(base,evidence)
     assert all(fit["rank"] == 0 for fit in diagnostics["fits"])
-    X = tensor([[[[0.],[.55]]],[[[.3],[.85]]]]).requires_grad_()
-    actual,expected = model.posterior(X),base.posterior(X)
+    actual = model.posterior(X)
     a = actual.mean.sum()+actual.distribution.covariance_matrix.sum()
-    b = expected.mean.sum()+expected.distribution.covariance_matrix.sum()
-    torch.testing.assert_close(torch.autograd.grad(a,X)[0],torch.autograd.grad(b,X)[0],atol=1e-10,rtol=1e-10)
+    torch.testing.assert_close(torch.autograd.grad(a,X)[0],expected_gradient,atol=1e-10,rtol=1e-10)
     torch.testing.assert_close(actual.mean,expected.mean,atol=1e-12,rtol=1e-12)
     assert (actual.variance[...,0,:] == 0).all()
 
@@ -592,10 +596,38 @@ def test_noiseless_correction_scales_with_prior_not_universal_floor(amplitude):
     assert diagnostics["fits"][0]["rank"] == 0
     X = tensor([[.3],[.3+1e-6]])
     actual = model.posterior(X)
-    raw_joint = base.posterior(torch.cat([X,evidence.endpoints.flatten(0,1)]))
+    expected_variance = independent_near_training_variance(base, X[1,0].item())
     assert actual.variance[0].item() == 0.
     assert actual.variance[1].item() > 0.
-    torch.testing.assert_close(actual.variance[1,0],raw_joint.distribution.covariance_matrix[1,1],rtol=1e-12,atol=0.)
+    torch.testing.assert_close(actual.variance[1,0],expected_variance,rtol=1e-12,atol=0.)
+
+
+def independent_near_training_variance(model, query):
+    """Forward-only MP oracle for this scalar fixed fit, independent of source code."""
+    import mpmath
+    from gpytorch.kernels import RBFKernel, MaternKernel, ScaleKernel
+    c = mpmath.mp.clone()
+    c.dps = 100
+    kernel, amplitude = model.covar_module, c.mpf(1)
+    while type(kernel) is ScaleKernel:
+        amplitude *= c.mpf(kernel.outputscale.item())
+        kernel = kernel.base_kernel
+    assert type(kernel) in (RBFKernel, MaternKernel)
+    length = c.mpf(kernel.lengthscale.item())
+    def k(a,b):
+        r2 = ((a-b)/length)**2
+        if type(kernel) is RBFKernel:
+            return amplitude*c.exp(-r2/2)
+        assert kernel.nu == 2.5
+        r = c.sqrt(5*r2)
+        return amplitude*(1+r+r*r/3)*c.exp(-r)
+    t = [c.mpf(v) for v in model.train_inputs[0][:,0].tolist()]
+    A = c.matrix([[k(a,b) for b in t] for a in t])
+    for i,noise in enumerate(model.likelihood.noise.tolist()):
+        A[i,i] += c.mpf(noise)
+    x = c.mpf(query)
+    cross = c.matrix([[k(x,b) for b in t]])
+    return tensor(float(k(x,x)-(cross*(A**-1)*cross.T)[0,0]))
 
 
 def test_genuinely_tiny_positive_training_covariance_is_not_declared_deterministic():
@@ -732,9 +764,9 @@ def test_gp_construction_budget_does_not_hide_material_invalid_covariance(
         else:
             model.posterior(tensor([[.2], [.8]]))
     assert caught.value.code == ErrorCode.MODEL_FIT_FAILED
-    assert caught.value.details["reason"] == {
+    assert caught.value.details["reason"] == ("source_state_changed" if where == "query" else {
         "asymmetric": "asymmetric_covariance", "negative": "negative_covariance",
-        "nonfinite": "nonfinite"}[bad]
+        "nonfinite": "nonfinite"}[bad])
 
 
 @pytest.mark.parametrize("response_scale", [1e-4, 1e4])

@@ -1,0 +1,16 @@
+{
+  "source_commit": "80e7a1b5b2907cd5244d2dbe2760e4acd193212f",
+  "origin": "task-6-diagnose-floor",
+  "failure_sha256": "d9d812ddff11e0ce249f6f16b7d4ce180b6e4b1f24b664400d6ec46b11299178",
+  "before_failure_sha256": "d3a50282ff573bf29dd43b532b707754e92611e713cddda8be44e6f24fe25a38",
+  "historical_minimum_eigenvalue": -1.4331936525284404e-11,
+  "training": [[0.33], [0.65], [0.23], [0.2], [0.63], [0.08], [0.8], [0.48]],
+  "physical_gain": [0.33, 0.65, 0.23, 0.2, 0.63, 0.08, 0.8, 0.48],
+  "query": [[0.33], [0.65], [0.23], [0.2], [0.63], [0.08], [0.8], [0.48], [0.28], [0.38], [0.6], [0.7000000000000001], [0.18], [0.28]],
+  "noise": [1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6],
+  "parameters": {
+    "mean_module.raw_constant": -1.0560359200402725,
+    "covar_module.kernel.raw_outputscale": 41765.69338539174,
+    "covar_module.kernel.base_kernel.raw_lengthscale": [[459.1976240313177]]
+  }
+}
